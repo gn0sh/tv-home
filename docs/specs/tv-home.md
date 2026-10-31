@@ -3,7 +3,7 @@
 Status: draft v2 (panel changes applied, docs/reviews/panel-tv-home-spec.md), 2026-10-31. Priority: hip pocket (low; built in idle time).
 
 ## Goal check
-Brian gets his own Google TV home screen: one row of his streaming apps to open with the remote, plus a panel showing today's calendar.
+Brian gets his own Google TV home screen: one row of his streaming apps to open with the remote, plus a panel showing today's calendar, and an Ask Claude button that opens the right service on what he asks for.
 Example: he turns on the TV and sees Netflix, YouTube, Disney+ etc. tiles and "Dentist 3pm" without opening anything.
 (Confirmed by CEO as the request, 2026-10-31; the sentence itself is for a yes/no check.)
 
@@ -46,7 +46,7 @@ Order: M0 (Brian, no code) then M1 (agenda app). M2 and M3 are conditional.
 As Brian, I want to try a ready-made launcher first, so I only get custom work for what is truly missing.
 1. Brian installs Projectivy Launcher from the Play Store and sets up his app row (about 30 min).
 2. He reports back: does it cover his app row and favorites order, does it become Home, and what is missing (calendar expected).
-3. Done when the gap list is recorded in `docs/status.md`. If the gap is only the calendar, M2 is dropped and M1 stands alone.
+3. Done when the gap list is recorded in `docs/status.md`. Projectivy remains the app row; our app (agenda + Ask Claude) opens from it as a tile. If the only gaps are the calendar and Ask Claude, M2 is dropped.
 
 ### M1: Calendar agenda app (usable from any launcher)
 As Brian, I want today's and tomorrow's events on the TV, as an app/tile in whatever launcher I use, so I see my day at a glance.
@@ -60,6 +60,21 @@ Acceptance criteria
 7. HTTPS only; allowBackup=false; release APK non-debuggable, built by GitHub Actions and signed with the stable key.
 8. The agenda launches with the network off in under 2 s showing the cache or "unavailable" (measured on emulator with `adb shell am start -W`).
 Hard stops: installing on the TV (its own ask, once); Brian providing the ICS URL or OAuth client with his typed OK.
+
+### M1b: Ask Claude (same app as the agenda)
+As Brian, I want to say what I feel like watching and have it open on my services, so I skip browsing.
+Honest note: the remote's Google Assistant already handles exact requests like "play The Bear". Claude's value is vague requests ("something funny under 30 minutes"), follow-ups and suggestions, and answering from only the services Brian has installed.
+Acceptance criteria
+1. An "Ask Claude" button is reachable by D-pad from the agenda screen's initial focus in at most 2 presses.
+2. Voice: OK on the button starts speech recognition via the remote mic (Android `SpeechRecognizer`/RecognizerIntent); the transcript is shown before sending. If recognition is unavailable or fails, a keyboard text field appears (fallback). Both paths tested on the device.
+3. The request goes to the Claude API with the list of Brian's installed TV apps (names + package ids, from `<queries>` LEANBACK_LAUNCHER) and returns structured output: title, service (must be one of the installed ones), and either a deep link or "search in app". A pure-JVM test with a fake `ClaudeClient` and fixtures covers: exact title ("new Stranger Things"), vague request, service not installed (answer says so and offers an installed alternative), malformed or empty response (shows "Couldn't work that out", nothing launches).
+4. The result screen shows what Claude picked (title, service, one-line reason) with Open and Cancel; nothing launches until Brian presses Open. Back cancels with no launch (tested).
+5. Open launches the chosen app on the title via deep link when available, else on the app's search page for the title, else the app's home; the fallback used is shown. Verified on the device for at least 2 services.
+6. One follow-up turn is allowed ("something shorter") and replaces the result; a second follow-up is refused with a message and a "start over" action. Conversation state is discarded when leaving the screen.
+7. Offline or API error shows "Can't reach Claude" with Retry; the agenda still works. A request times out after 20 s.
+8. The API key is stored only in private on-device storage, never in repo, CI output or logs (grep check on repo and a captured log), and never typed on the TV (adb push or QR/phone step, as with the calendar secret). Hard stop: putting the key on the TV needs Brian's typed OK. Residual risk, stated: a key on the TV can be extracted by anyone with adb access to it; use a dedicated, spend-limited key.
+9. Uses Brian's Anthropic API credits (included in his plan). Architect estimates cost per question (tokens per request, model choice) in the architecture doc before build; the app shows no cost UI. Only the spoken/typed text and installed app names are sent, never calendar data.
+10. Titles and requests are not stored beyond the single session.
 
 ### M2 (conditional on M0 showing a gap Brian cares about): our own launcher
 Only started after Brian names the gap. Scope is only that gap, for example:
@@ -82,6 +97,7 @@ Optional weather: free keyless source, "Weather unavailable" on failure; cut if 
 |---|---|---|
 | M0 | Install Projectivy from the Play Store, arrange apps, report gaps | 30 |
 | M1 | Decide ICS vs OAuth; approve sideload once (Developer options, adb from PC or downloader app); give ICS URL or OAuth client via adb push/QR | 30-45 first time |
+| M1b | Provide a dedicated, spend-limited Anthropic API key with his typed OK (adb push or QR/phone step); try 5 requests and say which worked | 15 |
 | M2 | Name the gap; approve install of updates | 10 |
 | M3 | Approve adb change, run rollback test with us | 20 |
 
@@ -90,7 +106,8 @@ Optional weather: free keyless source, "Weather unavailable" on failure; cut if 
 2. ICS or OAuth? Default: ICS (simplest), revisit if lag annoys him.
 3. Comfortable with Developer options and sideloading for M1? Default: yes, asked once as its own hard stop.
 4. One calendar or several? Default: one.
-5. Favorites order (only matters if M2 happens)? Default: Netflix, YouTube, Disney+, Prime Video, Max, Hulu, Apple TV, Spotify, rest alphabetical.
+5. Which model/spend cap for Ask Claude? Default: architect proposes the cheapest model that passes the fixtures; a dedicated key with a low monthly cap (a hard stop if it raises a bill).
+6. Favorites order (only matters if M2 happens)? Default: Netflix, YouTube, Disney+, Prime Video, Max, Hulu, Apple TV, Spotify, rest alphabetical.
 
 ## Success signal
 After a week of use Brian says "keep it". No telemetry.
