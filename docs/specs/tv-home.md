@@ -118,6 +118,12 @@ Only after M0 or M2 and only if the launcher in use does not already do it. A sp
 5. Brian chooses after reading side effects; nothing changes on the TV without his OK (hard stop).
 Optional weather: free keyless source, "Weather unavailable" on failure; cut if it needs an account or key.
 
+### M4 (later, requested 2026-10-31 21:46Z): PC game streaming
+Brian wants to stream games from his PC to the TV with a Bluetooth console controller. We do not build streaming:
+Sunshine (free, open source) on the PC and Moonlight (free) on the Google TV do it, and the controller pairs to the
+Google TV. Our part: (a) a Games tile in our launcher (M2) that opens Moonlight to his PC; (b) via M1c, "start <game> on
+my PC" wakes the PC (Wake-on-LAN) and launches the game. Installing software on his PC is his own step or a hard-stop OK.
+
 ## What Brian does, and how long
 | Milestone | Brian's steps | Minutes |
 |---|---|---|
