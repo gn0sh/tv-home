@@ -1,13 +1,13 @@
 # tv-home status
 
 Feature: tv-home (custom Google TV home screen). Priority: hip pocket (idle time only; Quick Invoice first).
-Stage: Build M1 (calendar agenda). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
+Stage: Build M1 (calendar agenda), T2b re-plan in progress. Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
 - No Android SDK in the cloud sandbox (dl.google.com blocked). APKs build in GitHub Actions; private-repo minutes reset 2026-11-01 00:00Z.
 
 ## Waiting on the CEO
-- Try Projectivy Launcher, report what's missing (Just the calendar (rec) / It covers everything / More than that / Can't try it now) | Play Store on the TV | install, use a day, tap option | asked 2026-10-31 in thread "Customize Brian's LG OLED TV software" (also on Asks inbox) | default: build the calendar agenda app (M1)
+- None open. (Projectivy ask answered 2026-10-31: "More than that", so M2 our own launcher is unconditional.)
 
 ## Problem-key ledger
 | Key | Returns | Source |
@@ -16,7 +16,10 @@ Stage: Build M1 (calendar agenda). Spec at 7d04d4e covers M1, M1b (Ask Claude + 
 | instance-cap-starves-today | 1 | M1 core code review |
 | floating-recurring-dst | 1 | M1 core code review |
 | one-bad-event-fails-feed | 1 | M1 core code review |
-| rrule-advance-cpu / ics-parse-cpu-memory-dos | 1 | code + security review (same root cause) |
+| rrule-advance-cpu / ics-parse-cpu-memory-dos | 3 | code + security review rounds 1-2; architect re-plan done (ADR 0004, strict reader); T2b.3 is a fresh review |
+| partial-result-replaces-good, cancel-returns-network-error, vtimezone-bare-cr, vcal1-daylight | 1 | round 2 reviews (folded into T2b) |
+| session-ok-never-ages, no-fsync-before-rename, cache-write-throws, emphasis-boundary-60 | 1 | T4 review (fixed) |
+| lenient-verification-with-signing, scan-misses-nested, logs-before-scan | 1 | T6 review (fixed) |
 | old-dtstart-recurrence-missing | 1 | security review |
 | blocking-in-suspend, fetcher-customize-loosens-tls, redactor-over-redacts, pii-in-data-class-tostring | 1 | M1 core reviews |
 
@@ -39,4 +42,8 @@ Stage: Build M1 (calendar agenda). Spec at 7d04d4e covers M1, M1b (Ask Claude + 
 | 2026-10-31 | security-engineer | opus/high | M1 core T2+T3 | approve with changes, 1 medium |
 | 2026-10-31 | backend-engineer | sonnet/medium | T4 cache/state | done, 80 tests (65f1f28) |
 | 2026-10-31 | devops-engineer | sonnet/high | T6 CI workflow | done (6020cbe), unrun until Nov 1 |
-| 2026-10-31 | backend-engineer | opus/high | Fix M1 core findings (escalated after bounce) | running |
+| 2026-10-31 | backend-engineer | opus/high | Fix M1 core findings (escalated after bounce) | done (b255e88, own expander, 0/6000 dateutil mismatches) |
+| 2026-10-31 | code-reviewer + security-engineer | opus/high | Round 2 delta on T2+T3 | request changes (3rd return of ics-parse-cpu-memory-dos) |
+| 2026-10-31 | software-architect | opus/high | Re-plan bounded parse (ADR 0004, T2b tasks) | done |
+| 2026-10-31 | backend-engineer | opus/high | T2b.1 strict ICS reader | running |
+| 2026-10-31 | backend-engineer | sonnet/high | T2b.2 fetch/source/state/AgendaRefresher | running |
