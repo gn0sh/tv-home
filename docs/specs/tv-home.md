@@ -76,6 +76,18 @@ Acceptance criteria
 9. Uses Brian's Anthropic API credits (included in his plan). Architect estimates cost per question (tokens per request, model choice) in the architecture doc before build; the app shows no cost UI. Only the spoken/typed text and installed app names are sent, never calendar data.
 10. Titles and requests are not stored beyond the single session.
 
+#### M1b-2: Ask while something is playing
+Limit, stated plainly: streaming apps use DRM, so other apps cannot see or capture the picture. Claude cannot see the screen; it answers from what is playing (show, episode, position) as reported by the media session, plus its own knowledge. Questions about things only visible in the frame ("who is that actor in this shot") may be answered by guessing from the episode and cast; it must say so rather than claim to see the image.
+Acceptance criteria
+11. While another app plays, a designated remote button (one fixed in the spec at design time, not the Home or Back key) opens an Ask Claude overlay within 1 s; playback continues uninterrupted (position advances during the overlay, checked via media session on the device).
+12. The overlay uses the same voice/keyboard input and answer display as M1b. Only the overlay takes focus; the video keeps audio.
+13. The request includes now-playing title, episode and position from the media session when available; when unavailable, the answer says it does not know what is playing.
+14. Answers never claim to see the picture; a test question about on-screen content gets a reply stating the limit.
+15. Back closes the overlay and returns to the video with playback state unchanged; one follow-up is allowed, a second is refused (same rule as M1b).
+16. Reading the media session needs a user-granted notification-listener permission; this is an explicit step Brian approves, and nothing is read until granted.
+
+Design reference: Brian saw a clickable mockup on 2026-10-31: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
+
 ### M1c: Control from Claude (typing on laptop or phone)
 As Brian, I want to type to Claude on my laptop or phone and have it control my TV, so I don't need the remote.
 Scope is outcomes only; the mechanism is the architect's. Reaches the TV from his Windows PC over the home network (LAN only); the phone works through the PC, which must be on.
