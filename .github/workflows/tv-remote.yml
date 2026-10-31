@@ -1,0 +1,44 @@
+name: tv-remote
+
+# Unit tests for the tv-remote MCP server (task C1). Security findings #8 (supply-chain-pinning) and #9 (ci-hardening),
+# docs/reviews/security-tv-home-design.md.
+#  - Triggers are push to main and pull_request only. Never pull_request_target or workflow_run.
+#  - checkout is pinned by full commit SHA (same as android.yml). No setup-uv action: uv comes from PyPI through
+#    pip with --require-hashes (tv-remote/ci/uv-requirements.txt), and dependencies from uv.lock with --locked.
+#  - No secrets are used.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tv-remote/**"
+      - ".github/workflows/tv-remote.yml"
+  pull_request:
+    paths:
+      - "tv-remote/**"
+      - ".github/workflows/tv-remote.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tv-remote-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tv-remote
+    env:
+      UV_PYTHON_DOWNLOADS: never  # use the runner's Python; no unverified interpreter downloads
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv (hash-pinned)
+        run: python3 -m pip install --user --no-deps --require-hashes -r ci/uv-requirements.txt
+      - name: Run tests
+        run: python3 -m uv run --locked pytest -q

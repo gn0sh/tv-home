@@ -1,0 +1,27 @@
+[project]
+name = "tv-remote"
+version = "0.1.0"
+description = "Local stdio MCP server that controls Brian's LG webOS TV and Google TV over the LAN."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp==2.3.0",
+    "androidtvremote2==0.3.2",
+    "aiowebostv==0.10.0",
+]
+
+[project.scripts]
+tv-remote = "tv_remote.server:main"
+
+[dependency-groups]
+dev = ["pytest==8.4.2"]
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tv_remote"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

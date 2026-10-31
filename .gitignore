@@ -16,3 +16,8 @@ captures/
 *.pem
 *.p12
 app/release/
+
+# tv-remote (Python)
+tv-remote/.venv/
+__pycache__/
+.pytest_cache/

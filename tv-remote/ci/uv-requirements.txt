@@ -1,0 +1,4 @@
+# uv for CI, installed with `pip install --require-hashes` (security finding #8). Linux x86_64 wheel only.
+# Update by hand with review: version and sha256 from https://pypi.org/project/uv/#files
+uv==0.11.32 \
+    --hash=sha256:3da76cd4e2697de30928b8a8524bd39183ac1e08cb7e72833807c022b7cba6c4
