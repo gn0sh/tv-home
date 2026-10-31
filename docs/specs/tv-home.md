@@ -145,7 +145,7 @@ my PC" wakes the PC (Wake-on-LAN) and launches the game. Installing software on 
 ## Success signal
 After a week of use Brian says "keep it". No telemetry.
 
-### M5 (later, requested 2026-10-31 23:22Z): clean Kodi, run by talking to Claude
+### M5 (PARKED by Brian 2026-10-31 23:43Z until more tokens are available; requested 23:22Z): clean Kodi, run by talking to Claude
 Brian wants Kodi on the Google TV that stays clean and easy to navigate, and that he configures by talking to Claude.
 Past installs got bogged down by bloat; that comes from third-party "builds" and add-on packs, so we use none.
 - Brian installs official Kodi (XBMC Foundation) from the Play Store himself; our tools never install apps.
