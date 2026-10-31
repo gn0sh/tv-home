@@ -1,0 +1,244 @@
+name: android
+
+# Security findings #8 (supply-chain-pinning) and #9 (ci-hardening), docs/reviews/security-tv-home-design.md.
+#  - Triggers are push to main, pull_request and a manual dispatch. Never pull_request_target or workflow_run.
+#  - Third-party actions are pinned by full commit SHA (the comment names the tag). Update them by hand, with review.
+#  - Signing secrets exist only in the "Build release" step, and only on a push to main.
+#  - No `--scan` (no build scans published). Signing values travel as env vars, never as -P arguments.
+#  - Residual risk, accepted and recorded: any workflow on main can read the signing secrets (environment protection
+#    rules may need a paid plan; not bought).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI: "true"
+  # gradle/verification-metadata.xml covers :core only (generated in the sandbox). :app dependencies (AGP, Compose)
+  # cannot resolve there, so the :app job runs lenient until the file is regenerated on CI.
+  # TODO: regenerate with `./gradlew --write-verification-metadata sha256 :app:lintRelease :app:assembleRelease`
+  # on a runner, review the diff, commit it, then set this to "strict".
+  APP_DEP_VERIFICATION: lenient
+
+jobs:
+  core:
+    name: core tests
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: :core:test
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --console=plain :core:test 2>&1 | tee "$RUNNER_TEMP/core.log"
+      - name: Scan the log for secret patterns
+        if: always()
+        run: scripts/ci/scan-secrets.sh "$RUNNER_TEMP/core.log"
+
+  app:
+    name: app (lint, release APK, checks)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect app module
+        id: detect
+        run: |
+          if [ -f app/build.gradle.kts ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::app/ does not exist yet; the :app job has nothing to do."
+          fi
+
+      - name: Validate Gradle wrapper
+        if: steps.detect.outputs.present == 'true'
+        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        if: steps.detect.outputs.present == 'true'
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: "platform-tools platforms;android-34 build-tools;35.0.0"
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Lint
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --console=plain --dependency-verification="$APP_DEP_VERIFICATION" \
+            :app:lintRelease 2>&1 | tee "$RUNNER_TEMP/lint.log"
+
+      # Signing happens only on a push to main. Secrets are read in these two steps only, never on pull_request.
+      - name: Decode signing keystore
+        id: keystore
+        if: steps.detect.outputs.present == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          KEYSTORE_B64: ${{ secrets.TVHOME_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::TVHOME_KEYSTORE_B64 is not set; building an unsigned APK."
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "TVHOME_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build release
+        if: steps.detect.outputs.present == 'true'
+        env:
+          # Empty unless this is a signed push to main; the app's Gradle script signs only when these are set.
+          TVHOME_KEYSTORE_PASSWORD: ${{ steps.keystore.outputs.signed == 'true' && secrets.TVHOME_KEYSTORE_PASSWORD || '' }}
+          TVHOME_KEY_ALIAS: ${{ steps.keystore.outputs.signed == 'true' && secrets.TVHOME_KEY_ALIAS || '' }}
+          TVHOME_KEY_PASSWORD: ${{ steps.keystore.outputs.signed == 'true' && secrets.TVHOME_KEY_PASSWORD || '' }}
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --console=plain --dependency-verification="$APP_DEP_VERIFICATION" \
+            :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/assemble.log"
+
+      - name: Delete signing material
+        if: always() && steps.detect.outputs.present == 'true'
+        run: |
+          ./gradlew --stop >/dev/null 2>&1 || true
+          if [ -f "$RUNNER_TEMP/release.jks" ]; then
+            shred -u "$RUNNER_TEMP/release.jks" 2>/dev/null || rm -f "$RUNNER_TEMP/release.jks"
+          fi
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Locate APK
+        id: apk
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/release/*.apk)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one release APK, found ${#apks[@]}"
+            exit 1
+          fi
+          echo "path=${apks[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Check manifest (not debuggable, allowBackup=false, no QUERY_ALL_PACKAGES)
+        if: steps.detect.outputs.present == 'true'
+        env:
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          apkanalyzer=$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | sort -V | tail -1)
+          [ -x "$apkanalyzer" ] || { echo "::error::apkanalyzer not found under $ANDROID_HOME/cmdline-tools"; exit 1; }
+          aapt2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          fail=0
+
+          debuggable=$("$apkanalyzer" manifest debuggable "$APK")
+          [ "$debuggable" = "false" ] || { echo "::error::APK is debuggable ($debuggable)"; fail=1; }
+
+          "$apkanalyzer" manifest print "$APK" > "$RUNNER_TEMP/manifest.xml"
+          grep -q 'android:allowBackup="false"' "$RUNNER_TEMP/manifest.xml" \
+            || { echo "::error::android:allowBackup=\"false\" is missing from the manifest"; fail=1; }
+          grep -q 'android:debuggable="true"' "$RUNNER_TEMP/manifest.xml" \
+            && { echo "::error::manifest sets android:debuggable=true"; fail=1; }
+
+          "$apkanalyzer" manifest permissions "$APK" > "$RUNNER_TEMP/permissions.txt"
+          grep -q 'QUERY_ALL_PACKAGES' "$RUNNER_TEMP/permissions.txt" \
+            && { echo "::error::APK requests QUERY_ALL_PACKAGES"; fail=1; }
+
+          # Second opinion from aapt2 (a different parser).
+          "$aapt2" dump badging "$APK" > "$RUNNER_TEMP/badging.txt"
+          grep -q 'QUERY_ALL_PACKAGES' "$RUNNER_TEMP/badging.txt" \
+            && { echo "::error::aapt2 badging lists QUERY_ALL_PACKAGES"; fail=1; }
+          grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt" \
+            && { echo "::error::aapt2 badging says application-debuggable"; fail=1; }
+
+          exit "$fail"
+
+      - name: Scan APK (dex and resources) and logs for secret patterns
+        if: steps.detect.outputs.present == 'true'
+        env:
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/apk-unzipped"
+          unzip -q -o "$APK" -d "$RUNNER_TEMP/apk-unzipped"
+          scripts/ci/scan-secrets.sh "$RUNNER_TEMP/apk-unzipped" \
+            "$RUNNER_TEMP/lint.log" "$RUNNER_TEMP/assemble.log"
+
+      # Uploaded only after the checks and the scan pass, so a leaking APK is never kept.
+      - name: Upload APK
+        if: steps.detect.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tv-home-release-apk
+          path: ${{ steps.apk.outputs.path }}
+          retention-days: 7
+          if-no-files-found: error
+
+  # Manual only. T9 fills this in (D-pad walk, cold start with network off, logcat/dropbox greps, DUMP guard checks).
+  emulator:
+    name: emulator (Android TV, API 34)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Boot Android TV emulator (stub)
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: android-tv
+          arch: x86
+          profile: tv_1080p
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb devices
+            adb shell getprop ro.build.version.sdk
+            echo "TODO(T9): install the release APK and run the QA checks in docs/tasks/tv-home-m1.md"
