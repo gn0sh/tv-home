@@ -1,6 +1,6 @@
 # Spec: tv-home
 
-Status: draft v1, 2026-10-31. Priority: hip pocket (low; built in idle time).
+Status: draft v2 (panel changes applied, docs/reviews/panel-tv-home-spec.md), 2026-10-31. Priority: hip pocket (low; built in idle time).
 
 ## Goal check
 Brian gets his own Google TV home screen: one row of his streaming apps to open with the remote, plus a panel showing today's calendar.
@@ -26,64 +26,71 @@ The stock Google TV home is dominated by recommendations and ads, and has no cal
 | # | Assumption | Status | Confidence |
 |---|---|---|---|
 | A1 | Device is Chromecast with Google TV or Google TV Streamer (Android TV based); exact model unknown | Unverified | Medium |
-| A2 | Google TV has no setting to pick another home app. A custom launcher becomes "home" either via an accessibility service that catches the Home button, or by disabling the stock launcher over adb | Unverified on his device | Medium |
+| A2 | Google TV has no setting to pick another home app. The real path to being home is adb (`cmd package set-home-activity`, else `pm disable-user` on the stock launcher); side effects, OTA updates may undo it, rollback needs a PC. An accessibility service cannot catch Home: it can only redirect after the stock home appears (flash, launcher-name dependent, no boot coverage), so it is fallback only | Unverified on his device | Medium |
+| A6 | Free launchers (Projectivy and similar) already cover the app row, favorites order and home handling; Projectivy installs from the Play Store, no sideload | Unverified | Medium |
 | A3 | Installing our APK means sideloading: Developer options + adb over the network from his PC, or a downloader app. Installing on his TV is a hard stop (needs his OK) | Unverified on his device | High |
 | A4 | Builds run in GitHub Actions (no Android SDK in our cloud sandbox); pure logic (app ordering, ICS parsing, date windows, staleness) must be unit-testable on a plain JVM | Verified (sandbox) | High |
-| A5 | Calendar via Google Calendar "Secret address in iCal format" (ICS URL). The URL is a secret: obtaining it is a hard stop needing Brian's typed OK | Unverified | High |
+| A5 | Calendar source is undecided (see below). ICS secret URL is a secret, so obtaining it is a hard stop needing Brian's typed OK. Google ICS feeds can lag by hours | Unverified | High |
 
-Calendar decision: recommend (a) ICS secret URL over (b) Google OAuth device flow. Why: no Google Cloud project, OAuth client, consent screen or token refresh to build and maintain; read-only by construction; one pasted string. Cost: anyone with the URL can read the calendar, so it must live only in on-device private storage, never in the repo, logs or CI. (b) is the fallback if Brian won't use a secret link; it needs an OAuth client and credential step from him.
+Calendar source: open decision for Brian, needed only when the agenda app is built (default: ICS). Built against a `CalendarSource` interface and fixtures meanwhile, so either plugs in.
+- ICS secret URL: simple, no Google Cloud setup, read-only. Cost: can lag hours (weakens "Dentist 3pm"); URL is a secret kept only in private on-device storage, never in repo, logs or CI.
+- OAuth device flow, calendar.readonly: real-time. Cost: Brian creates a Google Cloud OAuth client and consents (credential step, hard stop 5).
+- URL/credentials are never typed on the TV: entry via adb push or a QR/phone step.
+
+Technical constraints (for the architect): use maintained libraries (ical4j or similar) and an HTTP client, not a hand-rolled parser; minSdk 31, target 34; `<queries>` with LEANBACK_LAUNCHER, not QUERY_ALL_PACKAGES; allowBackup=false, non-debuggable release builds, secrets scrubbed from exceptions and logs; one stable signing key kept in Actions secrets.
 
 ## Milestones and user stories
+Order: M0 (Brian, no code) then M1 (agenda app). M2 and M3 are conditional.
 
-### M1: Thin slice (real data: his installed apps)
-As Brian, I want a screen of my installed streaming apps, favorites first, so I can launch what I watch in a click or two.
+### M0: Try an existing launcher (no build, no sideload)
+As Brian, I want to try a ready-made launcher first, so I only get custom work for what is truly missing.
+1. Brian installs Projectivy Launcher from the Play Store and sets up his app row (about 30 min).
+2. He reports back: does it cover his app row and favorites order, does it become Home, and what is missing (calendar expected).
+3. Done when the gap list is recorded in `docs/status.md`. If the gap is only the calendar, M2 is dropped and M1 stands alone.
 
+### M1: Calendar agenda app (usable from any launcher)
+As Brian, I want today's and tomorrow's events on the TV, as an app/tile in whatever launcher I use, so I see my day at a glance.
 Acceptance criteria
-1. The home screen lists every app installed on the TV that has a TV launcher entry (leanback launcher intent), and no app without one.
-2. Apps named in a favorites list appear first, in the configured order; all others follow alphabetically (case-insensitive). Unit test on plain JVM covers ordering, including favorites not installed (skipped) and duplicates.
-3. Pressing OK/Select on a tile launches that app; Back from the app returns to tv-home.
-4. D-pad Left/Right/Up/Down moves focus between tiles with no dead ends and no focus trap; focus never lands on nothing after launch/return.
-5. The focused tile is visibly distinct (scale and outline) at 10 feet; verified by screenshot on a 1080p emulator and on the device.
-6. A clock shows local time, updating at least every 60 s, correct after a timezone change.
-7. An app installed or removed while tv-home is open appears or disappears within 5 s of returning to the screen.
-8. Favorites order is changed by editing one config file/setting in the repo or on-device, without code changes, and is applied on next launch.
-9. Cold start to first rendered tile row in under 2 s on the real device (measured, stated in the PR).
-10. The app makes no network calls in M1 (verified by manifest: no INTERNET permission).
-Done also needs: APK built by GitHub Actions; installed on the TV only after Brian's OK.
+1. Given fixture ICS files (via `CalendarSource`), the agenda shows today's and tomorrow's events with local start time and title; all-day events labelled "All day"; sorted by start. JVM unit tests.
+2. Fixtures cover weekly RRULE, EXDATE/cancelled instance, a UTC event and an event in another timezone, all at the correct local time.
+3. Fetch at launch, then at most every 15 min while visible; last good result cached on device and shown immediately.
+4. Three states only: ok; stale (fetch failed, cache shown with "Updated N min ago"; stale when older than 60 min, emphasised); unavailable (no cache: "Can't reach calendar", or "Calendar not set up" with a one-line how-to). Empty day shows "Nothing scheduled".
+5. Readable at 10 feet and fully D-pad/Back navigable (no focus trap), checked on a TV emulator.
+6. The secret (URL or token) is stored only in private on-device storage; grep of repo, CI output and a captured log finds none of it. Never entered by typing on the TV.
+7. HTTPS only; allowBackup=false; release APK non-debuggable, built by GitHub Actions and signed with the stable key.
+8. The agenda launches with the network off in under 2 s showing the cache or "unavailable" (measured on emulator with `adb shell am start -W`).
+Hard stops: installing on the TV (its own ask, once); Brian providing the ICS URL or OAuth client with his typed OK.
 
-### M2: Calendar panel
-As Brian, I want today's and tomorrow's events beside my apps, so I know my day at a glance.
+### M2 (conditional on M0 showing a gap Brian cares about): our own launcher
+Only started after Brian names the gap. Scope is only that gap, for example:
+1. Lists apps with a TV launcher entry (`<queries>` LEANBACK_LAUNCHER), favorites first in configured order, rest alphabetical; JVM test for ordering incl. missing and duplicate favorites.
+2. OK launches the app; Back returns; D-pad focus has no dead ends; focused tile visibly distinct.
+3. No INTERNET permission in this module unless the calendar panel is included.
+4. Measurements (cold start, screenshots) only where they protect a stated gap, with the method written in the PR.
 
-Acceptance criteria
-1. Given an ICS feed, the panel shows today's and tomorrow's events with start time (local zone) and title; all-day events are labelled "All day"; sorted by start time. Unit tests use fixture ICS files.
-2. Recurring events (RRULE incl. exceptions/EXDATE) and events in other timezones render at the correct local time; fixtures cover weekly recurrence, a cancelled instance and a UTC event.
-3. Events are fetched at launch and then at most every 15 min while visible; the last good result is cached on device and shown immediately on start.
-4. If the fetch fails and a cache exists, the panel shows the cached events plus "Updated N min ago" (or hours/days); stale means older than 60 min, then the label is visually emphasised.
-5. If the fetch fails and there is no cache, the panel shows a plain-language error ("Can't reach calendar") and the app grid still works. A malformed feed shows a distinct "Calendar data unreadable" message.
-6. If no ICS URL is configured, the panel shows "Calendar not set up" and how to set it (one line).
-7. With no events, the panel shows "Nothing scheduled today".
-8. The ICS URL is stored only in private on-device storage; it appears in no log line, crash report, repo file or CI output (grep check on repo and a log capture).
-9. Network call uses HTTPS only; a calendar failure never blocks or delays app tiles (grid renders under 2 s with the network off).
+### M3 (conditional): becoming the default home
+Only after M0 or M2 and only if the launcher in use does not already do it. A spike, not a build.
+1. Spike: on the real device, `adb shell cmd package set-home-activity <component>` is tried; result (works, survives reboot, survives Home press from Netflix and YouTube within 2 s) is recorded.
+2. If it fails: `pm disable-user` on the stock launcher is evaluated; fallback of last resort is an accessibility redirect, with its flash, naming dependence and no boot coverage written down for Brian.
+3. Rollback documented and tested before handing over: restore stock home in at most 3 adb steps from a PC; the steps also cover an OTA update undoing the change.
+4. Any accessibility service reads no screen content and declares only what it needs (manifest check).
+5. Brian chooses after reading side effects; nothing changes on the TV without his OK (hard stop).
+Optional weather: free keyless source, "Weather unavailable" on failure; cut if it needs an account or key.
 
-Hard stop: Brian provides the ICS URL himself, with his typed OK, via on-device entry or a local file. The team never asks for it in chat or commits it.
-
-### M3: Becoming the default home; optional weather
-As Brian, I want pressing Home to bring me to tv-home, so it behaves like my real home screen.
-
-Acceptance criteria
-1. An accessibility service catches the Home button and opens tv-home from other apps; enabling it is a documented, step-by-step manual setup for Brian. If the service is disabled, tv-home still works as a normal app.
-2. Pressing Home inside a streaming app returns to tv-home within 2 s on the real device (measured on Netflix and YouTube).
-3. A documented rollback restores the stock launcher in at most 3 steps (disable service, or re-enable stock launcher via adb); tested before it is handed to Brian.
-4. The service reads no screen content and requests only the Home-key capability (manifest check).
-5. If A2 turns out false on his device (Home cannot be caught), the fallback path (adb disable of the stock launcher) is documented with its risks, and Brian chooses.
-6. Optional weather: current temperature and condition for a configured location from a free, keyless source; failure shows "Weather unavailable" and never affects other panels. Cut if the source needs an account or key.
+## What Brian does, and how long
+| Milestone | Brian's steps | Minutes |
+|---|---|---|
+| M0 | Install Projectivy from the Play Store, arrange apps, report gaps | 30 |
+| M1 | Decide ICS vs OAuth; approve sideload once (Developer options, adb from PC or downloader app); give ICS URL or OAuth client via adb push/QR | 30-45 first time |
+| M2 | Name the gap; approve install of updates | 10 |
+| M3 | Approve adb change, run rollback test with us | 20 |
 
 ## Open questions (none block work; default applies if unanswered)
-1. Which exact device model is it, and what Android/Google TV version? Default: assume Chromecast with Google TV; M1 targets API 29+ and is tested on an emulator until the device is checked (Settings > System > About).
-2. Which apps are favorites, and in what order? Default: Netflix, YouTube, Disney+, Prime Video, Max, Hulu, Apple TV, Spotify, then the rest alphabetical.
-3. Calendar: ICS secret URL (recommended) or OAuth? Default: ICS; Brian gives the URL himself later. M2 is built and tested on fixtures meanwhile.
-4. Is he comfortable enabling Developer options and sideloading, and enabling an accessibility service for M3? Default: yes for M1/M2; M3 is asked again with exact steps once M2 ships.
-5. Does he want only his primary Google calendar, or several? Default: the one ICS feed (one calendar).
+1. Exact device model and Google TV version? Default: assume Chromecast with Google TV; emulator until checked (Settings > System > About).
+2. ICS or OAuth? Default: ICS (simplest), revisit if lag annoys him.
+3. Comfortable with Developer options and sideloading for M1? Default: yes, asked once as its own hard stop.
+4. One calendar or several? Default: one.
+5. Favorites order (only matters if M2 happens)? Default: Netflix, YouTube, Disney+, Prime Video, Max, Hulu, Apple TV, Spotify, rest alphabetical.
 
 ## Success signal
-After M3, Brian uses tv-home as his daily home screen for 2 weeks with no revert to stock launcher; a measure of that is his say-so, not telemetry (no analytics).
+After a week of use Brian says "keep it". No telemetry.
