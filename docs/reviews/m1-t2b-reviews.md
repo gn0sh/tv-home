@@ -35,3 +35,9 @@ Security: APPROVE WITH CHANGES. Probes A-C fixed, D no longer exhausts, G 6,000 
 Probe files: m1-t2b-secprobes.kt.txt (A-D), m1-t2b-secprobes2.kt.txt (E-H).
 
 Manager decision: take security's by-construction fix. A first reader-only pass collects RECURRENCE-ID keys (bounded, charged), so removals are applied at add time, never depend on file order, and ParseLimit.INSTANCES is removed. Per-UID cap becomes per (UID, local day). Delta re-reviews after.
+
+## Delta round 2 (f95bec0): code APPROVE, security APPROVE
+Closed: instances-exhausted-overbroad / instance-cap-exhausted-one-invite, focus-cap-per-range-not-per-day. Probes A-K rerun; first pass (J) 10.3 MB in 392 ms, ~30k steps.
+Accepted residuals: `focus-crowding-many-uids` (LOW, 11 UIDs x 46 crowd out a day; spam is visible; inherent to 500 cap); `bad-override-removes` (INFO, needs victim UID; same as a well-formed override).
+Nits: `removal-key-pass-uncaught` (no throwing input found), `p14-perf-margin` (watch on CI).
+Manager decision: keep the bad-override-removes policy (documented in ADR 0004). T2b.3 passed.
