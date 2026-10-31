@@ -155,7 +155,17 @@ jobs:
             exit 0
           fi
           umask 077
-          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          if ! printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks" 2>/dev/null; then
+            rm -f "$RUNNER_TEMP/release.jks"
+            echo "::error::TVHOME_KEYSTORE_B64 is not valid base64. Re-run scripts/new-signing-key.ps1 -Rotate."
+            exit 1
+          fi
+          # A PKCS12 file starts with byte 0x30. A UTF-8 BOM (EF BB BF) or anything else means the secret was stored wrongly.
+          if [ "$(head -c 1 "$RUNNER_TEMP/release.jks" | od -An -tx1 | tr -d ' ')" != "30" ]; then
+            rm -f "$RUNNER_TEMP/release.jks"
+            echo "::error::Decoded keystore does not look like a PKCS12 file (BOM or bad secret). Re-run scripts/new-signing-key.ps1 -Rotate."
+            exit 1
+          fi
           echo "signed=true" >> "$GITHUB_OUTPUT"
           echo "TVHOME_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 

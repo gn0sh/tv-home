@@ -41,7 +41,14 @@ function Invoke-Adb([string[]]$AdbArgs, [byte[]]$Stdin = $null, [int]$TimeoutMs 
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
+    # Windows PowerShell 5.1: Process.Start wraps stdin in a writer using Console.InputEncoding, which can emit a UTF-8
+    # BOM. Use BOM-less UTF-8 for the Start call only (the set can throw when there is no console).
+    $oldEnc = $null; $swapped = $false
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        try { $oldEnc = [Console]::InputEncoding; [Console]::InputEncoding = (New-Object System.Text.UTF8Encoding($false)); $swapped = $true } catch { }
+    }
+    try { $p = [System.Diagnostics.Process]::Start($psi) }
+    finally { if ($swapped) { try { [Console]::InputEncoding = $oldEnc } catch { } } }
     $outTask = $p.StandardOutput.ReadToEndAsync()
     $errTask = $p.StandardError.ReadToEndAsync()
     try {

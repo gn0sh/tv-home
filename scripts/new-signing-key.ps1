@@ -45,7 +45,14 @@ function Invoke-Native([string]$Exe, [string[]]$ToolArgs, [byte[]]$Stdin = $null
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
+    # Windows PowerShell 5.1: Process.Start wraps stdin in a writer using Console.InputEncoding, which can emit a UTF-8
+    # BOM. Use BOM-less UTF-8 for the Start call only (the set can throw when there is no console).
+    $oldEnc = $null; $swapped = $false
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        try { $oldEnc = [Console]::InputEncoding; [Console]::InputEncoding = (New-Object System.Text.UTF8Encoding($false)); $swapped = $true } catch { }
+    }
+    try { $p = [System.Diagnostics.Process]::Start($psi) }
+    finally { if ($swapped) { try { [Console]::InputEncoding = $oldEnc } catch { } } }
     $o = $p.StandardOutput.ReadToEndAsync()
     $e = $p.StandardError.ReadToEndAsync()
     try {
@@ -97,15 +104,19 @@ function Set-GhSecret([string]$Name, [string]$Value) {
     } finally {
         [Array]::Clear($bytes, 0, $bytes.Length)
     }
-    if ($r.Code -ne 0) { throw "gh secret set $Name failed" }
+    if ($r.Code -ne 0) { $script:GhErr = $r.Text.Trim(); throw "gh secret set $Name failed" }
 }
 
 $pw = $null
+$step = 'start'
+$script:GhErr = ''
 try {
     # One password for the store and the key: PKCS12 keystores ignore a separate key password.
+    $step = 'generate password'
     $pw = New-RandomPassword
-    New-Item -ItemType Directory -Path $dir | Out-Null
+    New-Item -ItemType Directory -LiteralPath $dir | Out-Null
 
+    $step = 'keytool'
     $env:TVHOME_GEN_PASS = $pw
     try {
         $k = Invoke-Native $kt.Source @(
@@ -123,9 +134,11 @@ try {
     $fp = $null
     if ($l.Code -eq 0 -and $l.Text -match 'SHA256:\s*([0-9A-Fa-f:]{95})') { $fp = $Matches[1] }
 
+    $step = 'save DPAPI backup'
     # DPAPI-protected backup of the password (this Windows user on this PC only).
     ConvertTo-SecureString -String $pw -AsPlainText -Force | ConvertFrom-SecureString | Set-Content -LiteralPath $pwPath -Encoding ASCII
 
+    $step = 'gh secret set'
     $b64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($ksPath))
     Set-GhSecret 'TVHOME_KEYSTORE_B64' $b64
     Set-GhSecret 'TVHOME_KEYSTORE_PASSWORD' $pw
@@ -138,8 +151,10 @@ try {
     Write-Host "Backup folder: $dir"
     Write-Host 'Next: read the password in this window and save it in your password manager, then copy the folder to a second place. Steps: docs/release/tv-home-signing.md'
 } catch {
-    # Fixed text only: never the exception message, which could echo arguments.
-    Write-Host 'ERROR: failed. Nothing secret was printed. If GitHub secrets were only partly set, see docs/release/tv-home-signing.md, Rotation.' -ForegroundColor Red
+    # Fixed text only, never the exception message. gh's own stderr is safe to show (gh never echoes stdin values).
+    Write-Host "ERROR: failed at step '$step'. Nothing secret was printed." -ForegroundColor Red
+    if ($script:GhErr) { Write-Host "gh said: $($script:GhErr)" -ForegroundColor Red }
+    Write-Host 'If GitHub secrets were only partly set, see docs/release/tv-home-signing.md, Rotation.' -ForegroundColor Red
     exit 1
 } finally {
     Remove-Item Env:\TVHOME_GEN_PASS -ErrorAction SilentlyContinue
