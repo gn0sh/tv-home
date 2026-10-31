@@ -1,6 +1,6 @@
 # ADR 0003: tv-home M1c, control the TVs from Claude on the phone or laptop
 
-Status: proposed (architect), 2026-10-31. Architecture: `docs/architecture/tv-home.md` section 8.
+Status: proposed (architect), 2026-10-31; v2 applies `docs/reviews/security-tv-home-design.md`. Architecture: `docs/architecture/tv-home.md` section 8.
 
 ## Context
 Brian (11:26Z): control the TV by typing to Claude on his phone or laptop. He has an LG OLED (webOS) and, per the
@@ -20,14 +20,18 @@ using adb for Google TV and SSAP for LG.
    shown on the TV (as the Google TV phone app does), sends keys and app links (so deep links work), and reports
    the current app. It needs no Developer options, and it does not leave a network shell (adb) open to the LAN for
    daily use. adb stays a setup-time tool for sideloading M1.
-4. **LG webOS over SSAP (`aiowebostv`)**, wss port 3001 with the TV's self-signed certificate pinned on first
-   pairing, and Wake-on-LAN for power on.
+4. **LG webOS over SSAP (`aiowebostv`)**, wss port 3001 only (never ws 3000), the TV's self-signed certificate
+   pinned on first pairing, a trimmed permission manifest of 8 permissions instead of the library's ~37 (`#5`), and
+   Wake-on-LAN for power on. Pairing secrets (LG client key, ATV client private key) are DPAPI-encrypted; the Google
+   TV certificate is pinned at pairing (`#6`).
 5. **Shared deep links:** `core/src/main/resources/tvhome/services.json` is the single source for packages and link
    templates. Python reads it; a shared `deeplink-vectors.json` is run by both the Kotlin and the Python test
    suites, so the builders cannot drift.
 6. **Fixed tool allowlist** (architecture section 8). Nothing destructive: no install/uninstall, settings, raw
    commands, browser, notifications or factory reset. Volume capped at 60. Hosts must be private addresses.
-   Pairing material lives in `%APPDATA%\tv-remote\` and is never returned by a tool.
+   Pairing material lives in `%APPDATA%\tv-remote\` and is never returned by a tool. Inside Claude Code the
+   allowlist is not a boundary (the model also has Bash); it binds MCP-only clients, and `tv_pair` / `lg_power`
+   are never auto-allowed (`#7`). Dependencies locked with hashes (`uv.lock`, `uv run --locked`) (`#8`).
 
 ## Alternatives considered
 - **adb over Wi-Fi for Google TV** (the proposed shape): full control (`am start -d`, `input keyevent`,
@@ -47,6 +51,8 @@ using adb for Google TV and SSAP for LG.
 
 ## Consequences
 - Works only while the PC is on and on the same LAN as the TVs.
+- The spec's M1c step table says "enable network debugging on the Google TV"; with this ADR that is not needed for
+  M1c (the PM should update the table: pair with the code shown on the TV instead).
 - Pairing needs Brian at the TV once per device (code on the Google TV screen, accept prompt on the LG).
 - LG power-on needs "Turn on via Wi-Fi" (or Quick Start+) enabled on the TV and the TV's MAC address.
 - Protocol logic is unit-tested in the sandbox against fakes; everything that touches the devices is tested on his LAN.

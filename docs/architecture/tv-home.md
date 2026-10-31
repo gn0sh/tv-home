@@ -1,8 +1,7 @@
 # Architecture: tv-home (M1 agenda, M1b Ask Claude, M1c phone/laptop remote)
 
-Status: v1, 2026-10-31, software-architect. Spec: `docs/specs/tv-home.md` (M1). M1b and M1c are scope additions from
-Brian (2026-10-31 11:23Z and 11:26Z) that are not in the spec yet; their acceptance criteria are proposed in
-`docs/tasks/tv-home-m1b.md` and `docs/tasks/tv-home-m1c.md` for the product-manager to fold in.
+Status: v2, 2026-10-31, software-architect. v2 applies the security review
+(`docs/reviews/security-tv-home-design.md`, findings tagged `#n key`) and the spec's M1b/M1c ACs. Spec: `docs/specs/tv-home.md` (M1, M1b, M1b-2, M1c). Build order: M1 → M1c → M1b.
 ADRs: [0001](../adr/0001-tv-home-module-split-and-calendar-source.md) (module split, ICS library, secrets, signing),
 [0002](../adr/0002-tv-home-ask-claude.md) (M1b), [0003](../adr/0003-tv-home-remote-mcp-server.md) (M1c).
 
@@ -92,6 +91,9 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
   Olson name). EXDATE removes instances. **RECURRENCE-ID overrides are not applied by biweekly**: core must group
   VEVENTs by UID, drop the original instance for each RECURRENCE-ID, and add the override. `STATUS:CANCELLED`
   instances are dropped. Iteration is capped (stop once past the window; hard cap 5,000 iterations per VEVENT).
+- **Boundaries catch `Throwable`** (`#3 okhttp-key-in-exception`): `IcsCalendarSource.fetch` and
+  `ClaudeAssistant.resolve` wrap everything, map to the error enum and drop the throwable; nothing is rethrown.
+- **Parsing limits:** biweekly text parser only (never `parseXml`); at most 500 expanded instances in total.
 - **Fetch.** HTTPS only (rejected in core before any I/O, plus Android `cleartextTrafficPermitted=false`).
   OkHttp: connect 5 s, read 10 s, call 15 s, `followSslRedirects(false)`, response body capped at 10 MB
   (`TOO_LARGE`). Parsing runs off the main thread. Before fetching, the app checks connectivity; offline gives
@@ -110,12 +112,15 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
 
 ## 4. Android app (M1)
 - **UI toolkit: Compose for TV** (`androidx.tv:tv-material`) over Leanback. Leanback is in maintenance mode and
-  fragment-heavy; the agenda is one read-only screen; Compose for TV gives TV focus handling and 10-ft defaults.
+  fragment-heavy; the agenda is one simple screen; Compose for TV gives TV focus handling and 10-ft defaults.
   Cost: Compose cold start on a Chromecast-class CPU; mitigated by tiny UI and an R8 release build, measured by AC8.
 - Package `com.gnosh.tvhome`. Activities: `AgendaActivity` (LEANBACK_LAUNCHER, 320x180 banner, so it is a tile in
   Projectivy or the stock launcher), `ProvisionActivity` (below), and in M1b `AskActivity` (its own tile).
-- Screen: two columns (Today, Tomorrow), 32 sp titles, 28 sp times, high contrast, 5% overscan margins. Read-only,
-  so the only focusable element is the screen itself; Back exits. No focus trap by construction.
+- Screen: two columns (Today, Tomorrow), 32 sp titles, 28 sp times, high contrast, 5% overscan margins. In M1 the
+  only focusable element is the screen; Back exits. M1b adds one "Ask Claude" button that takes initial focus (spec
+  M1b AC1); Back still exits. No focus trap by construction.
+- Release builds install an uncaught-exception handler that logs the exception class name only, never the message
+  or stack, then lets the process die (`#3`).
 - `KeystoreSecretStore`: AES-256-GCM key in AndroidKeyStore (non-exportable), ciphertext in `noBackupFilesDir`.
   (EncryptedSharedPreferences is deprecated; using the Keystore directly avoids the dependency.)
 - Manifest: `allowBackup=false`, `dataExtractionRules`/`fullBackupContent` excluding everything,
@@ -129,16 +134,24 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
   the catalog to the newest stable release that supports Gradle 8.14 (devops-engineer records the exact version).
 
 ## 5. Getting secrets onto the TV (calendar URL, M1b API key)
-Never typed on the TV. Brian runs a script on his PC while the TV is connected over adb (he already needs adb for
-the sideload).
+Never typed on the TV, and **never passed through Claude** (`#1 secret-via-agent-transcript`): no agent, Remote
+Control session or chat ever sees the value. Brian runs the script himself, in his own PowerShell window, with the
+TV connected over adb (he already needs adb for the sideload). Asks to Brian give a copy-paste command and never ask
+for the value. `Read-Host` cannot prompt inside an agent shell, so the script also refuses to run when stdin is not
+an interactive console.
 1. `scripts/provision.ps1 -Key calendar_url` reads the value with `Read-Host -AsSecureString` (not written to
-   PSReadLine history), validates it locally (https; API key starts with `sk-ant-`), then runs
-   `adb shell am start -n com.gnosh.tvhome/.ProvisionActivity --es calendar_url '<value>'` with single-quote
-   escaping for the device shell.
-2. `ProvisionActivity` is exported but protected by `android:permission="android.permission.DUMP"`, which the adb
-   shell user holds and third-party apps cannot get, so no other app on the TV can plant or overwrite a value. It
-   validates, stores via `KeystoreSecretStore`, shows "Calendar saved" (never the value), and finishes. Extra
-   `--es clear calendar_url` wipes it.
+   PSReadLine history), trims it and checks it against a strict regex (`#3`), printing only "valid" or "not valid":
+   - calendar URL: `^https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics$`
+   - API key: `^sk-ant-[A-Za-z0-9_-]{20,256}$`
+   It then hands the value to the TV. Preferred, if T9 confirms it works: pipe it over stdin with
+   `adb shell content write --uri content://com.gnosh.tvhome.provision/calendar_url` into a `DUMP`-guarded
+   `ContentProvider`, so it is never a command-line argument (`#10`). Fallback: `adb shell am start -n
+   com.gnosh.tvhome/.ProvisionActivity --es calendar_url '<value>'` with single-quote escaping.
+2. `ProvisionActivity` (and the provider) is protected by `android:permission="android.permission.DUMP"`, which the
+   adb shell user holds and third-party apps cannot get, so no other app on the TV can plant or overwrite a value.
+   The activity has no intent-filter, `excludeFromRecents`, `noHistory`; it reads the extra, calls
+   `setIntent(Intent())`, re-checks the same regex, stores via `KeystoreSecretStore`, shows "Calendar saved" (never
+   the value), and calls `finishAndRemoveTask()` (`#10`). `--es clear calendar_url` wipes it.
 
 Why not "adb push into app-private storage": that needs `run-as`, which works only on debuggable builds, and the
 release build must not be debuggable. Why not a QR code to a phone page: that needs an HTTP server on the TV and a
@@ -147,39 +160,57 @@ LAN listener, which is more attack surface than a one-off adb command. Kept as a
 Traces, and what tests check (AC6):
 | Where | Trace | Control |
 |---|---|---|
+| Claude / agent transcripts | none: Brian runs the script himself | ask wording; script refuses non-interactive stdin |
 | PC PowerShell history | none (`Read-Host`) | script review |
-| PC process list | the value is an adb argument for under a second, visible to Brian's own user only | accepted |
-| TV `am` process args | brief; Android hides other apps' /proc | accepted |
-| TV logcat | ActivityTaskManager logs `START u0 {cmp=... (has extras)}`, not extra values | **QA greps a captured logcat after provisioning a dummy URL on the emulator** |
-| App logs | none in release (R8 strips Log) | QA greps logcat in a debug run too, through `Redactor` |
-| Repo / CI | value never present | CI greps the build log and APK for `private-` and `sk-ant-` patterns |
+| PC process list | none with `content write` over stdin; with the `am start` fallback, an adb argument for under a second, visible to Brian's own user only | accepted |
+| TV `am` process args | none with stdin; brief with the fallback; Android hides other apps' /proc | accepted |
+| TV logcat | ActivityTaskManager logs `START u0 {cmp=... (has extras)}`, not extra values | **QA greps a captured logcat after provisioning a dummy value on the emulator** |
+| App logs and crashes | none in release (R8 strips Log; uncaught handler logs class names only) | QA greps logcat incl. `System.err` and `AndroidRuntime`, and `dumpsys dropbox --print data_app_crash` (`#3`) |
+| Repo / CI | value never present; fixtures use one fixed fake secret | CI greps the build log and the unzipped APK (dex and resources) for `private-[0-9a-f]` and `sk-ant-` (`#9`) |
 
 ## 6. Signing and CI
-- One dedicated release keystore (RSA 4096, validity 30 years), generated by devops-engineer **on Brian's PC** in a
-  Remote Control session (`keytool`; his Temurin JDK 21 is installed). The keystore file and passwords stay in
-  `%USERPROFILE%\tv-home-signing\` (his backup; he can copy it to his password manager), and are uploaded once with
-  `gh secret set` as `TVHOME_KEYSTORE_B64`, `TVHOME_KEYSTORE_PASSWORD`, `TVHOME_KEY_ALIAS`, `TVHOME_KEY_PASSWORD`.
-  Fallback if gh is not signed in on his PC: generate in the sandbox, set the secrets from here, and deliver the
-  keystore to his PC as the backup; the sandbox copy is deleted. Never in the repo.
+- One dedicated release keystore (RSA 4096, validity 30 years). **Brian runs `scripts/new-signing-key.ps1` himself**
+  in his own PowerShell window (copy-paste command in the ask; his Temurin JDK 21 has `keytool`). The script
+  generates the store and key passwords in-process (cryptographic RNG), passes them to `keytool` via
+  `-storepass:env` / `-keypass:env` and to `gh secret set` via stdin, and prints nothing except "done" and the
+  certificate's SHA-256 fingerprint (public). Secrets set: `TVHOME_KEYSTORE_B64`, `TVHOME_KEYSTORE_PASSWORD`,
+  `TVHOME_KEY_ALIAS`, `TVHOME_KEY_PASSWORD`. The keystore and a password file stay in `%USERPROFILE%\tv-home-signing\`
+  as his backup (he may copy them to his password manager). **Agents never read that folder.** If `gh` is not signed
+  in, the script stops and tells him to run `gh auth login` first. There is no sandbox fallback (`#1`). Never in
+  the repo.
 - Losing the key means the next APK cannot update the installed one: uninstall and reinstall, then re-provision
   secrets (about 10 min for Brian). Low impact, so no second backup location is required.
-- `.github/workflows/android.yml`: on PR and push. Job 1 `:core:test :assistant-claude:test`. Job 2 `:app:lintRelease
+- Supply chain (`#8`): Gradle wrapper with `distributionSha256Sum`, the `gradle/actions/wrapper-validation` action,
+  dependency locking (`gradle.lockfile`) and `gradle/verification-metadata.xml` with SHA-256 checksums.
+- `.github/workflows/android.yml` (`#9`): `permissions: contents: read`, `actions/checkout` with
+  `persist-credentials: false`, never `pull_request_target` or `workflow_run`, no `--scan`, signing passwords passed
+  as env vars (never `-P` on the command line). Runs on PR and push. Job 1 `:core:test :assistant-claude:test`. Job 2 `:app:lintRelease
   :app:assembleRelease`; signed only on push to `main` when the secrets exist (keystore decoded to `$RUNNER_TEMP`,
   deleted in an `always()` step); uploads the APK as an artifact (7-day retention); checks the APK with `aapt dump
   badging`/`apkanalyzer` (not debuggable, allowBackup false, no QUERY_ALL_PACKAGES) and greps the log for secret
-  patterns. Job 3 (manual `workflow_dispatch`): Android TV API 34 emulator for AC5/AC8 checks. Third-party actions
+  patterns and the unzipped APK (dex and resources). Residual risk, accepted and recorded: any workflow on `main`
+  can read the signing secrets (environment protection rules may need a paid plan; not bought). Job 3 (manual `workflow_dispatch`): Android TV API 34 emulator for AC5/AC8 checks. Third-party actions
   pinned by commit SHA and reviewed by security-engineer. Budget: about 8 minutes per push; emulator runs only on
   demand, so the free private-repo minutes are enough.
 
 ## 7. M1b: Ask Claude (summary; decisions in ADR 0002)
-Flow: `AskActivity` → user presses OK on the on-screen mic → `SpeechRecognizer` (remote mic audio) → text, or the
-on-screen keyboard as a fallback (Gboard's own mic also works there) → `Assistant.resolve()` → one Claude Messages
-call with two tools → `AskResult` → `DeepLinkBuilder` builds a `LaunchPlan` locally → app tries each intent in order
-(deep link, search link, app launch) after a 3 s "Opening *title* on Netflix" countdown that Back cancels.
+Where it runs: **on the TV** for the remote/voice and overlay paths; typed requests from the phone or laptop go
+through M1c on the PC with no API key (ADR 0002 records why). Build order: M1 → M1c → M1b.
+
+Flow: "Ask Claude" button (initial focus on the agenda screen) or `AskActivity` tile → OK starts `SpeechRecognizer`
+(remote mic audio); the transcript is shown before sending; keyboard text field if recognition is unavailable or
+fails → `Assistant.resolve()` → one Claude Messages call with two tools (streamed, so the screen can show
+"Searching…") → `AskResult` → `DeepLinkBuilder` builds a `LaunchPlan` locally → **result screen shows title,
+service, one-line reason, and Open / Cancel; nothing launches until Brian presses Open** (spec M1b AC4,
+`#2 autolaunch-vs-spec-open`). Back cancels with no launch. Open tries each step in order (deep link, search link,
+app home) and the screen states which one was used. One follow-up turn is allowed; a second is refused with
+"start over" (spec AC6). The whole request, including `pause_turn` rounds, times out at 20 s (spec AC7).
+Conversation state lives in memory only and is dropped when the screen closes (spec AC10).
 
 ```kotlin
 interface Assistant { suspend fun resolve(req: AskRequest): AskResult }
-data class AskRequest(val utterance: String, val installed: List<ServiceKey>, val history: List<Turn>) // ≤ 3 turns
+data class AskRequest(val utterance: String, val installed: List<ServiceKey>, val history: List<Turn>, // ≤ 1 follow-up
+                      val nowPlaying: NowPlaying? = null)
 sealed interface AskResult {
   data class Open(val r: Resolution) : AskResult
   data class Clarify(val question: String) : AskResult      // Claude replied with text
@@ -189,7 +220,7 @@ sealed interface AskResult {
 enum class AssistantError { NOT_SET_UP, OFFLINE, NETWORK, AUTH, RATE_LIMITED, OVERLOADED, REFUSED, DAILY_CAP, BAD_RESPONSE }
 data class Resolution(val title: String, val service: ServiceKey, val kind: Kind,
                       val contentId: String?, val searchQuery: String, val confidence: Confidence)
-data class LaunchPlan(val steps: List<LaunchStep>)  // LaunchStep(action, dataUri, packageName, label)
+data class LaunchPlan(val steps: List<LaunchStep>)  // LaunchStep(action, dataUri, packageName, label); packageName never null
 ```
 Tools sent to Claude:
 - `web_search_20260209` (server tool, `max_uses: 3`), so "which service has it" needs no new account.
@@ -198,7 +229,12 @@ Tools sent to Claude:
   per-service id regex limits are enforced locally (title ≤ 200 chars, query ≤ 100, id ≤ 64 and must match the
   service's pattern, else dropped and the search fallback is used).
 Claude never supplies a URI. The deep link is built from `services.json` by our code, so a prompt-injected web page
-can at worst open the wrong title on an installed service.
+or now-playing title can at worst *propose* the wrong title on an installed service, which Brian sees before pressing
+Open. Rules (`#12 deeplink-id-regex`): every id regex excludes `/ ? # % : @` and `..`; queries are URL-encoded;
+every `LaunchStep` calls `setPackage`; the client never declares `web_fetch`; Clarify and NotFound texts are shown
+as plain text capped at 300 chars (no links, no markup). Injection fixtures (B2): web result text telling Claude to
+open a URL, a now-playing title containing instructions, a tool input with a URL in `content_id`, an unknown
+service, oversized fields.
 
 `services.json` (in `core/src/main/resources/tvhome/`, also read by tv-remote) holds, per service: key, display
 name, Android TV package(s), title-link template + id regex, search-link template, and a `verified` flag set only
@@ -209,20 +245,23 @@ after checking on Brian's device (task B5). Starting values (all unverified):
 | youtube | com.google.android.youtube.tv | `https://www.youtube.com/watch?v={id}` | `https://www.youtube.com/results?search_query={q}` |
 | disneyplus | com.disney.disneyplus | `https://www.disneyplus.com/browse/entity-{id}` | app launch |
 | prime | com.amazon.amazonvideo.livingroom | `https://app.primevideo.com/detail?gti={id}` | app launch |
-| max | com.wbd.stream | `https://play.max.com/{id}` | app launch |
+| max | com.wbd.stream | `https://play.max.com/show/{id}` | app launch |
 | hulu | com.hulu.livingroomplus | `https://www.hulu.com/watch/{id}` | app launch |
-| appletv | com.apple.atve.androidtv.appletv | `https://tv.apple.com/{id}` | app launch |
-| paramountplus | com.cbs.ott | `https://www.paramountplus.com/{id}` | app launch |
+| appletv | com.apple.atve.androidtv.appletv | `https://tv.apple.com/show/{id}` | app launch |
+| paramountplus | com.cbs.ott | `https://www.paramountplus.com/shows/{id}/` | app launch |
 | peacock | com.peacocktv.peacockandroid | `https://www.peacocktv.com/watch/asset/{id}` | app launch |
-| spotify | com.spotify.tv.android | `spotify:{id}` | `spotify:search:{q}` |
+| spotify | com.spotify.tv.android | `spotify:{type}:{id}` (type ∈ track, album, playlist, artist, show, episode; id `^[A-Za-z0-9]{22}$`) | `spotify:search:{q}` |
 Final fallback for every service: the package's LEANBACK_LAUNCHER intent. The manifest `<queries>` lists exactly
 these packages, which is what package visibility needs for `setPackage` intents.
 
-Model call: `claude-opus-5-5` (configurable string), adaptive thinking (cannot be disabled on this model),
+Model call: `claude-opus-5-5` by default (configurable string, see the latency table below), adaptive thinking (cannot be disabled on this model),
 `output_config.effort = "low"`, `max_tokens` 4,000, `tool_choice` auto (forced tool choice is rejected on this
 model), server-side refusal fallback (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`), handles
 `pause_turn` by re-sending, checks `stop_reason` before reading content. Sends only the utterance and installed
 service names; never calendar data. Typed SDK exceptions map to `AssistantError`; messages are never shown or logged.
+The key is validated with the `#3` regex before it is ever put in a header (OkHttp 4.12's `Headers.checkValue` puts
+a bad header value into its exception text, and `x-api-key` is not exempt), and `resolve()` catches `Throwable`.
+Daily cap: a per-date counter in `noBackupFilesDir`, checked before each call (`#13`).
 
 **Cost per question** (Opus 5.5 list prices $4 / $20 per MTok, web search $10 per 1,000; estimate, not measured):
 | Case | Input tokens | Output tokens | Searches | Cost |
@@ -231,15 +270,27 @@ service names; never calendar data. Typed SDK exceptions map to `AssistantError`
 | Typical ("the new Dune movie") | ~15k (search results dominate) | ~800 | 1-2 | ~$0.08-0.10 |
 | Hard / ambiguous | ~35k | ~1.5k | 3 | ~$0.20 |
 At 5 questions a day, roughly $10-15 a month. Controls: an in-app daily cap (default 20 questions), and Brian sets
-a monthly spend limit on a dedicated API workspace. A cheaper model is Brian's choice, not ours (ADR 0002).
+a monthly spend limit on a dedicated API workspace **before** the key is provisioned (`#13`).
+
+**Latency vs model** (spec AC7: 20 s timeout; a TV voice answer should feel like under 10 s). Estimates are
+judgment, not measured (low confidence); web search, not output speed, dominates, so fast mode would barely help.
+| Model | No search | 1-2 searches | Typical cost | Note |
+|---|---|---|---|---|
+| `claude-opus-5-5`, effort low | ~3-5 s | ~8-14 s | ~$0.10 | best at vague requests, the spec's stated value; default |
+| `claude-sonnet-5-5`, effort low | ~2-4 s | ~6-10 s | ~$0.05 | same `web_search_20260209` tool; one config change |
+| `claude-haiku-5-5` | ~1-2 s | ~4-7 s | ~$0.02 (search fees dominate) | older basic web search tool only; weakest on vague requests |
+Decision: ship `claude-opus-5-5` at effort `low` (Brian asked for the latest model, and vague requests are where
+quality shows), stream progress, and tell Claude in the system prompt to skip search when the request names a
+service or is answerable from knowledge. B10 measures p50/p95 on his TV; if p95 is over 10 s, offer Brian the switch
+to `claude-sonnet-5-5` (his choice, one config value).
 
 ### 7b. M1b overlay: ask about what is playing, without pausing it (Brian, 11:32Z)
 | Part | Choice | Why / caveat |
 |---|---|---|
-| Trigger from the remote while another app plays | `TvHomeAccessibilityService` with `flagRequestFilterKeyEvents` only (`canRetrieveWindowContent=false`, no event types). It consumes **only** the configured pattern (default proposal: long-press, at least 600 ms, of a key with no long-press meaning; the key is picked in spike B5 from what the service actually receives on his remote) and passes every other key through | Our app gets no key events while another app is in the foreground; an accessibility key filter is the only non-root way. It reads no screen content (same rule as spec M3.4). Enabling it is a setting change on his TV (part of the install ask): `adb shell settings put secure enabled_accessibility_services com.gnosh.tvhome/.TvHomeAccessibilityService` |
+| Trigger from the remote while another app plays | `TvHomeAccessibilityService` with `flagRequestFilterKeyEvents` only: `canRetrieveWindowContent=false`, no event types, no gestures. **Fixed trigger (spec AC11): a single press of the remote's Input button (`KEYCODE_TV_INPUT`)**, consumed on key-up; `onKeyEvent` returns `false` at once for every other key, with no buffering and no logging (`#4 a11y-settings-overwrite`). No code path leads from `AskResult` to `performGlobalAction` or `dispatchGesture`. Brian keeps input switching on the LG remote and via M1c `lg_input`. If B5 shows the filter does not receive Input on his remote, the PM re-fixes the button in the spec from the keys B5 lists | Our app gets no key events while another app is in the foreground; an accessibility key filter is the only non-root way. A single dedicated button avoids holding back other keys, which a long-press pattern would need. It reads no screen content (same rule as spec M3.4). Enabling it is a setting change on his TV (part of the install ask) and must **append**, not replace: the script reads `settings get secure enabled_accessibility_services`, saves it to a rollback file on the PC, writes the old list plus `:com.gnosh.tvhome/.TvHomeAccessibilityService`, and sets `accessibility_enabled 1` (`#4`) |
 | Overlay window | `TYPE_ACCESSIBILITY_OVERLAY` added by that service; fallback `TYPE_APPLICATION_OVERLAY` with `SYSTEM_ALERT_WINDOW` granted by `adb shell appops set com.gnosh.tvhome SYSTEM_ALERT_WINDOW allow` (Google TV usually has no "Display over other apps" screen; verify) | The accessibility overlay needs no extra permission once the service is on. Panel in the right third of the screen, text only (no speech, so it does not mix with the show's audio). It takes key focus while open; Back closes it and returns focus |
 | Keeping playback going | The playing activity stays resumed; it only loses window focus | Most players pause on `onPause`/`onStop`, not on focus loss, but some may. **Speech recognition may take audio focus, and a player that pauses on transient focus loss would pause.** Spike B5 checks each of his apps for both. If the mic pauses playback, the overlay uses the on-screen keyboard or a question typed from the phone (M1c) instead |
-| What is playing | `MediaSessionManager.getActiveSessions()` through a `NotificationListenerService` we enable (`adb shell cmd notification allow_listener com.gnosh.tvhome/.MediaContextListener`; verify on Google TV). Reads package, `METADATA_KEY_TITLE` / `DISPLAY_TITLE` / `DISPLAY_SUBTITLE` / `ARTIST` / `ALBUM`, duration, `PlaybackState` position. Notification content itself is ignored and never stored | Screen capture does not work for most of his apps: DRM players use secure surfaces / `FLAG_SECURE`, so capture returns black |
+| What is playing | `MediaSessionManager.getActiveSessions()` through a `NotificationListenerService` we enable (`adb shell cmd notification allow_listener com.gnosh.tvhome/.MediaContextListener`; verify on Google TV) **only after Brian's explicit OK** (spec AC16). Reads package, `METADATA_KEY_TITLE` / `DISPLAY_TITLE` / `DISPLAY_SUBTITLE` / `ARTIST` / `ALBUM`, duration, `PlaybackState` position. The listener sees every notification, including 2FA codes, so (`#11 notif-listener-scope`) it does not override `onNotificationPosted`, declares the narrowest `android.service.notification.default_filter_types` that still lets `getActiveSessions` work (B5 checks), and stores nothing | Screen capture does not work for most of his apps: DRM players use secure surfaces / `FLAG_SECURE`, so capture returns black |
 | Screen capture | **Not built in M1b.** `MediaProjection` needs a consent dialog per session (Android 14: single-use token), shows black for DRM apps, and would send frames to Anthropic | Possible later for non-DRM apps (YouTube) only, if metadata proves too thin |
 
 Expected metadata per app (all unverified until B5; the overlay works with whatever is present and says so):
@@ -253,7 +304,9 @@ Expected metadata per app (all unverified until B5; the overlay works with whate
 
 Contract addition: `AskRequest.nowPlaying: NowPlaying?` with
 `NowPlaying(service: ServiceKey?, packageName: String, title: String?, subtitle: String?, positionMs: Long?, durationMs: Long?)`
-(each string ≤ 200 chars). The system prompt treats it as untrusted data. The `open_title` tool stays available
+(each string ≤ 200 chars), already in the §7 contract. The system prompt treats it as untrusted data and tells
+Claude it cannot see the picture and must say so when a question depends on it (spec AC13, AC14). An Open result
+from the overlay still needs an explicit Open press (`#2`). The `open_title` tool stays available
 (for "play the next one"), and Claude answers in text otherwise ("Who plays the bartender?" → web search with the
 title, episode and position). Cost: as the typical row above, ~$0.08-0.15 per question.
 
@@ -279,8 +332,20 @@ Tools (complete allowlist; anything else is not exposed):
 | `tv_discover` | none | mDNS `_androidtvremote2._tcp` and SSDP, setup only |
 Not exposed: install/uninstall, settings, raw adb or SSAP URIs, browser, notifications, factory reset.
 Config and pairing material in `%APPDATA%\tv-remote\` (user-only ACL): `config.toml` (hosts, LG MAC), the
-androidtvremote2 client cert/key, LG client key and pinned TLS fingerprint. Hosts must be private (RFC 1918)
-addresses. Never printed in tool output or logs.
+androidtvremote2 client cert and key, the LG client key, and both TVs' pinned TLS fingerprints. The LG client key and
+the ATV client private key are encrypted at rest with Windows DPAPI (current user) (`#5`, `#6`). Hosts must be private
+(RFC 1918) addresses. Never printed in tool output or logs.
+- LG (`#5 webos-broad-permissions`): register with a trimmed permission manifest, not aiowebostv's default of about
+  37 (which includes WRITE_SETTINGS, input control and toasts): LAUNCH, CONTROL_POWER, CONTROL_AUDIO,
+  CONTROL_INPUT_TV, READ_INPUT_DEVICE_LIST, READ_RUNNING_APPS, READ_POWER_STATE, READ_APP_STATUS. C3 verifies the
+  TV honours the trimmed list (a call outside it must fail). wss on 3001 only, never ws on 3000.
+- Google TV (`#6 atv-remote-cert-trust`): pin the TV's certificate fingerprint at pairing; refuse a changed one
+  until re-paired.
+- The allowlist is not a security boundary inside Claude Code (`#7 allowlist-not-a-boundary`): there the model also
+  has Bash and could talk to the TVs directly. It binds MCP-only clients (desktop app). `tv_pair` and `lg_power` are
+  never on auto-allow in Claude Code permissions.
+- Supply chain (`#8`): `uv.lock` committed with hashes, server run with `uv run --locked`, uv installed from a
+  pinned winget version.
 
 ## 9. Non-functional
 - Performance: AC8 (cold start, network off, under 2 s, `am start -W` on the emulator). Parsing a 5 MB feed off
@@ -302,8 +367,10 @@ addresses. Never printed in tool output or logs.
 | Overlay: speech recognition takes audio focus and the player pauses, which breaks "without pausing" | Medium | Spike B5 per app; keyboard / phone-typed fallback |
 | Overlay: a player pauses on window-focus loss | Low-medium | Spike B5 per app; non-focusable "peek" panel as fallback |
 | Overlay: apps publish no MediaSession metadata, so context is thin | Medium (varies by app) | Per-app table in B5; say "I can't see what's playing" rather than guess |
-| Accessibility key filter swallows a key Brian needs | Low | Consume only the exact long-press pattern; configurable; disable in one adb command |
+| Accessibility key filter swallows a key Brian needs | Low | Consumes only Input, which stays available on the LG remote and M1c; rollback file restores the old accessibility list |
 | Google TV lacks UI to enable the accessibility service / notification listener / overlay permission | High | Enable via adb at install time (part of the install ask); verify commands on emulator first |
 | LG Wake-on-LAN needs "Turn on via Wi-Fi" enabled | Medium | Setup step C5 |
 | DHCP changes TV IPs | Medium | DHCP reservations in the Deco app (C5); `tv_discover` |
+| A secret pasted into chat when a script fails | Medium | `#1`: Brian runs scripts himself; asks never request values; script refuses non-interactive stdin |
+| Answer too slow for a TV (search-heavy requests) | Medium | Stream progress; skip search when not needed; B10 measures; Sonnet 5.5 switch offered |
 | Maven Central 429s slow sandbox builds | High | Retry; Gradle cache |
