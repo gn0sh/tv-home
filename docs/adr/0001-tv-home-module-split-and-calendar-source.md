@@ -1,6 +1,7 @@
 # ADR 0001: tv-home module split, calendar source, ICS library, secrets and signing
 
-Status: accepted (architect), 2026-10-31; v2 applies `docs/reviews/security-tv-home-design.md`. Feature: tv-home M1. Architecture: `docs/architecture/tv-home.md`.
+Status: accepted (architect), 2026-10-31; v2 applies `docs/reviews/security-tv-home-design.md`. Decision 3 (ICS
+library) superseded by [ADR 0004](0004-tv-home-bounded-ics-parse.md): biweekly is now a test oracle only. Feature: tv-home M1. Architecture: `docs/architecture/tv-home.md`.
 
 ## Context
 M1 is a standalone Google TV agenda app. Our cloud sandbox has JDK 21 and Gradle but no Android SDK
@@ -18,7 +19,8 @@ Brian's decision; default ICS.
    Bytecode target 17 on JDK 21 (no toolchain block, because the sandbox has no JDK 17).
 2. **`CalendarSource` is the seam.** M1 implements `IcsCalendarSource`. A later `GoogleOAuthCalendarSource`
    (device flow, calendar.readonly) implements the same interface and returns the same `EventInstance`s.
-3. **ICS library: biweekly 0.6.8** (BSD-2), with OkHttp 4.12 as the HTTP client. Spike (scratch, outside the repo)
+3. *(Superseded by ADR 0004: our own strict `IcsReader`; biweekly in test scope only.)* **ICS library: biweekly
+   0.6.8** (BSD-2), with OkHttp 4.12 as the HTTP client. Spike (scratch, outside the repo)
    verified RRULE across DST, EXDATE, UTC, foreign TZID and all-day on the JVM. Its only deps are vinnie and
    jackson-core, and it uses `java.util.TimeZone`, which Android supports natively. Core must add
    RECURRENCE-ID override handling and STATUS:CANCELLED filtering, which biweekly's iterator does not do.
@@ -37,7 +39,8 @@ Brian's decision; default ICS.
   the most complete RFC 5545 library. Rejected for M1 because it loads its own tz database through
   `ZoneRulesProvider`, which has a history of trouble on Android, and biweekly already passes our fixtures. Kept as
   the fallback behind `IcsParser` if biweekly fails a fixture we cannot work around.
-- **Hand-rolled parser.** Rejected by the spec.
+- **Hand-rolled parser.** Rejected by the spec here; adopted for a strict Google subset by ADR 0004 after three
+  rounds of parse DoS findings in biweekly's surface.
 - **Leanback.** Rejected above. **Single Android module with Robolectric tests:** rejected, because it cannot run
   in the sandbox without the SDK.
 - **adb push into app-private storage:** needs `run-as`, which only works on debuggable builds. **QR code to a
