@@ -25,8 +25,9 @@ class IcsCalendarSourceTest {
     private val now = Instant.parse("2026-10-31T12:00:00Z")
     private val oneEvent = listOf(EventInstance("u1", "Dentist", EventTime.At(now), null))
     // Minimal stub for T2's IcsParser: any text containing VCALENDAR parses to one event, anything else throws.
-    private val stubParser = IcsParse { ics, _ ->
-        if (ics.contains("VCALENDAR")) oneEvent else throw IllegalStateException("bad ics near ${FakeSecrets.CALENDAR_URL}")
+    private val stubParser = IcsParse { body, _ ->
+        if (String(body).contains("VCALENDAR")) ParseOutcome.Complete(oneEvent, ParseStats(1, 0, 0, 0, 0, false, 1))
+        else throw IllegalStateException("bad ics near ${FakeSecrets.CALENDAR_URL}")
     }
 
     private fun source(store: InMemorySecretStore, fetcher: BodyFetcher, parser: IcsParse = stubParser) =

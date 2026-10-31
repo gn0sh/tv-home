@@ -1,0 +1,2 @@
+# ICS fixtures must keep their CRLF line ends byte for byte (the reader rejects anything else).
+*.ics -text

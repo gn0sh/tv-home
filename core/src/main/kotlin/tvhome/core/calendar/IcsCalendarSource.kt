@@ -4,31 +4,10 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
-import tvhome.core.agenda.agendaFocus
 import tvhome.core.secrets.SecretKey
 import tvhome.core.secrets.SecretStore
 import java.time.Instant
-import java.time.ZoneId
 import kotlin.coroutines.cancellation.CancellationException
-
-/**
- * Seam to [IcsParser]: takes the ICS text and the window, returns the expanded instances, throws on malformed
- * input. Blocking and CPU-bound; [IcsCalendarSource] runs it on its CPU dispatcher and interrupts it on cancel.
- */
-fun interface IcsParse {
-    fun parse(ics: String, window: InstantRange): List<EventInstance>
-
-    companion object {
-        /**
-         * The real parser. [zone] is read per call so a device time-zone change is picked up. When the 500-instance
-         * cap cuts, today and tomorrow (see [agendaFocus]) are kept first.
-         */
-        fun ics(zone: () -> ZoneId = ZoneId::systemDefault): IcsParse = IcsParse { text, window ->
-            val z = zone()
-            IcsParser.parse(text, window, z, focus = agendaFocus(window, z))
-        }
-    }
-}
 
 /**
  * Reads the calendar URL from the [SecretStore], downloads it and parses it.
@@ -54,7 +33,12 @@ class IcsCalendarSource(
             when (val r = fetcher.fetch(url)) {
                 is IcsFetchResult.Error -> FetchResult.Failed(r.error)
                 is IcsFetchResult.Body -> try {
-                    FetchResult.Ok(runInterruptible(cpu) { parser.parse(r.text, window) }, clock())
+                    // Minimal T2b.1 adapter to the ByteArray/ParseOutcome contract; T2b.2 owns this file (Body(bytes)).
+                    when (val o = runInterruptible(cpu) { parser.parse(r.text.toByteArray(Charsets.UTF_8), window) }) {
+                        is ParseOutcome.Complete -> FetchResult.Ok(o.events, clock())
+                        is ParseOutcome.Exhausted -> FetchResult.Failed(SourceError.PARSE_LIMIT)
+                        is ParseOutcome.Rejected -> FetchResult.Failed(SourceError.PARSE)
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (t: Throwable) {

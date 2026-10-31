@@ -167,8 +167,9 @@ that, whatever the bytes are:
 1. **Time.** It returns within the 5 s wall-clock deadline plus one check interval. The deadline is a backstop:
    deterministic limits (bytes, counts, steps) bind first on the sandbox JVM (every hostile probe under 1 s there
    with the clock frozen). Each check interval is at most 64 KiB read or 512 steps.
-2. **Memory.** Live heap beyond the body itself stays within a fixed bound, estimated at 16 MiB (kept series about
-   5 MiB, override keys about 3.2 MiB, collector about 1.2 MiB, one 8 KiB line buffer). Tested by running every
+2. **Memory.** Live heap beyond the body itself stays within a fixed bound, estimated at 16 MiB (override keys about
+   3.2 MiB, collector about 1.2 MiB, one 8 KiB line buffer, one VEVENT's at most 2,000 EXDATE/RDATE values; each
+   series is expanded at its `END:VEVENT`, so none is kept, and RECURRENCE-ID keys are re-applied at the end). Tested by running every
    probe, including 10 MiB bodies, in a test JVM with a 96 MiB heap.
 3. **Output.** At most 500 instances, each with uid and title of at most 200 chars (table below).
 4. **Exceptions.** Nothing escapes except `InterruptedException`/`CancellationException` on cancel. Bugs are
@@ -247,7 +248,7 @@ For any other `Throwable` it calls `ensureActive()` first, then gives `PARSE` (p
 | Candidates per period | days x times at most 1,000 (else unsupported) | fixed | `RecurrenceExpander` |
 | Nesting depth | 4 (VCALENDAR > VEVENT > VALARM; VTIMEZONE > STANDARD) | n/a | `IcsReader` (`Rejected`) |
 | VEVENTs per feed | 50,000 | n/a | `IcsReader` (`Exhausted(VEVENTS)`) |
-| Kept recurring masters (DTSTART before window end, UNTIL not before window start minus span) | 5,000, about 1 KB each | about 5 MiB | `IcsReader` (`Exhausted(SERIES)`) |
+| Recurring masters that can reach the window (DTSTART before window end, UNTIL not before window start minus span), counted | 5,000 | none kept (expanded as read) | `IcsParser` (`Exhausted(SERIES)`) |
 | RECURRENCE-ID removal keys | one per override, so at most 50,000 | about 64 B each | `IcsReader` |
 | Steps | 1,000,000 per parse, 20,000 per series, charged before work | n/a | `Budget` |
 | Wall clock | 5 s from parse entry | n/a | `Budget` + `IcsReader` |

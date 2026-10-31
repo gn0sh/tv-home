@@ -1,7 +1,6 @@
 package tvhome.core.calendar
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import tvhome.core.agenda.agendaWindow
@@ -15,12 +14,11 @@ class IcsParserTest {
     /** Tue 2026-03-10 10:00 EDT. Window: Mar 9 00:00 EDT to Mar 13 00:00 EDT. */
     private val now = Instant.parse("2026-03-10T14:00:00Z")
 
-    private fun fixture(name: String): String =
-        checkNotNull(javaClass.getResourceAsStream("/ics/$name")) { "missing fixture $name" }
-            .readBytes().toString(Charsets.UTF_8)
+    private fun fixture(name: String): ByteArray =
+        checkNotNull(javaClass.getResourceAsStream("/ics/$name")) { "missing fixture $name" }.readBytes()
 
     private fun parse(name: String, at: Instant = now, zone: ZoneId = ny) =
-        IcsParser.parse(fixture(name), agendaWindow(at, zone), zone)
+        IcsParser.parse(fixture(name), agendaWindow(at, zone), zone).complete()
 
     private fun at(s: String) = EventTime.At(Instant.parse(s))
 
@@ -137,7 +135,7 @@ class IcsParserTest {
     fun oldRecurringSeriesIsReachedWithoutHittingTheCap() {
         val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:old@t\r\nDTSTAMP:20200101T000000Z\r\n" +
             "DTSTART:20100101T140000Z\r\nDTEND:20100101T150000Z\r\nRRULE:FREQ=DAILY\r\nSUMMARY:Old daily\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-        val r = IcsParser.parse(ics, agendaWindow(now, ny), ny)
+        val r = parseComplete(ics, agendaWindow(now, ny), ny)
         assertEquals(4, r.size) // Mar 9, 10, 11, 12
     }
 
@@ -145,19 +143,18 @@ class IcsParserTest {
     fun secondlyRuleIsNotExpandedAndShowsOnlyItsDtstart() {
         val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:run@t\r\nDTSTAMP:20260101T000000Z\r\n" +
             "DTSTART:20260310T000000Z\r\nDTEND:20260310T000001Z\r\nRRULE:FREQ=SECONDLY\r\nSUMMARY:Runaway\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-        val r = IcsParser.parse(ics, agendaWindow(now, ny), ny)
+        val r = parseComplete(ics, agendaWindow(now, ny), ny)
         assertEquals(listOf(at("2026-03-10T00:00:00Z")), r.map { it.start })
         assertEquals(at("2026-03-10T00:00:01Z"), r.single().end)
     }
 
     @Test
-    fun garbageIsParseErrorWithFixedMessage() {
+    fun garbageIsRejectedWithNoText() {
         val secret = "https://calendar.example/private/abc123.ics"
-        val e = assertThrows(IcsParseException::class.java) {
-            IcsParser.parse("this is not a calendar $secret", agendaWindow(now, ny), ny)
-        }
-        assertTrue(!e.message!!.contains(secret))
-        assertThrows(IcsParseException::class.java) { IcsParser.parse("", agendaWindow(now, ny), ny) }
+        val r = parseOutcome("this is not a calendar $secret", agendaWindow(now, ny), ny)
+        assertEquals(RejectReason.NOT_VCALENDAR, (r as ParseOutcome.Rejected).reason)
+        assertTrue(!r.toString().contains(secret))
+        assertEquals(RejectReason.NOT_VCALENDAR, (parseOutcome("", agendaWindow(now, ny), ny) as ParseOutcome.Rejected).reason)
     }
 
     @Test
@@ -168,7 +165,7 @@ class IcsParserTest {
                 .append("DTSTART:20260310T150000Z\r\nDTEND:20260310T160000Z\r\nSUMMARY:Event $i\r\nEND:VEVENT\r\n")
         }
         sb.append("END:VCALENDAR\r\n")
-        val r = IcsParser.parse(sb.toString(), agendaWindow(now, ny), ny)
+        val r = parseComplete(sb.toString(), agendaWindow(now, ny), ny)
         assertEquals(500, IcsParser.MAX_INSTANCES)
         assertEquals(IcsParser.MAX_INSTANCES, r.size)
         // Same start for all: ties break by title, so the kept ones are the first 500 titles in sort order.
@@ -187,7 +184,7 @@ class IcsParserTest {
         repeat(5) { ev("d$it@t", "20260312T150000Z", "D$it") }                 // day after tomorrow (window only)
         sb.append("END:VCALENDAR\r\n")
         val w = agendaWindow(now, ny)
-        val r = IcsParser.parse(sb.toString(), w, ny, focus = tvhome.core.agenda.agendaFocus(w, ny))
+        val r = parseComplete(sb.toString(), w, ny, focus = tvhome.core.agenda.agendaFocus(w, ny))
         assertEquals(500, r.size)
         val titles = r.map { it.title }
         assertEquals((0 until 10).map { "T$it" } + (0 until 5).map { "M$it" }, titles.filter { it[0] == 'T' || it[0] == 'M' })
@@ -196,7 +193,7 @@ class IcsParserTest {
         assertTrue(titles.none { it[0] == 'D' })
         assertEquals(r.sortedBy { (it.start as EventTime.At).instant }, r) // returned in start order
         // the real adapter passes the focus too
-        val viaAdapter = IcsParse.ics { ny }.parse(sb.toString(), w)
+        val viaAdapter = IcsParse.ics { ny }.parse(sb.toString().toByteArray(), w).complete()
         assertEquals(r, viaAdapter)
     }
 
@@ -208,7 +205,7 @@ class IcsParserTest {
                 .append("DTSTART:20260301T000000Z\r\nDTEND:20260301T000100Z\r\nRRULE:FREQ=DAILY;BYHOUR=${(0..23).joinToString(",")}\r\nSUMMARY:R $i\r\nEND:VEVENT\r\n")
         }
         sb.append("END:VCALENDAR\r\n")
-        val r = IcsParse.ics { ny }.parse(sb.toString(), agendaWindow(now, ny))
+        val r = IcsParse.ics { ny }.parse(sb.toString().toByteArray(), agendaWindow(now, ny)).complete()
         assertEquals(IcsParser.MAX_INSTANCES, r.size)
         // Today starts 04:00Z (midnight EDT). 100 series x 5 hours = 500: today's 04:00Z..08:00Z, nothing else.
         val hours = r.map { (it.start as EventTime.At).instant }.groupingBy { it }.eachCount()

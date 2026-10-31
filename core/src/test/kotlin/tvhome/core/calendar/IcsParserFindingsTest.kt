@@ -1,7 +1,6 @@
 package tvhome.core.calendar
 
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -25,8 +24,14 @@ class IcsParserFindingsTest {
             events.joinToString("") { "BEGIN:VEVENT\r\n" + it.trimIndent().replace("\n", "\r\n") + "\r\nEND:VEVENT\r\n" } +
             "END:VCALENDAR\r\n"
 
+    private fun outcome(text: String, at: Instant = now, zone: ZoneId = ny, limits: IcsParser.Limits = IcsParser.Limits()) =
+        parseOutcome(text, agendaWindow(at, zone), zone, limits = limits)
+
     private fun parse(text: String, at: Instant = now, zone: ZoneId = ny, limits: IcsParser.Limits = IcsParser.Limits()) =
-        IcsParser.parse(text, agendaWindow(at, zone), zone, limits = limits)
+        outcome(text, at, zone, limits).complete()
+
+    private fun limit(o: ParseOutcome) = (o as? ParseOutcome.Exhausted)?.limit
+    private fun reason(o: ParseOutcome) = (o as? ParseOutcome.Rejected)?.reason
 
     /** Runs [block] on another thread and fails the test if it takes longer than 5 s (hostile-input probes). */
     private fun <T> within(block: () -> T): T = assertTimeoutPreemptively(fast, ThrowingSupplier { block() })
@@ -152,23 +157,30 @@ class IcsParserFindingsTest {
         assertEquals(listOf(at("2026-03-10T13:00:00Z")), r.map { it.start }) // unknown TZID "Evil": device zone
     }
 
+    /** P22 (expectation changed by ADR 0004): case and folding are read as VTIMEZONE and skipped; a group prefix or a
+     *  parameter on BEGIN rejects the feed. Never interpreted either way. */
     @Test
-    fun probeVtimezoneHiddenByFoldingOrCaseIsStillDropped() {
+    fun probeVtimezoneHiddenByFoldingOrCaseIsSkippedOrRejected() {
         val tz = "TZID:Evil\r\nBEGIN:STANDARD\r\nDTSTART:19000101T000000\r\nRRULE:FREQ=SECONDLY\r\nTZOFFSETFROM:+0000\r\n" +
             "TZOFFSETTO:+0100\r\nEND:STANDARD\r\n"
-        for (begin in listOf("begin:vtimezone", "BEGIN:VTIME\r\n ZONE", "x.BEGIN:VTIMEZONE", "BEGIN;X=1:VTimeZone")) {
-            val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n$begin\r\n${tz}END:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:a\r\n" +
-                "DTSTART;TZID=Evil:20260310T090000\r\nSUMMARY:x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-            val r = within { parse(ics) }
-            assertEquals(1, r.size, begin)
+        fun ics(begin: String) = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n$begin\r\n${tz}END:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:a\r\n" +
+            "DTSTART;TZID=Evil:20260310T090000\r\nSUMMARY:x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        for (begin in listOf("begin:vtimezone", "BEGIN:VTIME\r\n ZONE")) {
+            assertEquals(listOf(at("2026-03-10T13:00:00Z")), within { parse(ics(begin)) }.map { it.start }, begin)
+        }
+        for (begin in listOf("x.BEGIN:VTIMEZONE", "BEGIN;X=1:VTimeZone")) {
+            assertEquals(RejectReason.STRUCTURE, reason(within { outcome(ics(begin)) }), begin)
         }
     }
 
     /** Reviewer probe 2: SECONDLY;COUNT=2e9 from 1970 ran over 60 s. */
     @Test
     fun probeSecondlyHugeCountFrom1970() {
+        // COUNT=2e9 is also out of range (1..1e9): unsupported either way, DTSTART only (1970, outside the window)
         val ics = cal("UID:s@t\nDTSTART:19700101T000000Z\nRRULE:FREQ=SECONDLY;COUNT=2000000000\nSUMMARY:x")
-        assertEquals(emptyList<EventInstance>(), within { parse(ics) })
+        val o = within { outcome(ics) }.completeOutcome()
+        assertEquals(emptyList<EventInstance>(), o.events)
+        assertEquals(1, o.stats.unsupportedRules)
     }
 
     /** Reviewer probe 3: 20k SECONDLY events ending just before the window ran over 60 s. */
@@ -188,13 +200,15 @@ class IcsParserFindingsTest {
         assertEquals(listOf(at("2026-03-10T15:00:00Z"), at("2026-03-10T16:00:00Z")), within { parse(ics) }.map { it.start })
     }
 
-    /** Our own expander's worst case: COUNT rules that need a walk from year 1. The step budget ends it. */
+    /**
+     * P23 (expectation changed by ADR 0004, `deadline-drops-recurring-silently`): COUNT rules that need a walk from
+     * year 1 run out the parse-wide steps, so the answer is unknown: Exhausted, never a shorter Complete.
+     */
     @Test
-    fun probeWalkingCountRulesFromYearOneAreCutByTheBudgetAndOneOffsSurvive() {
+    fun probeWalkingCountRulesFromYearOneExhaustTheSteps() {
         val events = Array(3_000) { "UID:w$it@t\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000\nSUMMARY:w" } +
             "UID:real@t\nDTSTART:20260310T170000Z\nSUMMARY:Real"
-        val r = within { parse(cal(*events)) }
-        assertEquals(listOf("Real"), r.map { it.title })
+        assertEquals(ParseLimit.STEPS, limit(within { outcome(cal(*events)) }))
     }
 
     @Test
@@ -203,9 +217,9 @@ class IcsParserFindingsTest {
             "UID:real@t\nDTSTART:20260310T170000Z\nSUMMARY:Real"
         val unbounded = IcsParser.Limits(maxSteps = Long.MAX_VALUE, maxStepsPerSeries = Long.MAX_VALUE, deadline = Duration.ofMillis(300))
         val t0 = System.nanoTime()
-        val r = within { parse(cal(*events), limits = unbounded) }
+        val r = within { outcome(cal(*events), limits = unbounded) }
         assertTrue(System.nanoTime() - t0 < 3_000_000_000L)
-        assertEquals(listOf("Real"), r.map { it.title })
+        assertEquals(ParseLimit.DEADLINE, limit(r)) // deadline-drops-recurring-silently: never a Complete without them
     }
 
     @Test
@@ -225,18 +239,20 @@ class IcsParserFindingsTest {
     }
 
     @Test
-    fun veventCountCapFailsTheParse() {
+    fun veventCountCapExhaustsTheParse() {
+        val small = IcsParser.Limits(maxVevents = 30_000)
         val events = Array(30_001) { "UID:v$it@t\nDTSTART:20200101T000000Z" }
-        assertThrows(IcsParseException::class.java) { within { parse(cal(*events)) } }
-        assertEquals(0, parse(cal(*events.copyOf(30_000).requireNoNulls())).size) // at the cap: parses (all in 2020)
+        assertEquals(ParseLimit.VEVENTS, limit(within { outcome(cal(*events), limits = small) }))
+        assertEquals(0, parse(cal(*events.copyOf(30_000).requireNoNulls()), limits = small).size) // at the cap (all in 2020)
     }
 
+    /** P24 (expectation changed by ADR 0004): ~36,500 earlier instances would overlap; the series budget skips it. */
     @Test
-    fun longSpanDailySeriesIsBounded() {
-        // Each instance lasts 100 years, so ~36,500 earlier instances overlap the window: capped, and fast.
+    fun longSpanDailySeriesIsSkippedByItsSeriesBudget() {
         val ics = cal("UID:l@t\nDTSTART:19260101T000000Z\nDTEND:20260101T000000Z\nRRULE:FREQ=DAILY\nSUMMARY:Long")
-        val r = within { parse(ics) }
-        assertEquals(IcsParser.MAX_INSTANCES, r.size)
+        val o = within { outcome(ics) }.completeOutcome()
+        assertEquals(0, o.events.size)
+        assertEquals(1, o.stats.skippedSeries)
     }
 
     @Test

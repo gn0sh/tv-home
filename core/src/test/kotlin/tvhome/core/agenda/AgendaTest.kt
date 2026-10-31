@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test
 import tvhome.core.calendar.EventInstance
 import tvhome.core.calendar.EventTime
 import tvhome.core.calendar.IcsParser
+import tvhome.core.calendar.ParseOutcome
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -17,8 +18,8 @@ class AgendaTest {
     private val clock = Clock.fixed(Instant.parse("2026-03-10T14:00:00Z"), ZoneOffset.UTC) // Tue 10:00 EDT
 
     private fun agendaOf(name: String, zone: ZoneId = ny, c: Clock = clock): Pair<AgendaDay, AgendaDay> {
-        val text = checkNotNull(javaClass.getResourceAsStream("/ics/$name")).readBytes().toString(Charsets.UTF_8)
-        val ev = IcsParser.parse(text, agendaWindow(c.instant(), zone), zone)
+        val bytes = checkNotNull(javaClass.getResourceAsStream("/ics/$name")).readBytes()
+        val ev = (IcsParser.parse(bytes, agendaWindow(c.instant(), zone), zone) as ParseOutcome.Complete).events
         return buildAgenda(ev, c.instant(), zone)
     }
 
