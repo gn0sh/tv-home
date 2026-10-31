@@ -41,9 +41,10 @@ data class FetchTimeouts(val connectMs: Long = 5_000, val readMs: Long = 10_000,
  * HTTPS fetch of an ICS feed. Main-safe: the blocking OkHttp call runs on Dispatchers.IO, and cancelling the
  * calling coroutine cancels the call. Policy: https only (checked before any I/O), connect 5 s / read 10 s /
  * call 15 s, no redirect that changes scheme (https to http comes back as HTTP_STATUS), body capped at [maxBytes]
- * after decompression, returned as one `ByteArray`. Host pin (H11): the request URL and the final response URL must
- * pass [allowed] (the app: https on `calendar.google.com` or `*.google.com`); a final response elsewhere is
- * [SourceError.HTTP_STATUS]. Every failure becomes a [SourceError]; nothing from an exception escapes, and a cancel
+ * after decompression, returned as one `ByteArray`. Host pin (H11): the request URL and every redirect hop must pass
+ * [allowed] (the app: https on `calendar.google.com` or `*.google.com`), checked by a network interceptor before each
+ * hop's request is sent (`fetch-redirect-hops-unpinned`); a hop elsewhere is [SourceError.HTTP_STATUS] and that
+ * request is never sent. Every failure becomes a [SourceError]; nothing from an exception escapes, and a cancel
  * is never a result: it throws [CancellationException] (`ensureActive()` before every mapping).
  *
  * The public constructor uses the platform trust store and cannot be loosened. The internal one takes [customize]
@@ -65,6 +66,12 @@ class IcsFetcher internal constructor(
         .callTimeout(timeouts.callMs, TimeUnit.MILLISECONDS)
         .followSslRedirects(false)
         .followRedirects(true)
+        // H11 on every hop: OkHttp follows redirects inside one call, and a network interceptor sees each hop's
+        // request before it is written. Added after [customize], so a test hook cannot run after it.
+        .addNetworkInterceptor { chain ->
+            if (!allowed(chain.request().url)) throw OffPin()
+            chain.proceed(chain.request())
+        }
         .build()
 
     override suspend fun fetch(url: String): IcsFetchResult {
@@ -99,7 +106,13 @@ class IcsFetcher internal constructor(
             // error (cancel-returns-network-error). Check before mapping anything.
             currentCoroutineContext().ensureActive()
             // Deliberately Throwable and deliberately no text: OkHttp messages can contain the URL or header values.
-            IcsFetchResult.Error(if (isDnsFailure(t)) SourceError.OFFLINE else SourceError.NETWORK)
+            IcsFetchResult.Error(
+                when {
+                    t is OffPin -> SourceError.HTTP_STATUS
+                    isDnsFailure(t) -> SourceError.OFFLINE
+                    else -> SourceError.NETWORK
+                },
+            )
         }
         currentCoroutineContext().ensureActive() // a result that raced a cancel is dropped too
         return result
@@ -126,6 +139,13 @@ class IcsFetcher internal constructor(
             if (buffer.size > maxBytes) return IcsFetchResult.Error(SourceError.TOO_LARGE)
         }
         IcsFetchResult.Body(buffer.readByteArray())
+    }
+
+    /**
+     * A redirect hop off the pin. A [java.net.ProtocolException], so OkHttp never retries it; no message, no trace.
+     */
+    private class OffPin : java.net.ProtocolException() {
+        override fun fillInStackTrace(): Throwable = this
     }
 
     companion object {

@@ -14,7 +14,7 @@ ADRs: [0001](../adr/0001-tv-home-module-split-and-calendar-source.md) (module sp
 | No `jvmToolchain(17)` in the sandbox (no JDK 17, no auto-provisioning). Use `jvmTarget = 17` + `sourceCompatibility = 17` on JDK 21 | Verified | spike build failed with toolchain, passed with target |
 | Maven Central returns intermittent HTTP 429 to the sandbox; retries succeed (Gradle caches what it got) | Verified | spike |
 | biweekly 0.6.8 expands weekly RRULE across DST, honours EXDATE, handles UTC, TZID=Europe/Paris and VALUE=DATE | Verified | spike test (scratch, outside repo) |
-| ...but its iterator drops 1900 series, shifts floating series 1 h after DST, evaluates VTIMEZONE RRULEs while parsing (OOM on a 335-byte feed), and errs on DAILY;INTERVAL+BYDAY and WEEKLY+BYSETPOS. Test-scope oracle only since ADR 0004 (not in the APK) | Verified | M1 core reviews; `RecurrenceExpanderTest` oracle |
+| ...but its iterator drops 1900 series, shifts floating series 1 h after DST, evaluates VTIMEZONE RRULEs while parsing (OOM on a 335-byte feed), and errs on DAILY;INTERVAL+BYDAY and WEEKLY+BYSETPOS. Test-scope reader oracle only since ADR 0004 (not in the APK); the expander is checked against a brute-force RFC reference | Verified | M1 core reviews; `RecurrenceExpanderTest` |
 | Google's ICS serializer writes CRLF only, `VERSION:2.0`, `CALSCALE:GREGORIAN`, one VCALENDAR, VTIMEZONE blocks, VEVENTs with VALARM, escaped TEXT folded at 75 octets. `IcsReader` rejects anything else in framing | Unverified (high confidence); the sandbox proxy blocks calendar.google.com (403, 2026-10-31) | T2b.6: CI fetches a public Google holiday feed and asserts `Complete`. If it fails, framing rules are revised before T11 |
 | An invite sender can get an arbitrary RRULE into Brian's feed through Google | Unverified | The design does not depend on it: it holds for any bytes up to 10 MiB |
 | Brian's feed size and VEVENT count fit 10 MiB / 50,000 (est. 0.5-1 KB per event; a 10-year calendar about 5-20k events) | Unverified | T8: `provision.ps1` prints counts only (KB, VEVENTs, recurring) after saving; checked against the limits at T11 |
@@ -134,7 +134,7 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
 - **Boundaries catch `Throwable`** (`#3 okhttp-key-in-exception`): `IcsCalendarSource.fetch` and
   `ClaudeAssistant.resolve` wrap everything, map to the error enum and drop the throwable; nothing is rethrown.
 - **Parsing limits:** section 3a (definition, limits table, outcome type). In short: 10 MiB, strict framing,
-  whitelist, 50,000 VEVENTs, 1,000,000 steps per parse and 20,000 per series charged before work, a 5 s deadline
+  whitelist, 50,000 VEVENTs, 5,000,000 steps per parse and 20,000 per series charged before work, a 5 s deadline
   over the whole parse, and `Exhausted` (never a shorter `Ok`) when a parse-wide limit runs out. At most 500
   instances are returned: those overlapping today and tomorrow (`agendaFocus`) first, then the earliest; the list
   is in start order. The parse polls the thread's interrupt flag.
@@ -177,11 +177,13 @@ that, whatever the bytes are:
 5. **Determinism.** With the clock frozen, the same body, window and zone give the same outcome. Only the deadline
    is clock-dependent, and it can only turn a result into `Exhausted`, never into a smaller `Complete`.
 
-On exhaustion: a **parse-wide** limit (deadline, 1,000,000 global steps, 50,000 VEVENTs, 5,000 kept series) gives
-`Exhausted(limit)`. The answer is unknown, so nothing from it is shown or cached. A **per-item** limit is
+On exhaustion: a **parse-wide** limit (deadline, 5,000,000 global steps, 50,000 VEVENTs, 5,000 kept series) gives
+`Exhausted(limit)`; so does a 500-instance cut followed by a RECURRENCE-ID that removes a kept instance
+(`Exhausted(INSTANCES)`: the cut-off instances cannot be known). The answer is unknown, so nothing from it is shown or cached. A **per-item** limit is
 deterministic and stays inside `Complete`, counted in `ParseStats`: a malformed VEVENT is skipped; an unsupported
 rule shows its DTSTART only; one series over its own 20,000 steps is skipped; one bad EXDATE/RDATE value is
-ignored; and over 500 instances, the extra ones are cut with today and tomorrow kept first (`truncated`).
+ignored; and over 500 instances, the extra ones are cut with today and tomorrow kept first (`truncated`). One UID
+holds at most 48 focus instances per focus day (96 for today and tomorrow); its extra ones are cut (`truncated`).
 
 ### Contract
 ```kotlin
@@ -250,27 +252,28 @@ For any other `Throwable` it calls `ensureActive()` first, then gives `PARSE` (p
 | VEVENTs per feed | 50,000 | n/a | `IcsReader` (`Exhausted(VEVENTS)`) |
 | Recurring masters that can reach the window (DTSTART before window end, UNTIL not before window start minus span), counted | 5,000 | none kept (expanded as read) | `IcsParser` (`Exhausted(SERIES)`) |
 | RECURRENCE-ID removal keys | one per override, so at most 50,000 | about 64 B each | `IcsReader` |
-| Steps | 1,000,000 per parse, 20,000 per series, charged before work | n/a | `Budget` |
+| Steps | 5,000,000 per parse, 20,000 per series, charged before work (an RRULE's BYxxx values before its rule is built, which happens only if it can reach the window; its times of day before they are built; each EXDATE before its key) | n/a | `Budget` |
 | Wall clock | 5 s from parse entry | n/a | `Budget` + `IcsReader` |
-| Instances returned | 500 | n/a | `Collector` |
+| Instances returned | 500; at most 48 focus instances per UID per focus day | one count per UID with focus instances | `Collector` |
 | Cache JSON per instance | uid 600 + title 600 + two times 80 + keys 80 | 1,360 B | `CachedAgenda` |
 | Cache file | 500 x 1,360 B + header | under 700 KB; a file over 1 MiB is read as no cache | `JvmCacheFile`, `CachedAgenda.decode` |
 
 Calibration (sandbox, measured 2026-10-31): the current code spends 0.41 s on 2,000,000 expander steps plus
 biweekly's parse of 3,000 VEVENTs, and 1.08 s on 20,000 SECONDLY VEVENTs (mostly biweekly). So 1,000,000 steps
 cost about 0.2 s here, est. 1-1.6 s on a Chromecast-class CPU (5-8x slower, unverified). A legit feed needs about
-50 steps per series.
+50 steps per series. Re-measured 2026-10-31 with our own reader: 5,000,000 steps take about 0.3 s here (P7b, P33c),
+est. under 2.5 s on the TV, so the global budget is 5,000,000 (manager decision).
 
 ### Consumers and code paths that touch untrusted ICS bytes
 | # | Consumer (file) | Touches | Limits that apply | Enforced where |
 |---|---|---|---|---|
 | 1 | Provisioning (`ProvisionValidator`, `provision.ps1`, `ProvisionActivity`) | the URL, not the bytes | host pin `calendar.google.com`, private-token regex | script, activity, core validator |
 | 2 | `IcsCalendarSource` | orchestration | re-validates the URL before fetching (H11); maps outcomes; `ensureActive()` before mapping a Throwable | `IcsCalendarSource.fetch` |
-| 3 | `IcsFetcher` | raw bytes from the network | HTTPS only, connect 5 / read 10 / call 15 s, 10 MiB after gzip, final host `calendar.google.com` or `*.google.com`, returns `ByteArray` (one copy), `call.cancel()` plus `ensureActive()` on cancel | `IcsFetcher.fetch/execute` |
+| 3 | `IcsFetcher` | raw bytes from the network | HTTPS only, connect 5 / read 10 / call 15 s, 10 MiB after gzip, every redirect hop's host `calendar.google.com` or `*.google.com` (network interceptor, before the hop's request is sent), returns `ByteArray` (one copy), `call.cancel()` plus `ensureActive()` on cancel | `IcsFetcher.fetch/execute` |
 | 4 | `IcsReader` (replaces `IcsPrepass` and `Biweekly.parse`) | every byte | framing, VERSION, depth, whitelist, line caps, per-VEVENT caps, VEVENT count, kept-series count, deadline and interrupt every 64 KiB; O(bytes) | `IcsReader` |
 | 5 | RRULE parser (in `IcsReader`) | the RRULE line | 1 KiB, domain sets, strict ranges (H9), unknown or repeated part means unsupported | `IcsReader.rule()` |
 | 6 | `ZoneResolver` | TZID strings | 128 chars, set membership (no exceptions), at most 4 suffixes, memo of at most 256 per parse (H8) | `ZoneResolver.resolve` |
-| 7 | `RecurrenceExpander` | rules, dates | static per-period bound charged before work; 20k per series (skip), 1M global (`Exhausted`); interrupt every 512 steps | `RecurrenceExpander`, `Budget` |
+| 7 | `RecurrenceExpander` | rules, dates | static per-period bound charged before work; COUNT counted arithmetically or over one 400-year calendar cycle (count-only periods charged their own bound); 20k per series (skip), 5M global (`Exhausted`); interrupt every 512 steps | `RecurrenceExpander`, `Budget` |
 | 8 | Override and EXDATE matching (`Keys`) | removal keys | HashSet lookups; EXDATE/RDATE kept only near the window | `IcsParser.collect` |
 | 9 | `Collector` (window filter, 500 cap) | instances | each add costs 1 step; bounded heap of 500 (O(log 500)) | `Collector` |
 | 10 | `buildAgenda` | at most 500 instances | O(n log n) per call; runs on every `reduce` | `Agenda.kt` |

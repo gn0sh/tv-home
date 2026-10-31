@@ -60,7 +60,10 @@ unverified, so **the design must hold for any byte string up to the body cap**, 
    BYMINUTE 60, BYSECOND 61, BYSETPOS 732), so a list cannot exceed its domain whatever the input says. Any
    out-of-range value, unknown part, repeated part or RRULE line over 1 KiB makes the rule unsupported (DTSTART
    only), which also closes H9. Each loop in `calendar/` carries a `// bound:` comment naming (i), (ii) or (iii);
-   review checks it. No regex with nested quantifiers runs on input.
+   review checks it. No regex with nested quantifiers runs on input. Per-VEVENT setup is (iii) too (review
+   2026-10-31, `ics-rule-setup-uncharged`): an RRULE's size (one step per BYxxx value, plus one) is charged before
+   its rule is built, a rule that cannot reach the window is never built, the times of day are charged before they
+   are built, and each EXDATE is charged before its key is made.
 3. **One deadline covers the whole parse.** It starts at parse entry (before tokenizing) and is checked every
    64 KiB read and every 512 steps, with the interrupt flag. The reviewers suggested starting it *after* the text
    parse; that was a workaround for an uninterruptible biweekly phase. With one interruptible pipeline, a deadline
@@ -71,7 +74,10 @@ unverified, so **the design must hold for any byte string up to the body cap**, 
    A new core `AgendaRefresher` is the only writer of the cache, and writes only on `Ok`. Deterministic per-item
    decisions (a malformed VEVENT skipped, an unsupported rule shown as DTSTART only, one series over its own budget
    skipped) stay inside `Complete` and are counted in `stats`. Parse-wide limits (deadline, global steps, VEVENT
-   count, kept series) give `Exhausted`, because the answer is unknown.
+   count, kept series) give `Exhausted`, because the answer is unknown. So does a 500-instance cut followed by a
+   RECURRENCE-ID that removes a kept instance (`Exhausted(INSTANCES)`, review 2026-10-31): the freed slot belonged
+   to an instance that was cut. One UID holds at most 48 focus instances per day, so one dense series cannot push
+   real events out of today.
 5. **Cancellation is never a result.** Every `catch (Throwable)` at a boundary calls `ensureActive()` before
    mapping, so a cancelled fetch or parse throws `CancellationException` and changes nothing (no cache write, no
    `lastFetch` update). Closes `cancel-returns-network-error`.
@@ -129,15 +135,19 @@ unverified, so **the design must hold for any byte string up to the body cap**, 
   (`docs/specs/tv-home.md`, "Technical constraints") rule out. That line came from the spec panel's devil's advocate
   (`docs/reviews/panel-tv-home-spec.md`), not from Brian, and the goal is unchanged, so this is a team decision, not
   an ask. Correctness risk is covered by: biweekly as a test-scope differential oracle on every fixture and a seeded
-  Google-shaped corpus, the existing expander oracle test, and a live check on a public Google feed in CI. T2b.5
+  Google-shaped corpus, a seeded differential test of the expander against a brute-force RFC 5545 reference
+  (review 2026-10-31: biweekly's iterator differs from RFC 5545 on about 5% of random rules, so it is the reader's
+  oracle only), and a live check on a public Google feed in CI. T2b.5
   asks the product-manager to amend that spec line.
 - Removing biweekly also drops vinnie and jackson-core from the APK.
 - Two existing tests change expectation on purpose: 3,000 crafted COUNT series from year 1 now give
   `Exhausted(STEPS)` (the earlier cache is kept) instead of "one-offs survive"; the 100-year-span daily series is
   skipped by its series budget instead of returning 500 instances. `x.BEGIN:VTIMEZONE` and `BEGIN;X=1:VTIMEZONE`
   now reject the feed.
-- Residual risk, accepted: someone who gets about 50 crafted recurring events into Brian's calendar (each just
-  under its 20k-step series budget) can exhaust the 1M global budget, so refreshes stop and the screen shows the
+- Global step budget (manager decision 2026-10-31, security review #4): 5,000,000 steps per parse (was 1,000,000),
+  about 0.3 s here, est. under 2.5 s on the TV, so it stays inside the 5 s deadline with margin.
+- Residual risk, accepted: someone who gets about 250 crafted recurring events into Brian's calendar (each just
+  under its 20k-step series budget) can exhaust the 5M global budget, so refreshes stop and the screen shows the
   last copy, then "Calendar data unreadable" the next day. That hurts availability only, never what is shown, and
   he removes the events.
 - Limits are guesses until measured on his feed and TV (`docs/architecture/tv-home.md` section 1). `Limits` stays

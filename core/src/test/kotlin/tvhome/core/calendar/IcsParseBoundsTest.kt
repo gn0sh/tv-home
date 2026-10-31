@@ -113,7 +113,7 @@ class IcsParseBoundsTest {
     @Tag("cancel-returns-network-error")
     fun d2InterruptDuringExpansionEndsWithin100ms() {
         val body = HostileFeeds.calendar {
-            repeat(3_000) { event("UID:w$it\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000") }
+            repeat(3_000) { event("UID:w$it\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYMONTHDAY=13;COUNT=1000000000") }
         }
         val unbounded = IcsParser.Limits(maxSteps = Long.MAX_VALUE, maxStepsPerSeries = Long.MAX_VALUE)
         var interruptedAt = 0L
@@ -198,6 +198,7 @@ class IcsParseBoundsTest {
             ";BYSETPOS=" + ((1..366) + (-366..-1)).joinToString(",")
         rules += "FREQ=MONTHLY;BYHOUR=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23;BYDAY=MO,TU,WE,TH,FR,SA,SU"
         var checked = 0
+        var countChecked = 0
         for ((i, rr) in rules.withIndex()) {
             val spec = IcsRules.parse(rr) as? RuleSpec.Spec ?: continue
             val rule = Rule(spec.freq, spec.interval, spec.count, spec.until?.local, spec.byMonth, spec.byMonthDay, spec.byDay,
@@ -208,10 +209,13 @@ class IcsParseBoundsTest {
             val from = LocalDate.of(2026, 3, 8)
             e.between(from, from.plusDays(rnd.nextLong(4, 60)), Budget(Long.MAX_VALUE, 2_000_000, Long.MAX_VALUE) { 0L })
             assertTrue(e.maxTicksPerPeriod <= e.perPeriodBound, "rule $i $rr: ${e.maxTicksPerPeriod} > ${e.perPeriodBound}")
+            assertTrue(e.maxCountTicks <= e.countBound, "rule $i $rr: count ${e.maxCountTicks} > ${e.countBound}")
             assertTrue(e.perPeriodBound <= 5_000, "rule $i: bound ${e.perPeriodBound}")
             if (e.maxTicksPerPeriod > 0) checked++
+            if (e.maxCountTicks > 0) countChecked++
         }
         assertTrue(checked > 4_500, "only $checked rules exercised")
+        assertTrue(countChecked > 300, "only $countChecked count-only paths exercised")
     }
 
     // ------------------------------------------------------------------ policies
@@ -310,6 +314,12 @@ class IcsParseBoundsTest {
         assertEquals(ZoneId.of("America/Argentina/Buenos_Aires"), ZoneResolver.resolve("/x/America/Argentina/Buenos_Aires", ny))
         assertEquals(ny, ZoneResolver.resolve("a/".repeat(64), ny))
         assertEquals(ny, ZoneResolver.resolve("x".repeat(129), ny))
+        // zone-memo-key-size: an 8 KiB TZID is resolved but never kept as a memo key
+        val keys = ZoneResolver.Memo(ny)
+        assertEquals(ny, keys.resolve("Europe/" + "x".repeat(8_000)))
+        assertEquals(0, keys.size)
+        assertEquals(ZoneId.of("Europe/London"), keys.resolve("Europe/London"))
+        assertEquals(1, keys.size)
     }
 
     @Test fun parseStatsAndOutcomesPrintCountsOnly() {

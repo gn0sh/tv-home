@@ -113,7 +113,7 @@ class AgendaRefresherTest {
         val good = (head + "BEGIN:VEVENT\r\nUID:u1\r\nDTSTART:20260310T150000Z\r\nSUMMARY:Dentist\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
             .toByteArray()
         val p23 = StringBuilder(head).apply {
-            repeat(3_000) { append("BEGIN:VEVENT\r\nUID:w$it\r\nDTSTART:00010101T090000Z\r\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000\r\nEND:VEVENT\r\n") }
+            repeat(3_000) { append("BEGIN:VEVENT\r\nUID:w$it\r\nDTSTART:00010101T090000Z\r\nRRULE:FREQ=DAILY;BYMONTHDAY=13;COUNT=1000000000\r\nEND:VEVENT\r\n") }
             append("BEGIN:VEVENT\r\nUID:real\r\nDTSTART:20260310T170000Z\r\nSUMMARY:Real\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
         }.toString().toByteArray()
         var body = good

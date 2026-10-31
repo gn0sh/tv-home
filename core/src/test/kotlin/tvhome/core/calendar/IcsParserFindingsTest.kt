@@ -206,14 +206,14 @@ class IcsParserFindingsTest {
      */
     @Test
     fun probeWalkingCountRulesFromYearOneExhaustTheSteps() {
-        val events = Array(3_000) { "UID:w$it@t\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000\nSUMMARY:w" } +
+        val events = Array(3_000) { "UID:w$it@t\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYMONTHDAY=13;COUNT=1000000000\nSUMMARY:w" } +
             "UID:real@t\nDTSTART:20260310T170000Z\nSUMMARY:Real"
         assertEquals(ParseLimit.STEPS, limit(within { outcome(cal(*events)) }))
     }
 
     @Test
     fun wallClockDeadlineEndsTheParse() {
-        val events = Array(3_000) { "UID:w$it@t\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000\nSUMMARY:w" } +
+        val events = Array(3_000) { "UID:w$it@t\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYMONTHDAY=13;COUNT=1000000000\nSUMMARY:w" } +
             "UID:real@t\nDTSTART:20260310T170000Z\nSUMMARY:Real"
         val unbounded = IcsParser.Limits(maxSteps = Long.MAX_VALUE, maxStepsPerSeries = Long.MAX_VALUE, deadline = Duration.ofMillis(300))
         val t0 = System.nanoTime()
@@ -224,7 +224,7 @@ class IcsParserFindingsTest {
 
     @Test
     fun interruptStopsTheParse() {
-        val events = Array(3_000) { "UID:w$it@t\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000\nSUMMARY:w" }
+        val events = Array(3_000) { "UID:w$it@t\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYMONTHDAY=13;COUNT=1000000000\nSUMMARY:w" }
         val text = cal(*events)
         val unbounded = IcsParser.Limits(maxSteps = Long.MAX_VALUE, maxStepsPerSeries = Long.MAX_VALUE, deadline = Duration.ofMinutes(10))
         val thrown = AtomicReference<Throwable?>()

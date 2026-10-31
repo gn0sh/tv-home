@@ -3,6 +3,7 @@ package tvhome.core.calendar
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
@@ -24,15 +25,22 @@ import java.util.PriorityQueue
  * - Work is bounded by [Limits]: parse-wide limits (deadline from entry, global steps, VEVENTs, kept series) give
  *   [ParseOutcome.Exhausted]; a series over its own budget is skipped and counted. Steps are charged before work.
  * - At most [MAX_INSTANCES] are returned: instances overlapping `focus` (today and tomorrow) are kept first, then the
- *   earliest; the result is in start order.
+ *   earliest; the result is in start order. One UID gets at most [FOCUS_PER_UID_PER_DAY] focus instances per focus
+ *   day, so one dense series cannot push real events out of today. If the cap cut anything and a RECURRENCE-ID then
+ *   removes a kept instance, the cut-off ones cannot be recovered: `Exhausted(INSTANCES)`, never a short Complete.
+ * - Per-VEVENT work is charged before it is done: an RRULE's size before its rule is built (and only a rule that can
+ *   reach the window is built), its times of day before they are built, and each EXDATE before its key is made.
  */
 object IcsParser {
     /** Hard cap on instances returned by one parse, across all events. */
     const val MAX_INSTANCES = 500
 
+    /** Focus instances one UID may hold per day of the focus range (every 30 minutes, all day). */
+    const val FOCUS_PER_UID_PER_DAY = 48
+
     data class Limits(
         val maxVevents: Int = 50_000,
-        val maxSteps: Long = 1_000_000,
+        val maxSteps: Long = 5_000_000,
         val maxStepsPerSeries: Long = 20_000,
         val maxSeries: Int = 5_000,
         val deadline: Duration = Duration.ofSeconds(5),
@@ -78,7 +86,7 @@ object IcsParser {
     }
 
     /** 128-bit digest of a UID, so removal keys stay small whatever the UID length. */
-    private class UidKey(val hi: Long, val lo: Long) {
+    private data class UidKey(val hi: Long, val lo: Long) {
         companion object {
             fun of(uid: String, md: MessageDigest): UidKey {
                 val d = md.digest(uid.toByteArray(Charsets.UTF_8))
@@ -134,8 +142,8 @@ object IcsParser {
         var skippedSeries = 0
         var ignoredValues = 0
 
-        fun complete(vevents: Int): ParseOutcome.Complete {
-            val events = out.result(replaced)
+        fun complete(vevents: Int): ParseOutcome {
+            val events = out.result(replaced) ?: return ParseOutcome.Exhausted(ParseLimit.INSTANCES)
             val stats = ParseStats(vevents, skippedEvents, unsupportedRules, skippedSeries, ignoredValues, out.truncated, budget.steps)
             return ParseOutcome.Complete(events, stats)
         }
@@ -159,7 +167,19 @@ object IcsParser {
         private fun point(d: DateValue): Point = when {
             d.isDate -> Point(d.local, null)
             d.utc -> Point(d.local, ZoneOffset.UTC)
-            else -> Point(d.local, d.tzid?.let { zones.resolve(it) } ?: zone) // no TZID: floating
+            else -> Point(d.local, d.tzid?.let { zoneOf(it) } ?: zone) // no TZID: floating
+        }
+
+        // The reader shares one TZID string among the values of a line: resolve it once per line, not per value.
+        private var lastTzid: String? = null
+        private var lastZone: ZoneId = zone
+
+        private fun zoneOf(tzid: String): ZoneId {
+            if (tzid !== lastTzid) {
+                lastZone = zones.resolve(tzid)
+                lastTzid = tzid
+            }
+            return lastZone
         }
 
         private fun handle(r: VEventRecord) {
@@ -183,32 +203,45 @@ object IcsParser {
             }
             if (cancelled) return
 
-            val spec = r.rrule
-            val rule = (spec as? RuleSpec.Spec)?.let { toRule(it, start) }
-            val expander = rule?.let { RecurrenceExpander(it, start.local, start.allDay) }?.takeIf { it.supported }
-            if (r.rruleSeen && expander == null) unsupportedRules++
+            val reach = Reach(start, end)
+            val spec = r.rrule as? RuleSpec.Spec
+            var expander: RecurrenceExpander? = null
+            var unreachable = false
+            if (spec != null) {
+                // bound: (iii) the rule's size (its BYxxx lists, each domain-bounded) is charged before the Rule and
+                // expander are built; the reader's parse of the same line was bound (i), at most 1 KiB
+                if (!budget.take(ruleCost(spec))) return skipSeries()
+                val until = untilOf(spec, start)
+                // Decided from the spec: a rule that ends before the window or starts after it is never built.
+                if (start.local.toLocalDate().isAfter(reach.to) || until?.toLocalDate()?.isBefore(reach.from) == true) {
+                    unreachable = true
+                } else {
+                    expander = RecurrenceExpander(toRule(spec, until), start.local, start.allDay).takeIf { it.supported }
+                }
+            }
+            if (r.rruleSeen && !unreachable && expander == null) unsupportedRules++
+            if (unreachable && r.rdates.isEmpty()) return // no instance of it can overlap the window
 
             val excluded = Keys()
-            // bound: (i) at most 2,000 EXDATE+RDATE values per VEVENT, counted by the reader
+            // bound: (iii) one step per EXDATE value charged before its key is made (at most 2,000 per VEVENT)
+            if (r.exdates.isNotEmpty() && !budget.take(r.exdates.size.toLong())) return skipSeries()
             for (ex in r.exdates) excluded.add(key, point(ex))
 
-            if (expander == null && r.rdates.isEmpty()) {
+            if (expander == null && !unreachable && r.rdates.isEmpty()) {
                 // one-off, or a rule we do not expand: DTSTART only
                 val t = start.toEventTime()
                 if (excluded.matches(key, t, start.zone)) return
                 add(listOf(Raw(uid, title, t, end)), key, start.zone, removable = true)
                 return
             }
-            expandSeries(r, uid, title, key, start, end, expander, excluded)
+            expandSeries(r, uid, title, key, start, end, expander, unreachable, reach, excluded)
         }
 
-        /** A recurring master: RRULE and/or RDATE. All of its instances are added, or none (series over budget). */
-        private fun expandSeries(
-            r: VEventRecord, uid: String, title: String, key: UidKey, start: Point, end: EventTime?,
-            expander: RecurrenceExpander?, excluded: Keys,
-        ) {
-            val first = start.toEventTime()
-            // One instance's length: exact millis for timed events, whole days for all-day ones.
+        /** The local dates (in the series' frame) whose instances can overlap the window, with a day of slack. */
+        private inner class Reach(start: Point, end: EventTime?) {
+            private val first = start.toEventTime()
+
+            /** One instance's length: exact millis for timed events, whole days for all-day ones. */
             val spanMs: Long = if (first is EventTime.At && end is EventTime.At) {
                 (end.instant.toEpochMilli() - first.instant.toEpochMilli()).coerceAtLeast(0)
             } else {
@@ -219,6 +252,26 @@ object IcsParser {
             } else {
                 0L
             }
+            private val frame = start.zone ?: zone
+            val from: LocalDate = window.start.minusMillis(spanMs).atZone(frame).toLocalDate().minusDays(spanDays + 1)
+            val to: LocalDate = window.end.atZone(frame).toLocalDate().plusDays(1)
+        }
+
+        /** Construction cost of a rule: one step plus one per BYxxx value (each list is domain-bounded). */
+        private fun ruleCost(s: RuleSpec.Spec): Long = 1L + s.byMonth.size + s.byMonthDay.size + s.byDay.size +
+            s.bySetPos.size + s.byHour.size + s.byMinute.size + s.bySecond.size
+
+        /**
+         * A recurring master: RRULE and/or RDATE. All of its instances are added, or none (series over budget).
+         * [unreachable]: the rule cannot reach the window and was never built; only the RDATEs can.
+         */
+        private fun expandSeries(
+            r: VEventRecord, uid: String, title: String, key: UidKey, start: Point, end: EventTime?,
+            expander: RecurrenceExpander?, unreachable: Boolean, reach: Reach, excluded: Keys,
+        ) {
+            val first = start.toEventTime()
+            val spanMs = reach.spanMs
+            val spanDays = reach.spanDays
             fun make(p: Point): Raw = if (p.allDay) {
                 val d = p.local.toLocalDate()
                 Raw(uid, title, EventTime.AllDay(d), EventTime.AllDay(d.plusDays(spanDays)))
@@ -227,29 +280,22 @@ object IcsParser {
                 Raw(uid, title, EventTime.At(s), if (end != null) EventTime.At(s.plusMillis(spanMs)) else null)
             }
 
-            // The local dates (in the series' frame) whose instances can overlap the window, with a day of slack.
             val frame = start.zone ?: zone
-            val from = window.start.minusMillis(spanMs).atZone(frame).toLocalDate().minusDays(spanDays + 1)
-            val to = window.end.atZone(frame).toLocalDate().plusDays(1)
-
-            // A kept series can still yield an instance near the window; only those count toward maxSeries.
-            val ruleCanReach = expander != null && !start.local.toLocalDate().isAfter(to) &&
-                (expander.until?.toLocalDate()?.isBefore(from) != true)
-            if (ruleCanReach || r.rdates.isNotEmpty()) {
+            // A kept series can still yield an instance near the window (its rule was built only if it can reach
+            // it); only those count toward maxSeries.
+            if (expander != null || r.rdates.isNotEmpty()) {
                 if (++series > limits.maxSeries) throw Stop(ParseLimit.SERIES)
             }
 
             val instances = LinkedHashMap<EventTime, Raw>()
             if (expander != null) {
-                if (ruleCanReach) {
-                    val starts = expander.between(from, to, budget) ?: return skipSeries()
-                    // bound: (iii) the starts were paid for, period by period, inside between()
-                    for (s in starts) {
-                        val x = make(Point(s, start.zone))
-                        instances[x.start] = x
-                    }
+                val starts = expander.between(reach.from, reach.to, budget) ?: return skipSeries()
+                // bound: (iii) the starts were paid for, period by period, inside between()
+                for (s in starts) {
+                    val x = make(Point(s, start.zone))
+                    instances[x.start] = x
                 }
-            } else {
+            } else if (!unreachable) {
                 // a rule we do not expand, plus RDATEs: DTSTART plus the RDATEs
                 instances[first] = Raw(uid, title, first, end)
             }
@@ -309,16 +355,17 @@ object IcsParser {
          * Our [Rule] in the series' local frame. UNTIL: a DATE counts through that day; a UTC date-time is converted
          * to the series' zone, and for an all-day series to its date in the device zone (`allday-until-utc-frame`).
          */
-        private fun toRule(s: RuleSpec.Spec, start: Point): Rule {
-            val until: LocalDateTime? = s.until?.let { u ->
-                when {
-                    u.isDate -> u.local.toLocalDate().atTime(LocalTime.MAX)
-                    start.allDay -> (if (u.utc) u.local.atOffset(ZoneOffset.UTC).atZoneSameInstant(zone).toLocalDate() else u.local.toLocalDate())
-                        .atTime(LocalTime.MAX)
-                    u.utc -> u.local.atOffset(ZoneOffset.UTC).atZoneSameInstant(start.zone).toLocalDateTime()
-                    else -> u.local
-                }
+        private fun untilOf(s: RuleSpec.Spec, start: Point): LocalDateTime? = s.until?.let { u ->
+            when {
+                u.isDate -> u.local.toLocalDate().atTime(LocalTime.MAX)
+                start.allDay -> (if (u.utc) u.local.atOffset(ZoneOffset.UTC).atZoneSameInstant(zone).toLocalDate() else u.local.toLocalDate())
+                    .atTime(LocalTime.MAX)
+                u.utc -> u.local.atOffset(ZoneOffset.UTC).atZoneSameInstant(start.zone).toLocalDateTime()
+                else -> u.local
             }
+        }
+
+        private fun toRule(s: RuleSpec.Spec, until: LocalDateTime?): Rule {
             return Rule(
                 freq = s.freq, interval = s.interval, count = s.count, until = until,
                 byMonth = s.byMonth, byMonthDay = s.byMonthDay, byDay = s.byDay, bySetPos = s.bySetPos,
@@ -330,8 +377,16 @@ object IcsParser {
     /**
      * Keeps the best [MAX_INSTANCES] overlapping instances in a bounded heap: overlapping [focus] first, then earliest.
      * Each add is O(log 500). One-off and series instances are [removable] by a RECURRENCE-ID that arrives later.
+     * A UID's focus instances beyond [focusCap] are cut (they would only crowd out other events today).
      */
     private class Collector(private val focus: InstantRange, private val zone: ZoneId, private val window: InstantRange) {
+        /** [FOCUS_PER_UID_PER_DAY] per day of the focus range, rounded (a 47 or 49 hour DST pair of days is 2). */
+        private val focusCap: Int = FOCUS_PER_UID_PER_DAY *
+            ((Duration.between(focus.start, focus.end).toMinutes() + 720) / 1_440).coerceIn(1, 31).toInt()
+
+        /** Focus instances offered per UID: at most one entry per added instance, so bounded by the steps charged. */
+        private val focusPerUid = HashMap<UidKey, Int>()
+
         private class Entry(val e: EventInstance, val focus: Boolean, val sortKey: Instant, val key: UidKey, val frame: ZoneId?, val removable: Boolean)
 
         /** Start order: start, title, uid, end. */
@@ -352,7 +407,16 @@ object IcsParser {
         fun add(r: Raw, key: UidKey, frame: ZoneId?, removable: Boolean) {
             val e = EventInstance(r.uid, r.title, r.start, r.end)
             if (!overlaps(e, window, zone)) return
-            val entry = Entry(e, overlaps(e, focus, zone), sortKey(e), key, frame, removable)
+            val inFocus = overlaps(e, focus, zone)
+            if (inFocus) {
+                val n = (focusPerUid[key] ?: 0) + 1
+                focusPerUid[key] = n
+                if (n > focusCap) {
+                    truncated = true
+                    return
+                }
+            }
+            val entry = Entry(e, inFocus, sortKey(e), key, frame, removable)
             if (heap.size >= MAX_INSTANCES) {
                 truncated = true
                 if (better.compare(entry, heap.peek()) >= 0) return // no better than the worst kept one
@@ -361,9 +425,14 @@ object IcsParser {
             heap.add(entry)
         }
 
-        fun result(replaced: Keys): List<EventInstance> {
+        /**
+         * The kept instances in start order, or null when a cap cut instances and a late RECURRENCE-ID removed kept
+         * ones: the slots it frees belonged to instances that were cut, so the answer is not known.
+         */
+        fun result(replaced: Keys): List<EventInstance>? {
             // bound: (ii) at most MAX_INSTANCES entries
             val kept = heap.filter { !(it.removable && replaced.matches(it.key, it.e.start, it.frame)) }
+            if (truncated && kept.size < heap.size) return null
             return kept.sortedWith(inOrder).map { it.e } // bound: (ii) at most MAX_INSTANCES
         }
 

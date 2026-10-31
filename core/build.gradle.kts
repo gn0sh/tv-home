@@ -48,7 +48,8 @@ val hostileTest by tasks.registering(Test::class) {
     }
     maxHeapSize = "96m"
     forkEvery = 1
-    shouldRunAfter(tasks.test)
+    // p14-perf-flaky: never in parallel with the unit tests, so the P14 wall-clock check is not measured under load
+    mustRunAfter(tasks.test)
 }
 
 // Live check on a public Google feed (no secret); run by the manual CI job only (T2b.6).

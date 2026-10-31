@@ -245,14 +245,24 @@ class IcsFetcherTest {
         val onlyIcal: (okhttp3.HttpUrl) -> Boolean = { it.encodedPath.startsWith("/ical/") }
         assertError(SourceError.NOT_CONFIGURED, fetcher(allowed = onlyIcal).fetchNow(url("/other/x.ics")))
         assertEquals(0, server.requestCount)
-        // redirect from an allowed URL to a disallowed one: followed by OkHttp, refused on the final response
+        // redirect from an allowed URL to a disallowed one: refused before that hop's request is sent
         server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/elsewhere/x.ics")))
-        server.enqueue(MockResponse().setBody("BEGIN:VCALENDAR"))
         assertError(SourceError.HTTP_STATUS, fetcher(allowed = onlyIcal).fetchNow(url()))
+        assertEquals(1, server.requestCount)
         // and the allowed redirect still works
         server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/ical/moved.ics")))
         server.enqueue(MockResponse().setBody("OK"))
         assertEquals("OK", text(fetcher(allowed = onlyIcal).fetchNow(url())))
+        assertEquals(3, server.requestCount)
+        // fetch-redirect-hops-unpinned: a disallowed hop between two allowed ones is refused too (it used to be
+        // followed, because only the final URL was checked), and its request never reaches the server
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/elsewhere/hop.ics")))
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/ical/final.ics")))
+        server.enqueue(MockResponse().setBody("BEGIN:VCALENDAR"))
+        assertError(SourceError.HTTP_STATUS, fetcher(allowed = onlyIcal).fetchNow(url()))
+        assertEquals(4, server.requestCount)
+        val paths = (1..4).map { server.takeRequest().path }
+        assertEquals(listOf(path, path, "/ical/moved.ics", path), paths)
     }
 
     /** H10: bytes come back untouched (non-UTF-8 and NUL included), with and without a known length, and via gzip. */

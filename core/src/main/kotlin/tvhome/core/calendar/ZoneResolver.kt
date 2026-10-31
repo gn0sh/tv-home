@@ -44,20 +44,25 @@ internal object ZoneResolver {
     private fun known(id: String): ZoneId? = if (id in AVAILABLE) ZoneId.of(id) else null
 
     /**
-     * Per-parse memo: at most [MAX_ENTRIES] TZIDs are remembered; beyond that each one resolves uncached (cheap now).
+     * Per-parse memo: at most [MAX_ENTRIES] TZIDs of at most [MAX_KEY] chars are remembered (so at most 64 Ki chars
+     * of keys, `zone-memo-key-size`); others resolve uncached (cheap: [resolve] gives up past 128 chars).
      */
     class Memo(private val fallback: ZoneId) {
         private val map = HashMap<String, ZoneId>()
 
         fun resolve(tzid: String): ZoneId {
+            if (tzid.length > MAX_KEY) return ZoneResolver.resolve(tzid, fallback)
             map[tzid]?.let { return it }
             val z = ZoneResolver.resolve(tzid, fallback)
             if (map.size < MAX_ENTRIES) map[tzid] = z
             return z
         }
 
+        internal val size get() = map.size
+
         companion object {
             const val MAX_ENTRIES = 256
+            const val MAX_KEY = 2 * MAX_TZID
         }
     }
 

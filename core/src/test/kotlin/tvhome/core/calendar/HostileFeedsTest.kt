@@ -16,7 +16,7 @@ import java.time.ZoneId
 import kotlin.random.Random
 
 /**
- * The hostile probes P1-P32 of docs/tasks/tv-home-m1.md (T2b acceptance tests). Run by `:core:hostileTest` in a
+ * The hostile probes P1-P32 of docs/tasks/tv-home-m1.md, plus P33-P36 from the T2b reviews (docs/reviews/m1-t2b-reviews.md) (T2b acceptance tests). Run by `:core:hostileTest` in a
  * 96 MiB test JVM. Every probe runs with a frozen clock (`nanoTime = { 0L }`) inside a 1 s preemptive timeout, which
  * proves the deterministic limits bind, not the deadline.
  */
@@ -112,19 +112,26 @@ class HostileFeedsTest {
         return sb.toString()
     }
 
-    @Test fun p07aDenseYearlyRuleWithinCapsIsSkippedByItsSeriesBudget() {
+    /**
+     * Expectation changed by `count-walk-skips-active-series`: the COUNT is now found over the 400-year cycle with each
+     * of the 14 year shapes counted once (charged), so the series fits its budget instead of being skipped. Its two
+     * instances a year (BYSETPOS=1,-1: about 1 January and 31 December) are not in the March window.
+     */
+    @Test fun p07aDenseYearlyRuleWithinCapsIsChargedAndFitsItsSeriesBudget() {
         val rule = p7Rule()
         assertTrue("RRULE:$rule".length <= IcsReader.MAX_RRULE_LINE)
         assertTrue(IcsRules.parse(rule) is RuleSpec.Spec)
         val r = complete(probe(HostileFeeds.calendar { event("UID:p7\nDTSTART:19000101T090000Z\nRRULE:$rule") }))
-        assertEquals(1, r.stats.skippedSeries)
+        assertEquals(0, r.stats.skippedSeries)
         assertEquals(0, r.stats.unsupportedRules)
         assertEquals(0, r.events.size)
+        assertTrue(r.stats.steps in 1_000..IcsParser.Limits().maxStepsPerSeries, "${r.stats.steps}")
     }
 
-    @Test fun p07bHundredCopiesExhaustTheSteps() {
+    /** 5M steps (manager decision 2026-10-31): 600 copies of P7 at about 9,350 steps each run them out. */
+    @Test fun p07bSixHundredCopiesExhaustTheSteps() {
         val rule = p7Rule()
-        val o = probe(HostileFeeds.calendar { repeat(100) { event("UID:p7-$it\nDTSTART:19000101T090000Z\nRRULE:$rule") } })
+        val o = probe(HostileFeeds.calendar { repeat(600) { event("UID:p7-$it\nDTSTART:19000101T090000Z\nRRULE:$rule") } })
         assertEquals(ParseLimit.STEPS, exhausted(o))
     }
 
@@ -289,10 +296,19 @@ class HostileFeedsTest {
     @Tag("deadline-drops-recurring-silently")
     fun p23CountWalksFromYearOneExhaustTheSteps() {
         val o = probe(HostileFeeds.calendar {
-            repeat(3_000) { event("UID:w$it\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000") }
+            repeat(3_000) { event("UID:w$it\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYMONTHDAY=13;COUNT=1000000000") }
             event("UID:real\nDTSTART:20260310T170000Z\nSUMMARY:Real")
         })
         assertEquals(ParseLimit.STEPS, exhausted(o))
+        // The shape P23 first used, DAILY;BYDAY=MO, is no longer a walk: counted over its 7-day cycle, every copy
+        // shows Monday 9 March (the cap keeps 500, focus first, so "Real" on Tuesday stays).
+        val r = complete(probe(HostileFeeds.calendar {
+            repeat(3_000) { event("UID:w$it\nDTSTART:00010101T090000Z\nRRULE:FREQ=DAILY;BYDAY=MO;COUNT=1000000000") }
+            event("UID:real\nDTSTART:20260310T170000Z\nSUMMARY:Real")
+        }))
+        assertEquals(IcsParser.MAX_INSTANCES, r.events.size)
+        assertTrue(r.events.any { it.uid == "real" })
+        assertEquals(setOf(at("2026-03-09T09:00:00Z"), at("2026-03-10T17:00:00Z")), r.events.map { it.start }.toSet())
     }
 
     @Test fun p24HundredYearInstancesAreSkippedByTheSeriesBudget() {
@@ -382,6 +398,145 @@ class HostileFeedsTest {
         assertEquals(RejectReason.VERSION, rejected(probe(bytes("BEGIN:VCALENDAR\r\n${ev}VERSION:2.0\r\nEND:VCALENDAR\r\n"))))
         assertEquals(RejectReason.CALSCALE, rejected(probe(bytes("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nCALSCALE:HEBREW\r\n${ev}END:VCALENDAR\r\n"))))
         complete(probe(bytes("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nCALSCALE:gregorian\r\n${ev}END:VCALENDAR\r\n")))
+    }
+
+    // ------------------------------------------------------------ P33-P36 (T2b reviews, 2026-10-31)
+
+    /**
+     * P33 `ics-rule-setup-uncharged` / `uncharged-per-vevent-work`: per-VEVENT rule setup is charged before it is done,
+     * and a rule that cannot reach the window is never built (no Rule, no times of day). Steps > 0 or Exhausted.
+     */
+    private val h10 = (0..9).joinToString(",")
+
+    @Test
+    @Tag("ics-rule-setup-uncharged")
+    fun p33aFiftyThousandUnreachableDenseRulesAreChargedNotBuilt() {
+        // code review: 50,000 VEVENTs starting 2030, 1,000 times of day each (about 7.75 MB)
+        val review = HostileFeeds.Bytes(9 shl 20).text(HostileFeeds.HEAD)
+            .repeat("BEGIN:VEVENT\r\nUID:r\r\nDTSTART:20300101T000000Z\r\nRRULE:FREQ=DAILY;BYHOUR=$h10;BYMINUTE=$h10;BYSECOND=$h10\r\nEND:VEVENT\r\n", 50_000)
+            .text(HostileFeeds.TAIL).bytes()
+        assertTrue(review.size > 7_000_000, "${review.size}")
+        val a = complete(probe(review))
+        assertEquals(50_000, a.stats.vevents)
+        assertTrue(a.stats.steps >= 50_000L * 31, "${a.stats.steps}") // 1 + 30 BY values per rule
+    }
+
+    @Test
+    @Tag("uncharged-per-vevent-work")
+    fun p33bThirtyFiveThousandRulesEndingIn1970AreChargedNotBuilt() {
+        // security review: about 35,000 VEVENTs ending in 1970, 984 times of day each (about 10.4 MB)
+        val hours = (0..23).joinToString(",")
+        val mins = (0..40).joinToString(",")
+        val sec = HostileFeeds.Bytes(11 shl 20).text(HostileFeeds.HEAD)
+        var n = 0
+        while (sec.size < 10_400_000 && n < 50_000) {
+            sec.line("BEGIN:VEVENT").line("UID:$n").line("DTSTART:19700101T000000")
+                .line("RRULE:FREQ=DAILY;UNTIL=19700102T000000Z;BYHOUR=$hours;BYMINUTE=$mins").line("END:VEVENT")
+            n++
+        }
+        val b = probe(sec.text(HostileFeeds.TAIL).bytes())
+        assertTrue(b is ParseOutcome.Exhausted || (b as ParseOutcome.Complete).stats.steps >= n * 66L, "$b")
+    }
+
+    @Test
+    @Tag("ics-rule-setup-uncharged")
+    fun p33cFiftyThousandReachableDenseRulesExhaustTheSteps() {
+        // the same dense rule reaching the window: built, its 1,000 times charged, and the steps run out
+        val reach = HostileFeeds.Bytes(9 shl 20).text(HostileFeeds.HEAD)
+            .repeat("BEGIN:VEVENT\r\nUID:r\r\nDTSTART:20260310T000000Z\r\nRRULE:FREQ=DAILY;BYHOUR=$h10;BYMINUTE=$h10;BYSECOND=$h10\r\nEND:VEVENT\r\n", 50_000)
+            .text(HostileFeeds.TAIL).bytes()
+        assertEquals(ParseLimit.STEPS, exhausted(probe(reach)))
+    }
+
+    private val real = "BEGIN:VEVENT\r\nUID:real\r\nDTSTART:20260310T190000Z\r\nDTEND:20260310T200000Z\r\nSUMMARY:REAL\r\nEND:VEVENT\r\n"
+
+    /** 900 one-minute instances today 00:00-14:59 local (one master), and RECURRENCE-ID cancellations of the first [n]. */
+    private fun spam(cancel: Int, overridesFirst: Boolean = false): ByteArray {
+        val master = "BEGIN:VEVENT\r\nUID:spam\r\nDTSTART;TZID=America/New_York:20260310T000000\r\n" +
+            "DTEND;TZID=America/New_York:20260310T000100\r\nRRULE:FREQ=DAILY;UNTIL=20260310T235959Z;BYHOUR=" +
+            (0..14).joinToString(",") + ";BYMINUTE=" + (0..59).joinToString(",") + "\r\nSUMMARY:spam\r\nEND:VEVENT\r\n"
+        val overrides = StringBuilder()
+        for (k in 0 until cancel) {
+            val t = "20260310T%02d%02d00".format(k / 60, k % 60)
+            overrides.append("BEGIN:VEVENT\r\nUID:spam\r\nRECURRENCE-ID;TZID=America/New_York:$t\r\n")
+                .append("DTSTART;TZID=America/New_York:$t\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\n")
+        }
+        val body = if (overridesFirst) overrides.toString() + master else master + overrides
+        return bytes("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n" + real + body + "END:VCALENDAR\r\n")
+    }
+
+    /**
+     * P34 `instance-cap-removal-order` (security #1): a cut result that then loses kept instances to late
+     * RECURRENCE-ID removals is Exhausted(INSTANCES), never a Complete without the real event; and one dense series
+     * gets at most 48 focus instances per day, so it cannot push a real event out of today.
+     */
+    @Test
+    @Tag("instance-cap-removal-order")
+    fun p34CapThenRemovalIsExhaustedAndOneSeriesCannotCrowdOutToday() {
+        // the security repro: Complete(0 events, truncated) before the fix
+        assertEquals(ParseLimit.INSTANCES, exhausted(probe(spam(cancel = 600))))
+        // a dense series alone: capped at 96 focus instances (48 x 2 days), the real event kept
+        val alone = complete(probe(spam(cancel = 0)))
+        assertTrue(alone.events.any { it.title == "REAL" }, "${alone.events.size}")
+        assertEquals(2 * IcsParser.FOCUS_PER_UID_PER_DAY, alone.events.count { it.uid == "spam" })
+        assertTrue(alone.stats.truncated)
+        // overrides before their master are applied as instances arrive: nothing kept is removed later
+        val first = complete(probe(spam(cancel = 600, overridesFirst = true)))
+        assertTrue(first.events.any { it.title == "REAL" })
+        assertEquals(at("2026-03-10T14:00:00Z"), first.events.first { it.uid == "spam" }.start) // 10:00 EDT
+        // the 500 cap cut by many distinct one-off events, then a late cancellation of a kept one
+        val many = StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n")
+        for (i in 0 until 600) many.append("BEGIN:VEVENT\r\nUID:o$i\r\nDTSTART:20260310T%02d%02d00Z\r\nEND:VEVENT\r\n".format(i / 60, i % 60))
+        many.append("BEGIN:VEVENT\r\nUID:o0\r\nRECURRENCE-ID:20260310T000000Z\r\nDTSTART:20260310T000000Z\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\n")
+        assertEquals(ParseLimit.INSTANCES, exhausted(probe(bytes(many.append("END:VCALENDAR\r\n").toString()))))
+    }
+
+    /** P35 `exdate-uncharged` (security #3): 2,000 EXDATEs per VEVENT under more than 256 distinct long TZIDs. */
+    @Test
+    @Tag("exdate-uncharged")
+    fun p35ExdateFloodWithDistinctTzidsIsCharged() {
+        val b = HostileFeeds.Bytes(11 shl 20).text(HostileFeeds.HEAD)
+        var v = 0
+        var values = 0L
+        val item = "19700101T090000"
+        while (b.size < 10_300_000) {
+            val tz = "/x$v/" + "a".repeat(100) + "/America/New_York"
+            b.line("BEGIN:VEVENT").line("UID:e$v").line("DTSTART;TZID=America/New_York:19700101T090000")
+            repeat(4) {
+                val k = 7_900 / (item.length + 1)
+                b.line("EXDATE;TZID=$tz:" + List(k) { item }.joinToString(","))
+                values += k
+            }
+            b.line("END:VEVENT")
+            v++
+        }
+        assertTrue(v > 256, "$v")
+        val r = complete(probe(b.text(HostileFeeds.TAIL).bytes()))
+        assertTrue(r.stats.steps >= values, "${r.stats.steps} < $values")
+    }
+
+    /**
+     * P36 `count-walk-skips-active-series` (code review should-fix 1): COUNT rules with uneven periods, viewed on
+     * 2026-03-31, show their instance (they were skipped by the series budget and silently cached without it).
+     */
+    @Test
+    @Tag("count-walk-skips-active-series")
+    fun p36UnevenCountRulesFrom2015ShowTheirInstance() {
+        val w = agendaWindow(Instant.parse("2026-03-31T14:00:00Z"), ny)
+        fun run(rule: String, start: String): ParseOutcome.Complete {
+            val body = HostileFeeds.calendar { event("UID:c\nDTSTART;TZID=America/New_York:$start\nRRULE:$rule") }
+            return complete(assertTimeoutPreemptively(Duration.ofSeconds(1), ThrowingSupplier {
+                IcsParser.parse(body, w, ny, agendaFocus(w, ny)) { 0L }
+            }))
+        }
+        for ((rule, start) in listOf(
+            "FREQ=MONTHLY;BYMONTHDAY=31;COUNT=500" to "20150131T090000",
+            "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;COUNT=300" to "20150130T090000",
+        )) {
+            val r = run(rule, start)
+            assertEquals(listOf(at("2026-03-31T13:00:00Z")), r.events.map { it.start }, rule)
+            assertEquals(0, r.stats.skippedSeries, rule)
+        }
     }
 
     /** P32: seeded mutations of the P14 shape (at 1/100 scale so 2,000 runs fit the suite); never throws, < 200 ms. */

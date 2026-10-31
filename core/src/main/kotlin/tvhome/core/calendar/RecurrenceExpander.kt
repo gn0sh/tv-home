@@ -126,13 +126,16 @@ internal class Rule(
 /**
  * Expands a [Rule] from [dtStart] without walking from DTSTART: the period that holds the window is found by
  * arithmetic, so a 1900 birthday costs the same as a 2026 one. COUNT is honoured by counting the instances before
- * that period arithmetically when every period has the same number of instances (the shapes Google writes), and
- * otherwise by walking period by period under the series budget.
+ * that period: arithmetically when every period has the same number of instances (the shapes Google writes); for
+ * other MONTHLY and YEARLY rules over one 400-year Gregorian cycle of periods, with each period's count memoised by
+ * its calendar shape; for other DAILY and WEEKLY rules by a count-only walk that stops once COUNT is reached.
  *
  * Bounded by construction (ADR 0004 decision 2): each period's work is at most [perPeriodBound] helper iterations
  * (a static bound computed from the rule's shape), and that bound is charged to the [Budget] before the period is
- * computed. [maxTicksPerPeriod] records the real iterations (test-only check, I2). Day membership is O(1) through
- * masks built once from the domain-bounded rule sets; nothing loops over an input-sized list.
+ * computed; a count-only period is charged [countBound]. [maxTicksPerPeriod] and [maxCountTicks] record the real
+ * iterations (test-only check, I2). Day membership is O(1) through masks built once from the domain-bounded rule
+ * sets; nothing loops over an input-sized list. Construction is O(rule size) (the caller charges it first); the
+ * times of day are built on the first [between] call, after their number has been charged.
  */
 internal class RecurrenceExpander(private val rule: Rule, private val dtStart: LocalDateTime, private val allDay: Boolean) {
     private val startDate = dtStart.toLocalDate()
@@ -141,8 +144,12 @@ internal class RecurrenceExpander(private val rule: Rule, private val dtStart: L
     /** The rule's UNTIL, in the series' local frame. */
     val until: LocalDateTime? get() = rule.until
 
-    /** Times of day per candidate day, sorted; empty when there would be more than [MAX_PER_PERIOD]. */
-    private val times: List<LocalTime> = buildTimes()
+    /** How many times of day each candidate day has (|BYHOUR| x |BYMINUTE| x |BYSECOND|, defaults from DTSTART). */
+    private val timesCount: Long = timesCount()
+
+    /** Times of day per candidate day, sorted; built by [between] after [timesCount] steps are charged. */
+    private var times: List<LocalTime> = emptyList()
+    private var timesBuilt = false
     private val weekStart0 = startDate.with(TemporalAdjusters.previousOrSame(rule.wkst))
     private val startYm = YearMonth.from(startDate)
 
@@ -185,19 +192,26 @@ internal class RecurrenceExpander(private val rule: Rule, private val dtStart: L
     }
 
     /** False when the rule is too dense to expand within the per-period cap (the series shows DTSTART only). */
-    val supported: Boolean = times.isNotEmpty() && maxDaysPerPeriod() * times.size <= MAX_PER_PERIOD
+    val supported: Boolean = timesCount in 1..MAX_PER_PERIOD && maxDaysPerPeriod() * timesCount <= MAX_PER_PERIOD
 
     /**
      * Static upper bound of the helper iterations [periodInstances] does for one period: the day scan, one per
      * candidate built, BYSETPOS picks plus their filter, the DTSTART filter, and period 0's DTSTART insert, plus one.
      */
     val perPeriodBound: Long = run {
-        val cand = scanDays.toLong() * times.size.coerceAtLeast(1)
+        val cand = scanDays.toLong() * timesCount.coerceAtLeast(1)
         1L + scanDays + cand + rule.bySetPos.size + cand + cand + (cand + 1)
     }
 
+    /** Static upper bound of the helper iterations of one count-only period ([periodCount]): the day scan, BYSETPOS. */
+    val countBound: Long = 1L + scanDays + 1 + rule.bySetPos.size
+
     /** Test-only (I2): the most helper iterations any one period really took. */
     internal var maxTicksPerPeriod = 0L
+        private set
+
+    /** Test-only (I2): the most helper iterations any one count-only period really took. */
+    internal var maxCountTicks = 0L
         private set
     private var ticks = 0L
 
@@ -208,6 +222,12 @@ internal class RecurrenceExpander(private val rule: Rule, private val dtStart: L
      */
     fun between(from: LocalDate, to: LocalDate, budget: Budget): List<LocalDateTime>? {
         if (!supported) return null
+        if (!timesBuilt) {
+            // bound: (iii) the times are charged (at most MAX_PER_PERIOD) before they are built
+            if (!budget.take(timesCount)) return null
+            times = buildTimes()
+            timesBuilt = true
+        }
         val k0 = periodIndex(from)
         var index = if (rule.count != null) countBefore(k0, budget) ?: return null else 0L
         val out = ArrayList<LocalDateTime>()
@@ -264,17 +284,26 @@ internal class RecurrenceExpander(private val rule: Rule, private val dtStart: L
         Freq.YEARLY -> 366
     }
 
+    // BYSECOND=60 (a leap second) cannot be represented; it is dropped. A rule left with no second is too odd to
+    // expand (DTSTART only), rather than silently using DTSTART's second.
+    private fun seconds(): List<Int> =
+        if (rule.bySecond.isEmpty()) listOf(dtStart.second) else rule.bySecond.filter { it <= 59 } // bound: (ii) <= 61
+
+    private fun timesCount(): Long {
+        if (allDay) return 1
+        val h = rule.byHour.size.coerceAtLeast(1).toLong()
+        val m = rule.byMinute.size.coerceAtLeast(1).toLong()
+        return h * m * seconds().size
+    }
+
+    /** Only called when [supported]: at most [MAX_PER_PERIOD] times, already charged. */
     private fun buildTimes(): List<LocalTime> {
         if (allDay) return listOf(LocalTime.MIDNIGHT)
-        // BYSECOND=60 (a leap second) cannot be represented; it is dropped. A rule left with no second is too odd
-        // to expand (DTSTART only), rather than silently using DTSTART's second.
         val h = rule.byHour.ifEmpty { listOf(dtStart.hour) }
         val m = rule.byMinute.ifEmpty { listOf(dtStart.minute) }
-        // bound: (ii) BYSECOND is a domain set of at most 61
-        val s = if (rule.bySecond.isEmpty()) listOf(dtStart.second) else rule.bySecond.filter { it <= 59 }
-        if (s.isEmpty() || h.size.toLong() * m.size * s.size > MAX_PER_PERIOD) return emptyList()
-        // bound: (ii) at most MAX_PER_PERIOD times (checked just above); lists are sorted, so the result is sorted
-        val out = ArrayList<LocalTime>(h.size * m.size * s.size)
+        val s = seconds()
+        // bound: (ii) at most MAX_PER_PERIOD times (supported); lists are sorted, so the result is sorted
+        val out = ArrayList<LocalTime>(timesCount.toInt())
         for (hh in h) for (mm in m) for (ss in s) out += LocalTime.of(hh, mm, ss)
         return out
     }
@@ -440,37 +469,106 @@ internal class RecurrenceExpander(private val rule: Rule, private val dtStart: L
     // ---- COUNT ----
 
     /**
-     * Instances in periods [0, k0). Arithmetic when every period after the first yields the same number
-     * ([constantPerPeriod]); else a walk that stops early once COUNT is reached. Null when the series budget runs out.
+     * Instances in periods [0, k0). Arithmetic when every period after the first has the same number of candidates
+     * ([constantPerPeriod], then BYSETPOS once). MONTHLY and YEARLY: the Gregorian calendar repeats every 400 years
+     * (4,800 months, 146,097 days = 20,871 weeks), so the counts of periods 1, 2, ... repeat with a period of at most
+     * 4,800 (MONTHLY) or 400 (YEARLY) periods; at most one cycle is summed (one step per period, each distinct
+     * calendar shape counted once and memoised) and multiplied out. DAILY with BYDAY alone: the same over a cycle of at
+     * most 7 days. Other DAILY and WEEKLY rules (BYMONTH or BYMONTHDAY with COUNT, which no calendar app writes): a
+     * count-only walk that stops once COUNT is reached. Null when the series budget runs out.
      */
     private fun countBefore(k0: Long, budget: Budget): Long? {
         if (k0 == 0L) return 0
         val count = rule.count ?: return 0
         val first = periodInstances(0, budget)?.size?.toLong() ?: return null
-        val c = constantPerPeriod()
-        if (c != null) return first + (k0 - 1) * c
-        var n = first
+        val candidates = constantPerPeriod()
+        if (candidates != null) {
+            // bound: (iii) BYSETPOS (at most 732 values) is charged before it is applied once
+            if (!budget.take(1L + rule.bySetPos.size)) return null
+            return first + (k0 - 1) * setPosCount(candidates)
+        }
+        val n = k0 - 1 // periods 1 .. k0-1
+        val cycle = when (rule.freq) {
+            Freq.MONTHLY -> 4_800L / gcd(4_800L, interval)
+            Freq.YEARLY -> 400L / gcd(400L, interval)
+            // BYDAY alone: a day's count depends on its weekday only, which repeats every 7 / gcd(7, INTERVAL) days
+            Freq.DAILY -> if (!hasMonths && !hasMd) 7L / gcd(7L, interval) else Long.MAX_VALUE
+            Freq.WEEKLY -> Long.MAX_VALUE
+        }
+        val memo = if (cycle != Long.MAX_VALUE) LongArray(SHAPES) { -1L } else null
+        val r = if (n > cycle) n % cycle else 0L
+        var sum = 0L
+        var sumR = 0L
         var k = 1L
-        // bound: (iii) every iteration charges perPeriodBound in periodInstances before its work
-        while (k < k0 && n < count) {
-            n += periodInstances(k, budget)?.size ?: return null
+        // bound: (iii) one step per period charged before it (plus countBound for each period not memoised), and at
+        // most min(n, cycle) periods; the DAILY/WEEKLY walk stops at COUNT or when the series budget runs out
+        while (k <= minOf(n, cycle)) {
+            if (!budget.take(1)) return null
+            sum += periodCount(k, memo, budget) ?: return null
+            if (k == r) sumR = sum
+            if (n <= cycle && first + sum >= count) return first + sum
             k++
         }
-        return n
+        return if (n <= cycle) first + sum else first + (n / cycle) * sum + sumR
     }
 
-    /** Instances per period when it is the same for every period (proved by the rule's shape), else null. */
+    /** Instances of period [k] >= 1 (all after DTSTART), counted without building them. */
+    private fun periodCount(k: Long, memo: LongArray?, budget: Budget): Long? {
+        val first = periodFirstDate(k) ?: return 0
+        val shape = if (memo == null) -1 else shapeOf(first)
+        if (shape >= 0 && memo!![shape] >= 0) return memo[shape]
+        if (!budget.take(countBound)) return null
+        ticks = 1
+        var days = 0L
+        scan(first) { days++ }
+        val c = setPosCount(days * timesCount)
+        if (ticks > maxCountTicks) maxCountTicks = ticks
+        if (shape >= 0) memo!![shape] = c
+        return c
+    }
+
+    /**
+     * The calendar shape a period's count depends on: MONTHLY, the month, whether February is a leap one, and the
+     * weekday of the 1st; YEARLY, leap or not and the weekday of 1 January. Under [SHAPES] values.
+     */
+    private fun shapeOf(first: LocalDate): Int {
+        val dow = first.dayOfWeek.value - 1
+        val leap = if (first.isLeapYear) 7 else 0
+        return if (rule.freq == Freq.MONTHLY) (first.monthValue - 1) * 14 + leap + dow else leap + dow
+    }
+
+    /** How many of [n] sorted candidates BYSETPOS picks (all when there is no BYSETPOS); distinct positions. */
+    private fun setPosCount(n: Long): Long {
+        if (rule.bySetPos.isEmpty()) return n
+        var c = 0L
+        // bound: (ii) at most 732 distinct BYSETPOS values
+        for (p in rule.bySetPos) {
+            tick()
+            when {
+                p > 0 -> if (p <= n) c++
+                -p <= n && !(n + p + 1 <= 366 && posSetPos[(n + p + 1).toInt()]) -> c++ // same slot as a positive one
+            }
+        }
+        return c
+    }
+
+    private val posSetPos = BooleanArray(367).also { m -> for (p in rule.bySetPos) if (p > 0) m[p] = true }
+
+    /**
+     * Candidates per period (before BYSETPOS) when it is the same for every period after the first (proved by the
+     * rule's shape), else null.
+     */
     private fun constantPerPeriod(): Long? {
-        if (rule.bySetPos.isNotEmpty()) return null
         // bound: (ii) every collection operation below is over a domain-bounded Rule set (<= 62 or <= 749)
-        val t = times.size.toLong()
+        val t = timesCount
         val md = rule.byMonthDay
         val safeMd = md.isNotEmpty() && (md.all { it in 1..28 } || md.all { it in -28..-1 })
         val bd = rule.byDay
         val safeBd = bd.isNotEmpty() && (bd.all { it.n in 1..4 } || bd.all { it.n in -4..-1 })
         return when (rule.freq) {
             Freq.DAILY -> if (!hasMonths && md.isEmpty() && bd.isEmpty()) t else null
-            Freq.WEEKLY -> if (!hasMonths && md.isEmpty() && bd.all { it.n == 0 }) {
+            // WEEKLY ignores BYDAY ordinals (dailyOrWeeklyMatch), so only the distinct weekdays count
+            Freq.WEEKLY -> if (!hasMonths && md.isEmpty()) {
                 (bd.map { it.day }.distinct().size.takeIf { it > 0 } ?: 1) * t
             } else {
                 null
@@ -500,5 +598,10 @@ internal class RecurrenceExpander(private val rule: Rule, private val dtStart: L
     companion object {
         /** Candidates in one period (days x times); denser rules are unsupported. */
         const val MAX_PER_PERIOD = 1_000
+
+        /** Distinct calendar shapes of a month (12 x leap x weekday) or a year (leap x weekday). */
+        private const val SHAPES = 12 * 14
+
+        private tailrec fun gcd(a: Long, b: Long): Long = if (b == 0L) a else gcd(b, a % b)
     }
 }

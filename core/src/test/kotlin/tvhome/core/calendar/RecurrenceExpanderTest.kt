@@ -1,6 +1,5 @@
 package tvhome.core.calendar
 
-import biweekly.Biweekly
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -8,9 +7,7 @@ import org.junit.jupiter.api.Test
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
-import java.util.TimeZone
 import kotlin.random.Random
 
 class RecurrenceExpanderTest {
@@ -20,90 +17,119 @@ class RecurrenceExpanderTest {
     private fun dt(s: String) = LocalDateTime.parse(s)
 
     /**
-     * Seeded property test against an independent oracle: biweekly's own RRULE iterator, walked from a recent DTSTART
-     * (where walking is cheap and its answers are trusted). Our expander jumps to the window instead.
+     * `expander-no-differential-test`: seeded differential test against [RfcReference], a brute-force walk of every
+     * day from DTSTART (biweekly is no longer the expansion oracle: it differs from RFC 5545 on about 5% of random
+     * rules). Rules mix every supported part; DTSTARTs are 2000-2026, windows in 2026. Every rule is compared with an
+     * unlimited budget; with the production per-series budget a COUNT rule must not be skipped unless it is the
+     * one residual walk (DAILY with BYMONTH or BYMONTHDAY).
      */
     @Test
-    fun matchesBiweeklyIteratorOnRandomRulesFromRecentStarts() {
+    fun matchesBruteForceRfcReferenceOnRandomRules() {
         val rnd = Random(20261031)
-        val days = listOf("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+        val days = DayOfWeek.values().toList()
         var compared = 0
         var nonEmpty = 0
-        repeat(1500) { iter ->
-            val freq = listOf("DAILY", "WEEKLY", "MONTHLY", "YEARLY")[rnd.nextInt(4)]
-            val parts = mutableListOf("FREQ=$freq")
-            if (rnd.nextInt(3) == 0) parts += "INTERVAL=${rnd.nextInt(2, 4)}"
-            val ordinals = freq == "MONTHLY" || freq == "YEARLY"
-            if (rnd.nextInt(2) == 0) {
-                val picked = days.shuffled(rnd).take(rnd.nextInt(1, 4))
-                parts += "BYDAY=" + picked.joinToString(",") {
-                    if (ordinals && rnd.nextInt(2) == 0) listOf(1, 2, 3, 4, -1, -2)[rnd.nextInt(6)].toString() + it else it
-                }
-                if (rnd.nextInt(4) == 0 && freq != "DAILY") parts += "BYSETPOS=" + listOf(1, -1, 2)[rnd.nextInt(3)]
-            } else if (freq != "WEEKLY" && rnd.nextInt(2) == 0) {
-                parts += "BYMONTHDAY=" + (1..rnd.nextInt(1, 3)).map { listOf(1, 5, 15, 28, 29, 30, 31, -1, -3)[rnd.nextInt(9)] }.distinct().joinToString(",")
+        var skippedAtProductionBudget = 0
+        var countRules = 0
+        repeat(4_000) { iter ->
+            val freq = Freq.values()[rnd.nextInt(4)]
+            val monthly = freq == Freq.MONTHLY || freq == Freq.YEARLY
+            fun ords() = listOf(1, 2, 3, 4, 5, -1, -2, -5, 10, -20, 53)[rnd.nextInt(11)]
+            val byDay = if (rnd.nextInt(2) == 0) {
+                days.shuffled(rnd).take(rnd.nextInt(1, 6)).map { WeekdayNum(if ((monthly || rnd.nextInt(8) == 0) && rnd.nextInt(2) == 0) ords() else 0, it) }
+            } else {
+                emptyList()
             }
-            if (freq == "YEARLY" && rnd.nextInt(2) == 0) parts += "BYMONTH=" + (1..rnd.nextInt(1, 3)).map { rnd.nextInt(1, 13) }.distinct().joinToString(",")
-            when (rnd.nextInt(3)) {
-                0 -> parts += "COUNT=${rnd.nextInt(1, 400)}"
-                1 -> parts += "UNTIL=2026${"%02d".format(rnd.nextInt(1, 13))}15T000000Z"
+            val byMonthDay = if (rnd.nextInt(3) == 0 && (freq != Freq.WEEKLY || rnd.nextInt(4) == 0)) {
+                (1..rnd.nextInt(1, 4)).map { listOf(1, 5, 13, 15, 28, 29, 30, 31, -1, -2, -3, -31, 10)[rnd.nextInt(13)] }
+            } else {
+                emptyList()
             }
-            val start = LocalDate.of(2023, 1, 1).plusDays(rnd.nextLong(0, 900)).atTime(10, 30)
-            val rrule = parts.joinToString(";")
+            val byMonth = if ((freq == Freq.YEARLY && rnd.nextInt(2) == 0) || rnd.nextInt(8) == 0) (1..rnd.nextInt(1, 4)).map { rnd.nextInt(1, 13) } else emptyList()
+            val bySetPos = if (rnd.nextInt(5) == 0) (1..rnd.nextInt(1, 4)).map { listOf(1, -1, 2, 3, -2, 5, 20, -10)[rnd.nextInt(8)] } else emptyList()
+            val byHour = if (rnd.nextInt(6) == 0) (1..rnd.nextInt(1, 4)).map { rnd.nextInt(0, 24) } else emptyList()
+            val byMinute = if (rnd.nextInt(8) == 0) (1..rnd.nextInt(1, 3)).map { rnd.nextInt(0, 60) } else emptyList()
+            val bySecond = if (rnd.nextInt(12) == 0) (1..rnd.nextInt(1, 3)).map { listOf(0, 30, 59, 60)[rnd.nextInt(4)] } else emptyList()
+            val wkst = if (rnd.nextInt(4) == 0) days[rnd.nextInt(7)] else DayOfWeek.MONDAY
+            val interval = if (rnd.nextInt(3) == 0) rnd.nextInt(2, 6) else 1
+            val start = LocalDate.of(2000, 1, 1).plusDays(rnd.nextLong(0, 9_600)).atTime(rnd.nextInt(0, 24), listOf(0, 15, 30, 45)[rnd.nextInt(4)])
+            val allDay = rnd.nextInt(10) == 0
+            val dtStart = if (allDay) start.toLocalDate().atStartOfDay() else start
+            val count = if (rnd.nextInt(3) == 0) rnd.nextLong(1, 1_500) else null
+            val until = if (count == null && rnd.nextInt(2) == 0) LocalDate.of(2026, 1, 1).plusDays(rnd.nextLong(-400, 300)).atTime(12, 0) else null
+            val rule = Rule(freq, interval, count, until, byMonth, byMonthDay, byDay, bySetPos, byHour, byMinute, bySecond, wkst)
             val from = LocalDate.of(2026, 1, 1).plusDays(rnd.nextLong(0, 300))
             val to = from.plusDays(rnd.nextLong(3, 40))
+            val what = "iteration $iter: DTSTART=$dtStart allDay=$allDay freq=$freq interval=$interval count=$count until=$until " +
+                "byMonth=$byMonth byMonthDay=$byMonthDay byDay=$byDay bySetPos=$bySetPos byHour=$byHour byMinute=$byMinute " +
+                "bySecond=$bySecond wkst=$wkst window=$from..$to"
 
-            // Known biweekly bug: DAILY;INTERVAL>1 with BYDAY yields consecutive days (see dailyIntervalWithByDay...).
-            if (freq == "DAILY" && "INTERVAL" in rrule && "BYDAY" in rrule) return@repeat
-            // Known biweekly bug: WEEKLY BYSETPOS=1 returned two days of one week. BYSETPOS is covered by bySetPos... below.
-            if ("BYSETPOS" in rrule) return@repeat
-            val oracle = oracle(start, rrule, from, to) ?: return@repeat
-            val rule = parseRule(start, rrule)
-            val ours = RecurrenceExpander(rule, start, allDay = false).between(from, to, budget())
-            assertEquals(oracle, ours, "iteration $iter: DTSTART=$start RRULE=$rrule window=$from..$to")
+            val expander = RecurrenceExpander(rule, dtStart, allDay)
+            val reference = RfcReference.expand(rule, dtStart, allDay, to)?.filter { !it.toLocalDate().isBefore(from) }
+            if (!expander.supported) return@repeat
+            assertEquals(reference, expander.between(from, to, budget()), what)
             compared++
-            if (oracle.isNotEmpty()) nonEmpty++
+            if (!reference.isNullOrEmpty()) nonEmpty++
+            if (count != null) {
+                countRules++
+                val prod = Budget(IcsParser.Limits().maxSteps, IcsParser.Limits().maxStepsPerSeries, Long.MAX_VALUE) { 0L }
+                val r = RecurrenceExpander(rule, dtStart, allDay).between(from, to, prod)
+                // the one residual walk: DAILY with BYMONTH or BYMONTHDAY and COUNT (no calendar app writes it)
+                val walk = freq == Freq.DAILY && (byMonth.isNotEmpty() || byMonthDay.isNotEmpty())
+                if (r == null) {
+                    assertTrue(walk, "skipped at the production budget: $what")
+                    skippedAtProductionBudget++
+                } else {
+                    assertEquals(reference, r, "production budget, $what")
+                }
+            }
         }
-        assertTrue(compared >= 400, "compared only $compared")
-        assertTrue(nonEmpty >= 200, "only $nonEmpty non-empty comparisons")
+        println("rfc differential: compared $compared, non-empty $nonEmpty, COUNT rules $countRules, skipped at the production budget $skippedAtProductionBudget")
+        assertTrue(compared >= 3_500, "compared only $compared")
+        assertTrue(nonEmpty >= 1_000, "only $nonEmpty non-empty comparisons")
+        assertTrue(skippedAtProductionBudget * 20 <= countRules, "$skippedAtProductionBudget of $countRules COUNT rules skipped")
     }
 
-    /** biweekly's iterator, UTC; null when DTSTART does not match the rule (there biweekly and RFC 5545 differ). */
-    private fun oracle(start: LocalDateTime, rrule: String, from: LocalDate, to: LocalDate): List<LocalDateTime>? {
-        val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:o\r\nDTSTART:${fmt(start)}Z\r\nRRULE:$rrule\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-        val ev = Biweekly.parse(ics).first().events.single()
-        val it = ev.getDateIterator(TimeZone.getTimeZone("UTC"))
-        val all = ArrayList<LocalDateTime>()
-        var n = 0
-        while (it.hasNext() && n++ < 200_000) {
-            val d = LocalDateTime.ofInstant(it.next().toInstant(), ZoneOffset.UTC)
-            if (d.toLocalDate().isAfter(to)) break
-            all += d
+    /**
+     * `count-walk-skips-active-series`: COUNT rules whose periods do not all have the same count used to walk with the
+     * pessimistic per-period charge and run out of the series budget; now they are counted over the calendar cycle.
+     */
+    @Test
+    fun countRulesWithUnevenPeriodsShowTheirInstanceAtTheProductionBudget() {
+        val prod = { Budget(IcsParser.Limits().maxSteps, IcsParser.Limits().maxStepsPerSeries, Long.MAX_VALUE) { 0L } }
+        val day = LocalDate.of(2026, 3, 31)
+        val the31st = RecurrenceExpander(Rule(Freq.MONTHLY, count = 500, byMonthDay = listOf(31)), dt("2015-01-31T09:00"), false)
+        assertEquals(listOf(dt("2026-03-31T09:00")), the31st.between(day.minusDays(1), day.plusDays(1), prod()))
+        val weekdays = listOf(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY).map { WeekdayNum(0, it) }
+        val lastWeekday = RecurrenceExpander(Rule(Freq.MONTHLY, count = 300, byDay = weekdays, bySetPos = listOf(-1)), dt("2015-01-30T09:00"), false)
+        assertEquals(listOf(dt("2026-03-31T09:00")), lastWeekday.between(day.minusDays(1), day.plusDays(1), prod()))
+        // and the COUNT cut is exact: the 79th 31st is 2026-03-31 (7 a year from 2015, then January and March 2026)
+        val cut = RecurrenceExpander(Rule(Freq.MONTHLY, count = 79, byMonthDay = listOf(31)), dt("2015-01-31T09:00"), false)
+        assertEquals(listOf(dt("2026-03-31T09:00")), cut.between(day.minusDays(1), day.plusDays(1), prod()))
+        val past = RecurrenceExpander(Rule(Freq.MONTHLY, count = 78, byMonthDay = listOf(31)), dt("2015-01-31T09:00"), false)
+        assertEquals(emptyList<LocalDateTime>(), past.between(day.minusDays(1), day.plusDays(1), prod()))
+        // a 1900 start: 1,514 one-step lookups (each calendar shape of month counted once), not 1,514 charged scans
+        val old = RecurrenceExpander(Rule(Freq.MONTHLY, count = 1_000_000, byMonthDay = listOf(31)), dt("1900-01-31T09:00"), false)
+        assertEquals(listOf(dt("2026-03-31T09:00")), old.between(day.minusDays(1), day.plusDays(1), prod()))
+        // a year-1 start: more periods than one 4,800-month cycle, so whole cycles are multiplied out. The COUNT that
+        // ends exactly on 2026-03-31, and one fewer, agree with the brute-force reference.
+        val y1 = dt("0001-01-31T09:00")
+        val all = RfcReference.expand(Rule(Freq.MONTHLY, count = 1_000_000, byMonthDay = listOf(31)), y1, false, day)!!
+        val exact = all.indexOf(dt("2026-03-31T09:00")) + 1L
+        assertTrue(exact > 14_000, "$exact")
+        for ((count, expected) in listOf(exact to listOf(dt("2026-03-31T09:00")), exact - 1 to emptyList())) {
+            val bySetPosToo = listOf(emptyList(), listOf(1)) // with BYSETPOS the cycle path is the only arithmetic one
+            for (sp in bySetPosToo) {
+                val e = RecurrenceExpander(Rule(Freq.MONTHLY, count = count, byMonthDay = listOf(31), bySetPos = sp), y1, false)
+                assertEquals(expected, e.between(day.minusDays(1), day.plusDays(1), prod()), "COUNT=$count BYSETPOS=$sp")
+            }
         }
-        // biweekly drops a DTSTART the rule does not produce; RFC 5545 counts it. Compare only synchronised starts.
-        if (all.isEmpty() || all.first() != start) return null
-        return all.filter { !it.toLocalDate().isBefore(from) }
-    }
-
-    private fun fmt(d: LocalDateTime) = "%04d%02d%02dT%02d%02d%02d".format(d.year, d.monthValue, d.dayOfMonth, d.hour, d.minute, d.second)
-
-    private fun parseRule(start: LocalDateTime, rrule: String): Rule {
-        val m = rrule.split(';').associate { it.substringBefore('=') to it.substringAfter('=') }
-        val list = { k: String -> m[k]?.split(',')?.map { it.toInt() }.orEmpty() }
-        return Rule(
-            freq = Freq.valueOf(m.getValue("FREQ")),
-            interval = m["INTERVAL"]?.toInt() ?: 1,
-            count = m["COUNT"]?.toLong(),
-            until = m["UNTIL"]?.let { LocalDateTime.of(it.substring(0, 4).toInt(), it.substring(4, 6).toInt(), it.substring(6, 8).toInt(), 0, 0) },
-            byMonth = list("BYMONTH"),
-            byMonthDay = list("BYMONTHDAY"),
-            byDay = m["BYDAY"]?.split(',')?.map { s ->
-                val code = s.takeLast(2)
-                val n = s.dropLast(2).ifEmpty { "0" }.toInt()
-                WeekdayNum(n, DayOfWeek.values().first { it.name.startsWith(code) })
-            }.orEmpty(),
-            bySetPos = list("BYSETPOS"),
-        )
+        // YEARLY over 400-year cycles: the last Friday of February from year 1
+        val yearly = Rule(Freq.YEARLY, count = 3_000, byMonth = listOf(2), byDay = listOf(WeekdayNum(-1, DayOfWeek.FRIDAY)))
+        val ys = RfcReference.expand(yearly, dt("0001-02-23T08:00"), false, LocalDate.of(2026, 3, 1))!!
+        assertEquals(ys.filter { it.year == 2026 }, RecurrenceExpander(yearly, dt("0001-02-23T08:00"), false)
+            .between(LocalDate.of(2026, 2, 1), LocalDate.of(2026, 3, 1), prod()))
+        assertEquals(listOf(dt("2026-02-27T08:00")), ys.filter { it.year == 2026 })
     }
 
     /** Found by the oracle test: biweekly 0.6.8 returned Mar 8, 13 and 14 here; every other day cannot be consecutive. */
@@ -164,8 +190,9 @@ class RecurrenceExpanderTest {
 
     @Test
     fun walkPathRunsOutOfSeriesBudgetAndReturnsNull() {
-        // DAILY + BYDAY has no constant count per period, so COUNT needs a walk from year 1: over budget.
-        val rule = Rule(Freq.DAILY, count = 1_000_000_000, byDay = listOf(WeekdayNum(0, DayOfWeek.MONDAY)))
+        // DAILY + BYMONTHDAY has no constant count per period nor a short cycle, so COUNT needs a walk from year 1:
+        // over budget. (DAILY + BYDAY alone is counted over its 7-day cycle: see the differential test.)
+        val rule = Rule(Freq.DAILY, count = 1_000_000_000, byMonthDay = listOf(13))
         val b = Budget(10_000_000, 10_000, System.nanoTime() + 60_000_000_000L)
         assertNull(RecurrenceExpander(rule, dt("0001-01-01T09:00"), false).between(LocalDate.of(2026, 3, 9), LocalDate.of(2026, 3, 12), b))
     }
