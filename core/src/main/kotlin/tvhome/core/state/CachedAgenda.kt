@@ -88,7 +88,7 @@ enum class SaveResult { SAVED, FAILED }
 fun CacheFile.save(c: CachedAgenda): SaveResult = try {
     writeAtomic(c.encode())
     SaveResult.SAVED
-} catch (_: Throwable) {
+} catch (_: Exception) {
     SaveResult.FAILED
 }
 

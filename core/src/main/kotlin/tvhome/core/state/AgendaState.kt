@@ -67,7 +67,7 @@ fun ageText(ageMinutes: Long): String {
  *   otherwise Stale (age shown): fetch failed, or older than 15 min with no newer fetch (e.g. offline since).
  *   Stale is emphasised from exactly 60:00 old, measured in seconds. A failure with data under 60 min old is silent
  *   (design: "plain ok"): the UI renders non-emphasised Stale like Ok.
- * - No usable data: no fetch yet, or a session Ok whose window has since passed, is Loading (a refresh is due);
+ * - No usable data: no fetch yet is Loading; a session Ok whose window has since passed is CantReach;
  *   PARSE / TOO_LARGE is Unreadable; every other failure is CantReach. That includes INSECURE_URL and NOT_CONFIGURED,
  *   which the app should not reach with a validated secret; CantReach is the safe fallback and never shows the URL.
  */
@@ -76,7 +76,9 @@ fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, no
     val data = if (lastFetch is FetchResult.Ok) cacheOf(lastFetch, zone) else cache
     val usable = data?.takeIf { it.covers(neededRange(now, zone)) }
     if (usable == null) {
-        val failed = lastFetch as? FetchResult.Failed ?: return AgendaState.Loading
+        if (lastFetch == null) return AgendaState.Loading
+        // A session Ok whose window has passed is treated like a failed fetch: nothing usable to show.
+        val failed = lastFetch as? FetchResult.Failed ?: return AgendaState.CantReach
         return if (failed.error == SourceError.PARSE || failed.error == SourceError.TOO_LARGE) AgendaState.Unreadable
         else AgendaState.CantReach
     }

@@ -148,7 +148,7 @@ class AgendaStateTest {
         clock.advance(Duration.ofHours(24)) // next local day, window still covers (fetched yesterday)
         assertEquals("Updated 1 day ago", (state(f = ok) as AgendaState.Stale).ageText)
         clock.advance(Duration.ofHours(24)) // two days: window no longer covers tomorrow
-        assertEquals(AgendaState.Loading, state(f = ok))
+        assertEquals(AgendaState.CantReach, state(f = ok))
         assertEquals(AgendaState.CantReach, state(f = fail()))
     }
 
