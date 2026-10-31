@@ -144,3 +144,14 @@ my PC" wakes the PC (Wake-on-LAN) and launches the game. Installing software on 
 
 ## Success signal
 After a week of use Brian says "keep it". No telemetry.
+
+### M5 (later, requested 2026-10-31 23:22Z): clean Kodi, run by talking to Claude
+Brian wants Kodi on the Google TV that stays clean and easy to navigate, and that he configures by talking to Claude.
+Past installs got bogged down by bloat; that comes from third-party "builds" and add-on packs, so we use none.
+- Brian installs official Kodi (XBMC Foundation) from the Play Store himself; our tools never install apps.
+- Stock skin, home menu trimmed to what he uses, no builds, wizards or unofficial repositories.
+- New allowlisted `kodi_*` tools in tv-remote over Kodi's JSON-RPC (home network only, RFC 1918 host, its own
+  credentials stored like the other pairing secrets): play/pause/next, search and play from the library, add a
+  media source, show or hide home-menu items, switch skin among installed ones. No add-on installs without Brian's OK.
+- Open: what he mainly watches (own files, free official add-ons, or both) sets which tools come first.
+Acceptance: Brian says "play the next episode of <show>" and "hide Music from the menu" and both happen on screen.
