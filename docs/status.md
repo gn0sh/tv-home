@@ -10,7 +10,15 @@ Stage: Build M1 (calendar agenda). Spec at 7d04d4e covers M1, M1b (Ask Claude + 
 - Try Projectivy Launcher, report what's missing (Just the calendar (rec) / It covers everything / More than that / Can't try it now) | Play Store on the TV | install, use a day, tap option | asked 2026-10-31 in thread "Customize Brian's LG OLED TV software" (also on Asks inbox) | default: build the calendar agenda app (M1)
 
 ## Problem-key ledger
-(none yet)
+| Key | Returns | Source |
+|---|---|---|
+| android-repo-filter, app-silent-skip, wrapper-no-sha (open until CI), root-plugins-incomplete | 1 | T1 code review (fixed 03d34f5, approved) |
+| instance-cap-starves-today | 1 | M1 core code review |
+| floating-recurring-dst | 1 | M1 core code review |
+| one-bad-event-fails-feed | 1 | M1 core code review |
+| rrule-advance-cpu / ics-parse-cpu-memory-dos | 1 | code + security review (same root cause) |
+| old-dtstart-recurrence-missing | 1 | security review |
+| blocking-in-suspend, fetcher-customize-loosens-tls, redactor-over-redacts, pii-in-data-class-tostring | 1 | M1 core reviews |
 
 ## Run ledger
 | Date | Role | Model/effort | Task | Outcome |
@@ -22,3 +30,13 @@ Stage: Build M1 (calendar agenda). Spec at 7d04d4e covers M1, M1b (Ask Claude + 
 | 2026-10-31 | product-manager | sonnet/medium | Spec: add M1b, M1c, M1b-2 | done (f4cadff, 26c5d18, 7d04d4e) |
 | 2026-10-31 | software-architect | opus/high | Architecture, ADRs 0001-0003, task lists | done (6ca3060) |
 | 2026-10-31 | manager | - | Clickable mockup artifact | published |
+| 2026-10-31 | security-engineer | opus/high | Design review | approve with changes, 1 high + 4 medium (applied dc6db29) |
+| 2026-10-31 | devops-engineer | sonnet/medium | T1 skeleton + fixes | request changes -> approve with nits |
+| 2026-10-31 | code-reviewer | sonnet/medium | T1 review + delta | request changes (1 must-fix) -> approve |
+| 2026-10-31 | backend-engineer | sonnet/medium | T2 ICS parser | done, 33 tests |
+| 2026-10-31 | backend-engineer | sonnet/high | T3 fetch/redaction + integration | done, 66 tests (36f4abf) |
+| 2026-10-31 | code-reviewer | opus/high | M1 core T2+T3 | request changes, 2 must-fix |
+| 2026-10-31 | security-engineer | opus/high | M1 core T2+T3 | approve with changes, 1 medium |
+| 2026-10-31 | backend-engineer | sonnet/medium | T4 cache/state | done, 80 tests (65f1f28) |
+| 2026-10-31 | devops-engineer | sonnet/high | T6 CI workflow | done (6020cbe), unrun until Nov 1 |
+| 2026-10-31 | backend-engineer | opus/high | Fix M1 core findings (escalated after bounce) | running |
