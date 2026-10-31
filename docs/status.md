@@ -1,7 +1,7 @@
 # tv-home status
 
 Feature: tv-home (custom Google TV home screen). Priority: hip pocket (idle time only; Quick Invoice first).
-Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). T8 provisioning and T7 signing scripts approved (2dd6d92). Remaining M1: first CI run + T9 emulator QA after the Nov 1 minutes reset (reminder set for 01:00Z), PR to main, then Brian runs the signing script and T11 install (hard stop). Later milestones wait for the Nov 2 20:00Z usage reset (Brian's pacing choice). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
+Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). T8 provisioning and T7 signing scripts approved (2dd6d92). Remaining M1: first CI run + T9 emulator QA after the Nov 1 minutes reset (reminder set for 01:00Z), PR to main, then Brian runs the signing script and T11 install (hard stop). M1c: Brian (21:38Z) said push ahead cheaply on Opus. C1 server, C4 Google TV, C3 LG built and approved (4eb785d, 200 tests). C2 waits on M1b B1 (services.json). C5 setup on Brian's PC needs his OK (install = hard stop). M4 PC game streaming added to spec (later). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
 - Usage pacing (coordinator, 2026-10-31 15:25Z): weekly limit at 79%. After the two running T5 reviews, run one subagent at a time and no optional panels until Brian answers the pacing card.
@@ -68,4 +68,6 @@ Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on cla
 | 2026-10-31 | devops-engineer | sonnet/medium | T8 provisioning scripts + 2 fix rounds + pwsh CI check | done (7b7275d) |
 | 2026-10-31 | security-engineer | opus/high | T8 review + delta | approve with changes (provision-fallback-argv) -> approve |
 | 2026-10-31 | devops-engineer | sonnet/medium | T7 signing script + 2 fix rounds | done (f824a04) |
+| 2026-10-31 | backend-engineer | opus/medium | M1c C1, C4, C3 + fix rounds | done (4eb785d, 200 tests) |
+| 2026-10-31 | code+security reviewer | opus/high | M1c C1, C4, C3 reviews + fix reviews | C1 request changes -> approve w/ nits; C4 request changes (atv-stale-connection) -> approve w/ nits; C3 approve w/ nits -> approve |
 | 2026-10-31 | security-engineer | opus/high | T7 review + 2 fresh re-reviews | request changes (p12-keypass-ignored) -> approve with changes (stdin-bom) -> approve |
