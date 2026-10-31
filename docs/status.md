@@ -53,5 +53,7 @@ Stage: Build M1 (calendar agenda). Core parser/state approved (f95bec0); T5 app 
 | 2026-10-31 | backend-engineer | opus/high | Fix T2b findings (2 rounds) | done (f9d21dc, f95bec0; 167 + 44 hostile tests) |
 | 2026-10-31 | code-reviewer | opus/high | T2b deltas x2 | approve with nits -> approve |
 | 2026-10-31 | security-engineer | opus/high | T2b deltas x2 | approve with changes -> approve |
-| 2026-10-31 | devops-engineer | sonnet/low | T2b.6 CI hostile + live job | running |
-| 2026-10-31 | frontend-engineer | sonnet/high | T5 :app agenda screen | running |
+| 2026-10-31 | devops-engineer | sonnet/low | T2b.6 CI hostile + live job | done (ec37129; manager-reviewed 26-line diff) |
+| 2026-10-31 | frontend-engineer | sonnet/high | T5 :app agenda screen | done (1c81bc8, 238 core tests; :app uncompiled until CI) |
+| 2026-10-31 | ux-designer (manager applied default) | - | T2b.4 stale copy | default text applied (85f0785), mapping corrected in T5 |
+| 2026-10-31 | code-reviewer + security-engineer | opus/high | T5 review | running |
