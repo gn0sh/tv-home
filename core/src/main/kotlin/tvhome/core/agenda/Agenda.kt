@@ -33,6 +33,17 @@ fun agendaWindow(now: Instant, zone: ZoneId): InstantRange {
 }
 
 /**
+ * Today and tomorrow inside an [agendaWindow]: [window start + 1 day, window start + 3 days) in [zone]. The parser
+ * keeps these instances first when it has to cut to its cap.
+ */
+fun agendaFocus(window: InstantRange, zone: ZoneId): InstantRange {
+    val today = window.start.atZone(zone).toLocalDate().plusDays(1)
+    val start = today.atStartOfDay(zone).toInstant()
+    val end = today.plusDays(2).atStartOfDay(zone).toInstant()
+    return InstantRange(maxOf(start, window.start).coerceAtMost(window.end), minOf(end, window.end).coerceAtLeast(window.start))
+}
+
+/**
  * Today and tomorrow in [zone]. A timed instance appears on every local day it overlaps; it is labelled with its
  * local start time on the day it starts, else Continues. All-day events appear on each date in [start, end).
  * Order: all-day first, then by start, then title.

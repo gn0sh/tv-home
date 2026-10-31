@@ -12,6 +12,7 @@ ADRs: [0001](../adr/0001-tv-home-module-split-and-calendar-source.md) (module sp
 | No `jvmToolchain(17)` in the sandbox (no JDK 17, no auto-provisioning). Use `jvmTarget = 17` + `sourceCompatibility = 17` on JDK 21 | Verified | spike build failed with toolchain, passed with target |
 | Maven Central returns intermittent HTTP 429 to the sandbox; retries succeed (Gradle caches what it got) | Verified | spike |
 | biweekly 0.6.8 expands weekly RRULE across DST, honours EXDATE, handles UTC, TZID=Europe/Paris and VALUE=DATE | Verified | spike test (scratch, outside repo) |
+| ...but its iterator drops 1900 series, shifts floating series 1 h after DST, evaluates VTIMEZONE RRULEs while parsing (OOM on a 335-byte feed), and errs on DAILY;INTERVAL+BYDAY and WEEKLY+BYSETPOS. Used for syntax only since 2026-10-31 | Verified | M1 core reviews; `RecurrenceExpanderTest` oracle |
 | biweekly deps: vinnie 2.0.2, jackson-core 2.16.1 only (Android-safe, uses java.util.TimeZone) | Verified | `gradle dependencies` |
 | ical4j 4.0.8 deps: slf4j, commons-codec, commons-lang3, threeten-extra (lighter than feared), but it loads its own tz data via ZoneRulesProvider, which is risky on Android | Deps verified; Android behaviour unverified | `gradle dependencies` |
 | anthropic-java 3.2.0 resolves; pulls OkHttp 4.12, Jackson 2.19 (databind, kotlin module, jsr310), kotlin-reflect, victools jsonschema-generator, OpenTelemetry API | Verified | `gradle dependencies` |
@@ -96,13 +97,34 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
   (`ZoneId.systemDefault()`, injected). Timed instance appears on each local day it overlaps; label is its local start
   time if it starts that day, else `Continues`. All-day events (VALUE=DATE) appear on each date in [DTSTART, DTEND).
   Sort: all-day first, then by start, then title. Floating times are read in the device zone.
-- **Recurrence.** RRULE/RDATE via biweekly's `getDateIterator(tz)` using the VEVENT's own TZID (from VTIMEZONE or
-  Olson name). EXDATE removes instances. **RECURRENCE-ID overrides are not applied by biweekly**: core must group
-  VEVENTs by UID, drop the original instance for each RECURRENCE-ID, and add the override. `STATUS:CANCELLED`
-  instances are dropped. Iteration is capped (stop once past the window; hard cap 5,000 iterations per VEVENT).
+- **Recurrence (revised after the M1 core reviews, 2026-10-31).** biweekly is kept for the text syntax only. Its
+  iterator is not used: walking from DTSTART made 1900 series vanish, floating series drift an hour after DST, and
+  SECONDLY rules (also inside VTIMEZONE, evaluated at parse time) exhaust CPU or memory. Instead:
+  - VTIMEZONE components are dropped in a text pre-pass (after unfolding, any case or group prefix) before biweekly
+    sees the feed. TZID resolves via `ZoneId.of` (also `/mozilla.org/...`-style prefixes), then a CLDR map of the
+    Windows names Outlook writes, then the device zone (never UTC).
+  - `RecurrenceExpander` (ours) expands DAILY / WEEKLY / MONTHLY / YEARLY with INTERVAL, COUNT, UNTIL, BYMONTH,
+    BYMONTHDAY, BYDAY (ordinals), BYSETPOS, BYHOUR/BYMINUTE/BYSECOND and WKST, in the event's local frame (TZID zone,
+    or the device zone for floating times), so wall-clock times hold across DST. It jumps to the window's period by
+    arithmetic. With COUNT it counts the earlier instances arithmetically when every period yields the same number
+    (all shapes Google writes), else walks period by period under the series budget. DTSTART is always instance 1
+    (RFC 5545). A property test checks it against biweekly's iterator on recent DTSTARTs; it found two biweekly bugs
+    (DAILY;INTERVAL>1 with BYDAY, WEEKLY with BYSETPOS), and ours follows the RFC there.
+  - Not expanded (the series shows its DTSTART only): SECONDLY, MINUTELY, HOURLY (no family calendar needs them,
+    Google's UI cannot make them, and they were the DoS vector), BYYEARDAY, BYWEEKNO, more than 1,000 candidates in
+    one period, COUNT <= 0. Only the first RRULE counts; EXRULE is ignored.
+  - EXDATE removes instances (a DATE EXDATE removes that local day). RDATE adds them. **RECURRENCE-ID**: VEVENTs are
+    grouped by UID, the original instance for each RECURRENCE-ID is dropped and the override added.
+    **RANGE=THISANDFUTURE is not handled**: such an override replaces only its own instance (Google and Outlook split
+    the series instead of writing it). `STATUS:CANCELLED` events and instances are dropped.
+  - One VEVENT that throws (an impossible date, a bad value) is skipped; the rest of the feed is used.
 - **Boundaries catch `Throwable`** (`#3 okhttp-key-in-exception`): `IcsCalendarSource.fetch` and
   `ClaudeAssistant.resolve` wrap everything, map to the error enum and drop the throwable; nothing is rethrown.
-- **Parsing limits:** biweekly text parser only (never `parseXml`); at most 500 expanded instances in total.
+- **Parsing limits:** biweekly text parser only (never `parseXml`). More than 30,000 VEVENTs fails the parse
+  (`PARSE`). A parse-wide budget of 2,000,000 candidate dates, 200,000 per series, and a 2 s wall-clock deadline;
+  when one runs out the series not yet expanded are skipped and the rest is returned (one-off events are processed
+  first). At most 500 instances are returned: those overlapping today and tomorrow (`agendaFocus`) first, then the
+  earliest; the list is in start order. The parse polls the thread's interrupt flag.
 - **Fetch.** HTTPS only (rejected in core before any I/O, plus Android `cleartextTrafficPermitted=false`).
   OkHttp: connect 5 s, read 10 s, call 15 s, `followSslRedirects(false)`, response body capped at 10 MB
   (`TOO_LARGE`). Parsing runs off the main thread. Before fetching, the app checks connectivity; offline gives

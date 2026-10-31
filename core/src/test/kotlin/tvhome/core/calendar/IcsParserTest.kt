@@ -142,11 +142,12 @@ class IcsParserTest {
     }
 
     @Test
-    fun runawayRuleIsBoundedByTheInstanceCap() {
+    fun secondlyRuleIsNotExpandedAndShowsOnlyItsDtstart() {
         val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:run@t\r\nDTSTAMP:20260101T000000Z\r\n" +
             "DTSTART:20260310T000000Z\r\nDTEND:20260310T000001Z\r\nRRULE:FREQ=SECONDLY\r\nSUMMARY:Runaway\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
         val r = IcsParser.parse(ics, agendaWindow(now, ny), ny)
-        assertEquals(IcsParser.MAX_INSTANCES, r.size)
+        assertEquals(listOf(at("2026-03-10T00:00:00Z")), r.map { it.start })
+        assertEquals(at("2026-03-10T00:00:01Z"), r.single().end)
     }
 
     @Test
@@ -160,7 +161,7 @@ class IcsParserTest {
     }
 
     @Test
-    fun manyEventsAreCappedAtMaxInstancesAcrossTheWholeParse() {
+    fun manyEventsAreCappedAtMaxInstancesKeepingAStableChoice() {
         val sb = StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n")
         repeat(3_000) { i ->
             sb.append("BEGIN:VEVENT\r\nUID:e$i@t\r\nDTSTAMP:20260101T000000Z\r\n")
@@ -168,19 +169,49 @@ class IcsParserTest {
         }
         sb.append("END:VCALENDAR\r\n")
         val r = IcsParser.parse(sb.toString(), agendaWindow(now, ny), ny)
-        assertEquals(IcsParser.MAX_INSTANCES, r.size)
         assertEquals(500, IcsParser.MAX_INSTANCES)
+        assertEquals(IcsParser.MAX_INSTANCES, r.size)
+        // Same start for all: ties break by title, so the kept ones are the first 500 titles in sort order.
+        assertEquals((0 until 3_000).map { "Event $it" }.sorted().take(500), r.map { it.title })
+    }
+
+    /** instance-cap-starves-today: yesterday's events listed first in the feed must not push out today's. */
+    @Test
+    fun capKeepsTodayAndTomorrowBeforeYesterday() {
+        val sb = StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n")
+        fun ev(uid: String, start: String, title: String) = sb.append("BEGIN:VEVENT\r\nUID:$uid\r\nDTSTAMP:20260101T000000Z\r\n")
+            .append("DTSTART:${start}\r\nSUMMARY:$title\r\nEND:VEVENT\r\n")
+        repeat(600) { ev("y$it@t", "20260309T120000Z", "Y%03d".format(it)) }   // yesterday (Mar 9), first in the feed
+        repeat(10) { ev("t$it@t", "20260310T150000Z", "T$it") }                // today
+        repeat(5) { ev("m$it@t", "20260311T150000Z", "M$it") }                 // tomorrow
+        repeat(5) { ev("d$it@t", "20260312T150000Z", "D$it") }                 // day after tomorrow (window only)
+        sb.append("END:VCALENDAR\r\n")
+        val w = agendaWindow(now, ny)
+        val r = IcsParser.parse(sb.toString(), w, ny, focus = tvhome.core.agenda.agendaFocus(w, ny))
+        assertEquals(500, r.size)
+        val titles = r.map { it.title }
+        assertEquals((0 until 10).map { "T$it" } + (0 until 5).map { "M$it" }, titles.filter { it[0] == 'T' || it[0] == 'M' })
+        // the rest of the cap goes to the earliest of the others: yesterday's Y000..Y484; day-after-tomorrow loses
+        assertEquals((0 until 485).map { "Y%03d".format(it) }, titles.filter { it[0] == 'Y' })
+        assertTrue(titles.none { it[0] == 'D' })
+        assertEquals(r.sortedBy { (it.start as EventTime.At).instant }, r) // returned in start order
+        // the real adapter passes the focus too
+        val viaAdapter = IcsParse.ics { ny }.parse(sb.toString(), w)
+        assertEquals(r, viaAdapter)
     }
 
     @Test
-    fun manyRecurringEventsTogetherAreCapped() {
+    fun manyRecurringSeriesTogetherAreCappedKeepingTheEarliestOfToday() {
         val sb = StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n")
         repeat(100) { i ->
             sb.append("BEGIN:VEVENT\r\nUID:r$i@t\r\nDTSTAMP:20260101T000000Z\r\n")
-                .append("DTSTART:20260310T000000Z\r\nDTEND:20260310T000100Z\r\nRRULE:FREQ=HOURLY\r\nSUMMARY:R $i\r\nEND:VEVENT\r\n")
+                .append("DTSTART:20260301T000000Z\r\nDTEND:20260301T000100Z\r\nRRULE:FREQ=DAILY;BYHOUR=${(0..23).joinToString(",")}\r\nSUMMARY:R $i\r\nEND:VEVENT\r\n")
         }
         sb.append("END:VCALENDAR\r\n")
-        val r = IcsParser.parse(sb.toString(), agendaWindow(now, ny), ny)
+        val r = IcsParse.ics { ny }.parse(sb.toString(), agendaWindow(now, ny))
         assertEquals(IcsParser.MAX_INSTANCES, r.size)
+        // Today starts 04:00Z (midnight EDT). 100 series x 5 hours = 500: today's 04:00Z..08:00Z, nothing else.
+        val hours = r.map { (it.start as EventTime.At).instant }.groupingBy { it }.eachCount()
+        assertEquals((4..8).map { Instant.parse("2026-03-10T%02d:00:00Z".format(it)) to 100 }.toMap(), hours)
     }
 }

@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import tvhome.core.agenda.agendaFocus
 import tvhome.core.secrets.SecretKey
 import tvhome.core.secrets.SecretStore
 import java.time.Instant
@@ -18,9 +19,14 @@ fun interface IcsParse {
     fun parse(ics: String, window: InstantRange): List<EventInstance>
 
     companion object {
-        /** The real parser. [zone] is read per call so a device time-zone change is picked up. */
-        fun ics(zone: () -> ZoneId = ZoneId::systemDefault): IcsParse =
-            IcsParse { text, window -> IcsParser.parse(text, window, zone()) }
+        /**
+         * The real parser. [zone] is read per call so a device time-zone change is picked up. When the 500-instance
+         * cap cuts, today and tomorrow (see [agendaFocus]) are kept first.
+         */
+        fun ics(zone: () -> ZoneId = ZoneId::systemDefault): IcsParse = IcsParse { text, window ->
+            val z = zone()
+            IcsParser.parse(text, window, z, focus = agendaFocus(window, z))
+        }
     }
 }
 
