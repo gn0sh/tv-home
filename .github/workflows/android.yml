@@ -64,6 +64,21 @@ jobs:
       # Fake-adb test of scripts/provision.sh (no secrets; uses the FakeSecrets token pattern).
       - name: provision.sh test
         run: scripts/ci/test-provision.sh
+      # PowerShell scripts: parse check (messages and line numbers only) and a non-interactive refusal smoke test.
+      - name: PowerShell scripts parse and refuse non-interactive input
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem scripts -Filter *.ps1 -Recurse) {
+              $errs = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+              foreach ($e in $errs) { Write-Host "$($f.Name):$($e.Extent.StartLineNumber): $($e.Message)"; $bad++ }
+          }
+          if ($bad -gt 0) { exit 1 }
+          $out = '' | pwsh -NoProfile -File scripts/provision.ps1 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0) { Write-Host 'provision.ps1 accepted redirected stdin'; exit 1 }
+          if ($out -notmatch 'own PowerShell window') { Write-Host 'provision.ps1 failed for another reason'; exit 1 }
+          Write-Host 'ps1 checks passed'
       # Hostile ICS probes (tag hostile) in a 96 MiB JVM; runs after :core:test, never alongside it (p14-perf-flaky).
       - name: :core:hostileTest
         run: scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/hostile.log" :core:hostileTest

@@ -60,6 +60,13 @@ function Invoke-Adb([string[]]$AdbArgs, [byte[]]$Stdin = $null, [int]$TimeoutMs 
     [pscustomobject]@{ Code = $p.ExitCode; Text = ($outTask.Result + $errTask.Result) }
 }
 
+# Checked first, before anything touches adb.
+if (-not $Clear) {
+    if ([Console]::IsInputRedirected -or -not [Environment]::UserInteractive) {
+        Fail 'Run this in your own PowerShell window. It will not read the value from a pipe, file or agent session.'
+    }
+}
+
 # --- adb present, exactly one device -------------------------------------------------------------------------
 if ($Serial -and $Serial -notmatch '^[A-Za-z0-9:._-]+$') { Fail 'Serial has odd characters.' }
 $adbCmd = Get-Command adb -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -90,11 +97,6 @@ if ($Clear) {
     $s = Show-State
     if ($s.Configured -eq '0') { Write-Host 'Removed.' } else { Fail 'Still configured.' }
     exit 0
-}
-
-# --- interactive only ------------------------------------------------------------------------------------------
-if ([Console]::IsInputRedirected -or -not [Environment]::UserInteractive) {
-    Fail 'Run this in your own PowerShell window. It will not read the value from a pipe, file or agent session.'
 }
 
 $secure = Read-Host -Prompt "Paste the $Key (hidden, then press Enter)" -AsSecureString
