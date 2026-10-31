@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
-Key = Literal["UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK", "HOME", "PLAY_PAUSE", "REWIND", "FAST_FORWARD"]
+Key = Literal["UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK", "HOME", "PLAY_PAUSE", "REWIND", "FAST_FORWARD",
+              "VOLUME_UP", "VOLUME_DOWN", "MUTE", "POWER"]
 LgInput = Literal["HDMI_1", "HDMI_2", "HDMI_3", "HDMI_4"]
 Device = Literal["lg", "googletv"]
 

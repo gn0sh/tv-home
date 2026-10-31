@@ -59,6 +59,11 @@ KEYCODES: dict[str, str] = {
     "PLAY_PAUSE": "KEYCODE_MEDIA_PLAY_PAUSE",
     "REWIND": "KEYCODE_MEDIA_REWIND",
     "FAST_FORWARD": "KEYCODE_MEDIA_FAST_FORWARD",
+    # Over HDMI-CEC the Google TV passes these to the LG (decision 2026-10-31: the LG BX refuses the secure port).
+    "VOLUME_UP": "KEYCODE_VOLUME_UP",
+    "VOLUME_DOWN": "KEYCODE_VOLUME_DOWN",
+    "MUTE": "KEYCODE_VOLUME_MUTE",
+    "POWER": "KEYCODE_POWER",
 }
 _PACKAGE_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$")
 

@@ -66,6 +66,9 @@ INSTRUCTIONS = (
     "device is unreachable, tell Brian which one and do nothing else. LG volume is capped at 60."
 )
 
+# Volume over HDMI-CEC reports no level, so the 60 cap cannot be checked; keep each raise small instead.
+CEC_VOLUME_UP_MAX = 3
+
 LinkBuilder = Callable[[str, str | None, str | None], str]
 
 
@@ -198,7 +201,13 @@ def build_server(
 
     @server.tool(annotations=acts)
     async def tv_key(key: Key, repeat: Annotated[int, Field(ge=1, le=10)] = 1) -> str:
-        """Press a remote button on the Google TV, 1-10 times."""
+        """Press a remote button on the Google TV, 1-10 times. VOLUME_UP/VOLUME_DOWN/MUTE/POWER reach the LG over
+        HDMI-CEC; VOLUME_UP is limited to 3 presses per call and POWER to 1, because no volume level comes back."""
+        if key == "VOLUME_UP" and repeat > CEC_VOLUME_UP_MAX:
+            raise ToolError(f"Refused: VOLUME_UP is limited to {CEC_VOLUME_UP_MAX} presses per call; "
+                            "the TV does not report its volume over HDMI, so it cannot be raised safely in bigger steps.")
+        if key == "POWER" and repeat != 1:
+            raise ToolError("Refused: POWER is pressed once per call.")
         g = need_gtv()
         for sent in range(repeat):
             try:

@@ -22,7 +22,8 @@ def test_schemas_carry_enums_and_ranges(h):
     key = t["tv_key"].input_schema
     assert key["properties"]["repeat"]["minimum"] == 1 and key["properties"]["repeat"]["maximum"] == 10
     keys = str(key)
-    for k in ["UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK", "HOME", "PLAY_PAUSE", "REWIND", "FAST_FORWARD"]:
+    for k in ["UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK", "HOME", "PLAY_PAUSE", "REWIND", "FAST_FORWARD",
+              "VOLUME_UP", "VOLUME_DOWN", "MUTE", "POWER"]:
         assert k in keys
     vol = str(t["lg_volume"].input_schema)
     assert "'maximum': 60" in vol and "'minimum': 0" in vol and "'up'" in vol
@@ -49,7 +50,9 @@ def test_anything_outside_the_list_is_refused_clearly(h, name):
         ("lg_volume", {"level": 61}, "60"),
         ("lg_volume", {"level": -1}, "0"),
         ("lg_volume", {"level": "max"}, "lg_volume"),
-        ("tv_key", {"key": "POWER"}, "tv_key"),
+        ("tv_key", {"key": "SETTINGS"}, "tv_key"),
+        ("tv_key", {"key": "VOLUME_UP", "repeat": 4}, "3 presses"),
+        ("tv_key", {"key": "POWER", "repeat": 2}, "once"),
         ("tv_key", {"key": "OK", "repeat": 11}, "10"),
         ("tv_key", {"key": "OK", "repeat": 0}, "1"),
         ("lg_input", {"source": "USB"}, "lg_input"),
@@ -78,6 +81,15 @@ def test_happy_paths(h):
     h.text("tv_key", key="DOWN", repeat=3)
     h.text("tv_launch_app", service="netflix")
     assert h.gtv.calls == [("send_key", "DOWN")] * 3 + [("launch_package", "com.netflix.ninja")]
+
+
+def test_cec_keys_reach_the_google_tv_within_limits(h):
+    h.text("tv_key", key="VOLUME_UP", repeat=3)
+    h.text("tv_key", key="VOLUME_DOWN", repeat=10)
+    h.text("tv_key", key="MUTE")
+    h.text("tv_key", key="POWER")
+    assert h.gtv.calls == ([("send_key", "VOLUME_UP")] * 3 + [("send_key", "VOLUME_DOWN")] * 10
+                           + [("send_key", "MUTE"), ("send_key", "POWER")])
 
 
 def test_volume_up_never_passes_cap_with_non_clamping_fake(h):
