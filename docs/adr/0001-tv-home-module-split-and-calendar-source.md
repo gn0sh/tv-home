@@ -1,0 +1,55 @@
+# ADR 0001: tv-home module split, calendar source, ICS library, secrets and signing
+
+Status: accepted (architect), 2026-10-31. Feature: tv-home M1. Architecture: `docs/architecture/tv-home.md`.
+
+## Context
+M1 is a standalone Google TV agenda app. Our cloud sandbox has JDK 21 and Gradle but no Android SDK
+(dl.google.com is blocked), so APKs can only build in GitHub Actions, which has no minutes until 2026-11-01 00:00Z
+and no repo yet. The spec requires maintained libraries, JVM unit tests for the logic, a secret ICS URL that never
+leaks and is never typed on the TV, allowBackup=false, non-debuggable release builds, minSdk 31 / target 34,
+`<queries>` instead of QUERY_ALL_PACKAGES, and one stable signing key. Calendar source (ICS or OAuth) is still
+Brian's decision; default ICS.
+
+## Decision
+1. **Split:** `:core` is a pure Kotlin/JVM library holding every rule (source interface, fetch, ICS parsing and
+   recurrence, windowing, cache, state reducer, redaction, later deep links and the assistant contract). `:app` is
+   a thin Android TV module that renders `AgendaState` and holds Android glue (Keystore, lifecycle, activities).
+   `:app` is included in the Gradle build only when an Android SDK is present, so `:core:test` runs in the sandbox.
+   Bytecode target 17 on JDK 21 (no toolchain block, because the sandbox has no JDK 17).
+2. **`CalendarSource` is the seam.** M1 implements `IcsCalendarSource`. A later `GoogleOAuthCalendarSource`
+   (device flow, calendar.readonly) implements the same interface and returns the same `EventInstance`s.
+3. **ICS library: biweekly 0.6.8** (BSD-2), with OkHttp 4.12 as the HTTP client. Spike (scratch, outside the repo)
+   verified RRULE across DST, EXDATE, UTC, foreign TZID and all-day on the JVM. Its only deps are vinnie and
+   jackson-core, and it uses `java.util.TimeZone`, which Android supports natively. Core must add
+   RECURRENCE-ID override handling and STATUS:CANCELLED filtering, which biweekly's iterator does not do.
+4. **UI: Compose for TV** (androidx.tv tv-material), not Leanback (maintenance mode, fragment-heavy).
+5. **Secrets onto the device:** a PC script reads the value with a hidden prompt and runs `adb shell am start` with
+   a string extra into `ProvisionActivity`, which is guarded by `android.permission.DUMP` (adb shell has it,
+   third-party apps cannot). Stored AES-GCM encrypted with an AndroidKeyStore key in `noBackupFilesDir`. Errors
+   are enums; no exception text or URL leaves `:core`; release builds strip all `Log` calls.
+6. **Signing:** one dedicated RSA-4096 keystore, generated on Brian's PC (so he holds the backup), uploaded to
+   GitHub Actions secrets with `gh secret set`, never in the repo. CI signs only on push to `main`.
+
+## Alternatives considered
+- **ical4j 4.0.8.** Deps are lighter than expected (slf4j, commons-codec, commons-lang3, threeten-extra) and it is
+  the most complete RFC 5545 library. Rejected for M1 because it loads its own tz database through
+  `ZoneRulesProvider`, which has a history of trouble on Android, and biweekly already passes our fixtures. Kept as
+  the fallback behind `IcsParser` if biweekly fails a fixture we cannot work around.
+- **Hand-rolled parser.** Rejected by the spec.
+- **Leanback.** Rejected above. **Single Android module with Robolectric tests:** rejected, because it cannot run
+  in the sandbox without the SDK.
+- **adb push into app-private storage:** needs `run-as`, which only works on debuggable builds. **QR code to a
+  phone page:** needs an HTTP server on the TV. **Typing on the TV:** ruled out by the spec.
+- **Generate the keystore in CI:** Actions cannot write its own secrets without a stored PAT, and nobody would hold
+  a backup.
+- **Don't build it (Projectivy or another launcher with a calendar widget):** that is M0's job; if M0 finds a
+  launcher widget that shows his calendar, M1 is dropped.
+
+## Consequences
+- Logic is tested now, in the sandbox; Android code is written blind until CI minutes reset and the repo exists.
+  The first CI run is the first compile of `:app`, so expect a fix-up round.
+- RECURRENCE-ID handling is ours to own and test.
+- Re-provisioning is needed after reinstall (Keystore keys die with the app).
+- If the `DUMP` guard does not work from adb shell on his Android version, switch to a `ContentProvider` with the
+  same guard (`adb shell content call`).
+- Recommend: no Brain Trust needed; all of this is reversible within M1.
