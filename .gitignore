@@ -12,3 +12,7 @@ captures/
 *.jks
 *.keystore
 .worktrees/
+.env
+*.pem
+*.p12
+app/release/
