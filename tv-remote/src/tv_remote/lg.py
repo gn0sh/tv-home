@@ -10,8 +10,10 @@ which need far more than our 8 permissions. This module is a small SSAP client o
     is never auto-allowed, so Brian starts it himself while at the TV.
   - Registers with the trimmed 8-permission manifest, and refuses locally any SSAP URI not on ALLOWED_URIS.
   - The client key is sealed with DPAPI (secretstore) and never written unencrypted.
-  - Each request waits for its reply. A link that has been quiet for SILENCE_LIMIT is replaced before use, so a
-    half-open link (Wi-Fi blip, TV standby) is not trusted.
+  - Each request waits for its reply (matched by id, which the TV echoes on requests). The TV sends nothing on an
+    idle link (no pings), so "quiet for SILENCE_LIMIT" just means no command in the last 7 s: any command after
+    such a pause opens a fresh connection (TLS + register, well under a second on the LAN) instead of trusting a
+    link that may have gone half-open (Wi-Fi blip, TV standby). Commands in quick succession share one link.
 Files in the config folder: lg-client-key.sealed, lg-tv-cert.sha256.
 """
 
@@ -72,8 +74,9 @@ PIN_FILE = "lg-tv-cert.sha256"
 CONNECT_TIMEOUT = 8.0
 REQUEST_TIMEOUT = 6.0
 PAIR_TIMEOUT = 60.0  # time Brian has to accept the prompt on the TV
-SILENCE_LIMIT = 7.0
+SILENCE_LIMIT = 7.0  # seconds without any reply from the TV; see the module docstring
 MAX_MSG = 1 << 20
+WS_CLOSE_TIMEOUT = 1.0
 
 REASON_NO_ANSWER = "no answer"
 REASON_CLOSED = "connection closed"
@@ -85,6 +88,9 @@ REFUSED_PERMISSION = ("The LG TV refused this: it is outside the 8 permissions t
 REFUSED_GENERIC = "The LG TV refused the request."
 REFUSED_LOCAL = "Refused: tv-remote does not send that request to the LG TV."
 
+_HELLO = frozenset({"hello"})
+_REPLY = frozenset({"response", "error"})
+_REGISTER = frozenset({"response", "registered", "error"})
 _HDMI_APP = re.compile(r"^com\.webos\.app\.hdmi([1-4])$")
 _ON_STATES = {"Active", "Screen Off", "Screen Saver"}
 
@@ -202,7 +208,9 @@ class LgRemote:
         session = aiohttp.ClientSession()
         try:
             ws = await asyncio.wait_for(
-                session.ws_connect(self.url, ssl=ctx, heartbeat=None, autoping=True, max_msg_size=MAX_MSG),
+                session.ws_connect(self.url, ssl=ctx, heartbeat=None, autoping=True, max_msg_size=MAX_MSG,
+                                   # a dead TV must not hold a close (and the next command) for aiohttp's 10 s
+                                   timeout=aiohttp.ClientWSTimeout(ws_close=WS_CLOSE_TIMEOUT)),
                 CONNECT_TIMEOUT,
             )
         except BaseException as exc:
@@ -217,7 +225,11 @@ class LgRemote:
             raise
         return session, ws, ctx
 
-    async def _recv(self, ws, want_id: str | None, timeout: float, sent: bool) -> dict[str, Any]:
+    async def _recv(self, ws, want_id: str | None, timeout: float, sent: bool,
+                    untagged_types: frozenset[str] = frozenset()) -> dict[str, Any]:
+        """Next message whose id is want_id. During the preamble and registration the TV may reply without an id
+        (aiowebostv reads those replies by type), so a message with no id whose type is in untagged_types also
+        matches."""
         deadline = self._clock() + timeout
         while True:
             remaining = deadline - self._clock()
@@ -239,14 +251,16 @@ class LgRemote:
                 continue
             if want_id is None or str(data.get("id")) == want_id:
                 return data
+            if data.get("id") is None and data.get("type") in untagged_types:
+                return data
 
     async def _preamble(self, ws) -> None:
         await ws.send_json({"id": "hello", "type": "hello", "payload": {}})
-        await self._recv(ws, "hello", REQUEST_TIMEOUT, sent=False)
+        await self._recv(ws, "hello", REQUEST_TIMEOUT, sent=False, untagged_types=_HELLO)
         # Newer webOS wants system info before registration (as aiowebostv does). Allowed without permissions.
         await ws.send_json({"id": "get_sys_info", "type": "request", "uri": f"ssap://{ep.GET_SYSTEM_INFO}",
                             "payload": {}})
-        await self._recv(ws, "get_sys_info", REQUEST_TIMEOUT, sent=False)
+        await self._recv(ws, "get_sys_info", REQUEST_TIMEOUT, sent=False, untagged_types=_REPLY)
 
     async def _ensure(self) -> _Link:
         if self._link is not None and not self._link.ws.closed and self._clock() - self._link.last_rx <= SILENCE_LIMIT:
@@ -259,7 +273,7 @@ class LgRemote:
         try:
             await self._preamble(ws)
             await ws.send_json(registration_message(key))
-            reply = await self._recv(ws, "register_0", REQUEST_TIMEOUT, sent=False)
+            reply = await self._recv(ws, "register_0", REQUEST_TIMEOUT, sent=False, untagged_types=_REGISTER)
             if reply.get("type") != "registered":
                 # A stale key makes the TV show a pairing prompt. Close at once; only tv_pair may pair.
                 raise NotPaired("lg")
@@ -321,11 +335,13 @@ class LgRemote:
         await self._request(ep.SET_VOLUME, {"volume": level})
         return level
 
-    async def volume_step(self, direction: Literal["up", "down"]) -> int:
+    async def volume_step(self, direction: Literal["up", "down"]) -> int | None:
+        """Step once; returns the new level, or None if the step worked but the TV did not report the level."""
         await self._request(ep.VOLUME_UP if direction == "up" else ep.VOLUME_DOWN)
-        volume, _ = _volume_of(await self._request(ep.GET_VOLUME))
-        if volume is None:
-            raise DeviceRefused("The LG TV changed the volume but did not report the new level.")
+        try:
+            volume, _ = _volume_of(await self._request(ep.GET_VOLUME))
+        except (DeviceRefused, DeviceUnreachable):
+            return None
         return volume
 
     async def set_mute(self, muted: bool) -> None:
@@ -344,10 +360,10 @@ class LgRemote:
             try:
                 await self._preamble(ws)
                 await ws.send_json(registration_message(None))
-                reply = await self._recv(ws, "register_0", REQUEST_TIMEOUT, sent=False)
+                reply = await self._recv(ws, "register_0", REQUEST_TIMEOUT, sent=False, untagged_types=_REGISTER)
                 if reply.get("type") == "response" and (reply.get("payload") or {}).get("pairingType") == "PROMPT":
                     try:
-                        reply = await self._recv(ws, "register_0", PAIR_TIMEOUT, sent=False)
+                        reply = await self._recv(ws, "register_0", PAIR_TIMEOUT, sent=False, untagged_types=_REGISTER)
                     except DeviceUnreachable as exc:
                         if exc.reason == REASON_TIMEOUT:
                             return "Nobody accepted the prompt on the LG TV in time. Call tv_pair again at the TV."

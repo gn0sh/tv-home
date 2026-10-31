@@ -64,7 +64,14 @@ class FakeTV:
         self.connections = 0
         self.secure = []
         self.silent = False
+        self.stray = False
+        self.register_ids = False  # whether register replies echo the id (firmware differs; both must work)
         self.runner = None
+
+    def tag(self, msg, mid):
+        if self.register_ids:
+            msg["id"] = mid
+        return msg
 
     async def start(self):
         app = web.Application()
@@ -93,32 +100,36 @@ class FakeTV:
                 continue
             t, mid = m.get("type"), m.get("id")
             if t == "hello":
-                await ws.send_json({"type": "hello", "id": mid, "payload": {"deviceOS": "webOS"}})
+                # Real TVs answer hello (and the pre-registration calls) without an id; aiowebostv reads them by type.
+                await ws.send_json({"type": "hello", "payload": {"deviceOS": "webOS"}})
             elif t == "register":
                 p = m["payload"]
                 self.registrations.append(p)
                 key = p.get("client-key")
                 if key in self.keys:
                     perms = self.keys[key]
-                    await ws.send_json({"type": "registered", "id": mid, "payload": {"client-key": key}})
+                    await ws.send_json(self.tag({"type": "registered", "payload": {"client-key": key}}, mid))
                     continue
-                await ws.send_json({"type": "response", "id": mid, "payload": {"pairingType": "PROMPT"}})
+                await ws.send_json(self.tag({"type": "response", "payload": {"pairingType": "PROMPT"}}, mid))
                 if self.pair_answer == "accept":
                     new = f"key-{len(self.keys) + 1}"
                     self.keys[new] = set(p["manifest"]["permissions"])
                     perms = self.keys[new]
-                    await ws.send_json({"type": "registered", "id": mid, "payload": {"client-key": new}})
+                    await ws.send_json(self.tag({"type": "registered", "payload": {"client-key": new}}, mid))
                 elif self.pair_answer == "decline":
-                    await ws.send_json({"type": "error", "id": mid, "error": "403 cancelled", "payload": {}})
+                    await ws.send_json(self.tag({"type": "error", "error": "403 cancelled", "payload": {}}, mid))
             elif t == "request":
                 uri = m["uri"].removeprefix("ssap://")
                 if uri == "system/getSystemInfo":
-                    await ws.send_json({"type": "response", "id": mid, "payload": {"returnValue": True}})
+                    await ws.send_json({"type": "response", "payload": {"returnValue": True}})
                     continue
                 if perms is None or NEEDS.get(uri, "UNKNOWN") not in perms:
                     await ws.send_json({"type": "error", "id": mid, "error": "401 insufficient permissions",
                                         "payload": {}})
                     continue
+                if self.stray:
+                    await ws.send_json({"type": "response", "payload": {"returnValue": True, "state": "Active",
+                                                                         "volumeStatus": {"volume": 99}}})
                 await ws.send_json({"type": "response", "id": mid, "payload": self.answer(uri, m["payload"])})
         return ws
 
@@ -182,12 +193,29 @@ def scenario(env, body, **tv_kw):
 # --- manifest and transport -----------------------------------------------------------------------------------------
 
 
-def test_manifest_is_exactly_the_eight_permissions():
-    msg = registration_message(None)
-    assert msg["payload"]["manifest"]["permissions"] == list(PERMISSIONS)
-    assert set(PERMISSIONS) == {"LAUNCH", "CONTROL_POWER", "CONTROL_AUDIO", "CONTROL_INPUT_TV",
-                                "READ_INPUT_DEVICE_LIST", "READ_RUNNING_APPS", "READ_POWER_STATE", "READ_APP_STATUS"}
-    assert "client-key" not in msg["payload"] and registration_message("k")["payload"]["client-key"] == "k"
+def test_registration_payload_is_exactly_as_expected():
+    expected = {
+        "forcePairing": False,
+        "manifest": {
+            "appVersion": "1.1",
+            "manifestVersion": 1,
+            "permissions": [
+                "LAUNCH",
+                "CONTROL_POWER",
+                "CONTROL_AUDIO",
+                "CONTROL_INPUT_TV",
+                "READ_INPUT_DEVICE_LIST",
+                "READ_RUNNING_APPS",
+                "READ_POWER_STATE",
+                "READ_APP_STATUS",
+            ],
+        },
+        "pairingType": "PROMPT",
+    }
+    assert registration_message(None) == {"type": "register", "id": "register_0", "payload": expected}
+    assert registration_message("k") == {"type": "register", "id": "register_0",
+                                         "payload": {**expected, "client-key": "k"}}
+    assert list(PERMISSIONS) == expected["manifest"]["permissions"]
     from aiowebostv.handshake import REGISTRATION_PAYLOAD
 
     assert len(REGISTRATION_PAYLOAD["manifest"]["permissions"]) > 30  # library default untouched by our copy
@@ -270,6 +298,60 @@ def test_pairing_accept_seals_key_and_pins_cert(env):
     assert vault.pinned() == fp and vault.client_key() == "key-1"
     sealed = (tmp_path / "state" / lgmod.KEY_FILE).read_bytes()
     assert b"key-1" not in sealed and sealed.startswith(FakeProtector.TAG)
+
+
+@pytest.mark.parametrize("echo", [False, True])
+def test_pairing_and_commands_with_and_without_register_ids(env, echo):
+    async def body(tv, remote, packets):
+        msg = await remote.pair()
+        await remote.set_mute(True)
+        return msg, tv.muted, [m for m in tv.log if m["type"] == "hello"]
+
+    msg, muted, hellos = scenario(env, body, register_ids=echo)
+    assert msg == "LG TV paired." and muted is True and len(hellos) == 2
+
+
+def test_request_replies_still_match_by_id(env):
+    """An untagged message (e.g. a stray event) must not be taken as the reply to a request."""
+
+    async def inner(tv, remote, packets):
+        tv.stray = True
+        return await remote.status()
+
+    st = scenario(env, _paired_body(inner))
+    assert st.volume == 20
+
+
+def test_ws_close_timeout_is_short():
+    assert lgmod.WS_CLOSE_TIMEOUT == 1.0
+
+
+def test_volume_step_without_readback_reports_step(env):
+    async def inner(tv, remote, packets):
+        orig = tv.answer
+
+        def answer(uri, payload):
+            if uri == "audio/getVolume":
+                return {"returnValue": True}
+            return orig(uri, payload)
+
+        tv.answer = answer
+        return await remote.volume_step("down"), tv.volume
+
+    new, vol = scenario(env, _paired_body(inner))
+    assert new is None and vol == 19
+
+
+def test_tool_message_when_step_level_unknown():
+    from conftest import Harness
+
+    h = Harness()
+
+    async def step(direction):
+        return None
+
+    h.lg.volume_step = step
+    assert "did not report the new level" in h.text("lg_volume", level="down")
 
 
 def test_pairing_declined(env):

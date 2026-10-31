@@ -237,6 +237,8 @@ def build_server(
                         return f"LG TV volume was {current}, above the cap; set to {new}."
                     return f"LG TV volume is already at the cap ({VOLUME_CAP})."
             new = await run(t.volume_step(level))
+            if new is None:
+                return f"LG TV volume stepped {level} once; the TV did not report the new level."
         else:
             if not 0 <= level <= VOLUME_CAP:  # schema also checks; kept so the cap never depends on it
                 raise ToolError(f"Refused: volume must be 0-{VOLUME_CAP}.")
