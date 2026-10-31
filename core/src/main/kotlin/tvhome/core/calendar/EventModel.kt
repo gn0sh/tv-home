@@ -12,7 +12,10 @@ data class InstantRange(val start: Instant, val end: Instant) {
     operator fun contains(i: Instant): Boolean = !i.isBefore(start) && i.isBefore(end)
 }
 
-data class EventInstance(val uid: String, val title: String, val start: EventTime, val end: EventTime?)
+data class EventInstance(val uid: String, val title: String, val start: EventTime, val end: EventTime?) {
+    /** No uid or title: both are personal data and must not reach logs or crash reports. */
+    override fun toString(): String = "EventInstance(title=${title.length} chars, start=$start, end=$end)"
+}
 
 sealed interface EventTime {
     /** UTC, TZID and floating times resolved to an instant. */

@@ -8,9 +8,14 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 
-data class AgendaDay(val date: LocalDate, val items: List<AgendaItem>)
+data class AgendaDay(val date: LocalDate, val items: List<AgendaItem>) {
+    /** Counts only: titles are personal data and must not reach logs or crash reports. */
+    override fun toString(): String = "AgendaDay($date, ${items.size} items)"
+}
 
-data class AgendaItem(val title: String, val label: TimeLabel)
+data class AgendaItem(val title: String, val label: TimeLabel) {
+    override fun toString(): String = "AgendaItem(title=${title.length} chars, $label)"
+}
 
 sealed interface TimeLabel {
     object AllDay : TimeLabel
