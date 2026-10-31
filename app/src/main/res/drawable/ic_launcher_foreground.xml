@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Calendar glyph inside the 66% adaptive-icon safe zone (108dp canvas, glyph within 24..84). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- page -->
+    <path android:fillColor="#F2F4F7" android:pathData="M30,32h48a4,4 0,0 1,4 4v40a4,4 0,0 1,-4 4H30a4,4 0,0 1,-4 -4V36a4,4 0,0 1,4 -4z" />
+    <!-- header strip -->
+    <path android:fillColor="#8AB4F8" android:pathData="M30,32h48a4,4 0,0 1,4 4v8H26v-8a4,4 0,0 1,4 -4z" />
+    <!-- binder pegs -->
+    <path android:fillColor="#243044" android:pathData="M38,28h4v8h-4zM66,28h4v8h-4z" />
+    <!-- event lines -->
+    <path android:fillColor="#243044" android:pathData="M34,52h18v4H34zM34,62h30v4H34z" />
+</vector>

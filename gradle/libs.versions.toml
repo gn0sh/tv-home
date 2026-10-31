@@ -6,9 +6,10 @@ okhttp = "4.12.0"
 kotlinx-serialization = "1.7.3"
 kotlinx-coroutines = "1.9.0"
 junit = "5.11.3"
-composeBom = "2025.06.00"
-tvMaterial = "1.0.1"
-activityCompose = "1.10.1"
+composeBom = "2024.12.01"
+tvMaterial = "1.0.0"
+activityCompose = "1.9.3"
+lifecycle = "2.8.7"
 
 [libraries]
 biweekly = { module = "net.sf.biweekly:biweekly", version.ref = "biweekly" }
@@ -23,9 +24,15 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 tv-material = { module = "androidx.tv:tv-material", version.ref = "tvMaterial" }
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
+lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 android-application = { id = "com.android.application", version.ref = "agp" }

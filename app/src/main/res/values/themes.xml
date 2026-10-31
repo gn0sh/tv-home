@@ -1,0 +1,9 @@
+<resources>
+    <!-- Opaque dark window so there is no white flash before Compose draws. -->
+    <style name="Theme.TvHome" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:colorBackground">@color/background</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+    </style>
+</resources>
