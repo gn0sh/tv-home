@@ -329,7 +329,7 @@ an interactive console.
 1. `scripts/provision.ps1 -Key calendar_url` reads the value with `Read-Host -AsSecureString` (not written to
    PSReadLine history), trims it and checks it against a strict regex (`#3`), printing only "valid" or "not valid":
    - calendar URL: `^https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics$`
-   - API key: `^sk-ant-[A-Za-z0-9_-]{20,256}$`
+   - API key: `^sk-ant-[A-Za-z0-9_-]{20,500}$`
    It then hands the value to the TV. Preferred, if T9 confirms it works: pipe it over stdin with
    `adb shell content write --uri content://com.gnosh.tvhome.provision/calendar_url` into a `DUMP`-guarded
    `ContentProvider`, so it is never a command-line argument (`#10`). Fallback: `adb shell am start -n

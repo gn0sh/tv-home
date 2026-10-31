@@ -31,9 +31,10 @@ $Patterns = @{
 function Fail([string]$msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
 
 # Runs adb with fixed arguments (never the secret). Returns exit code and combined output; $Stdin is raw bytes or $null.
-function Invoke-Adb([string[]]$AdbArgs, [byte[]]$Stdin = $null) {
+# Both output streams are read asynchronously and every wait has a timeout, so a stuck adb cannot hang or deadlock us.
+function Invoke-Adb([string[]]$AdbArgs, [byte[]]$Stdin = $null, [int]$TimeoutMs = 30000) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'adb'
+    $psi.FileName = $script:AdbPath
     $prefix = if ($Serial) { "-s $Serial " } else { '' }
     $psi.Arguments = $prefix + ($AdbArgs -join ' ')
     $psi.UseShellExecute = $false
@@ -41,21 +42,37 @@ function Invoke-Adb([string[]]$AdbArgs, [byte[]]$Stdin = $null) {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $p = [System.Diagnostics.Process]::Start($psi)
-    if ($null -ne $Stdin) { $p.StandardInput.BaseStream.Write($Stdin, 0, $Stdin.Length); $p.StandardInput.BaseStream.Flush() }
-    $p.StandardInput.Close()
-    $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
-    $p.WaitForExit()
-    [pscustomobject]@{ Code = $p.ExitCode; Text = $out }
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    try {
+        if ($null -ne $Stdin) {
+            $wr = $p.StandardInput.BaseStream.WriteAsync($Stdin, 0, $Stdin.Length)
+            if (-not $wr.Wait($TimeoutMs)) { throw 'stdin write timed out' }
+            $p.StandardInput.BaseStream.Flush()
+        }
+        $p.StandardInput.Close()
+        if (-not $p.WaitForExit($TimeoutMs)) { throw 'adb timed out' }
+        $p.WaitForExit()   # let the async readers finish
+    } catch {
+        try { $p.Kill() } catch { }
+        return [pscustomobject]@{ Code = -1; Text = '' }   # fixed outcome; never the exception text
+    }
+    [pscustomobject]@{ Code = $p.ExitCode; Text = ($outTask.Result + $errTask.Result) }
 }
 
 # --- adb present, exactly one device -------------------------------------------------------------------------
 if ($Serial -and $Serial -notmatch '^[A-Za-z0-9:._-]+$') { Fail 'Serial has odd characters.' }
-if (-not (Get-Command adb -ErrorAction SilentlyContinue)) { Fail 'adb not found on PATH. Install Android platform-tools first.' }
-$devs = @((& adb devices) | Select-Object -Skip 1 | Where-Object { $_ -match '\S' })
+$adbCmd = Get-Command adb -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $adbCmd) { Fail 'adb not found on PATH. Install Android platform-tools first.' }
+$script:AdbPath = $adbCmd.Source
+$devs = @((& $script:AdbPath devices) | Select-Object -Skip 1 | Where-Object { $_ -match '\sdevice$' })
 if ($Serial) { $devs = @($devs | Where-Object { $_ -match ('^' + [regex]::Escape($Serial) + '\s') }) }
-if ($devs.Count -eq 0) { Fail 'No device connected. Run adb connect <tv-ip>:<port> first (see docs/user/tv-home-setup.md).' }
+if ($devs.Count -eq 0) { Fail 'No ready device. Run adb connect <tv-ip>:<port> first and accept the prompt on the TV (see docs/user/tv-home-setup.md).' }
 if ($devs.Count -gt 1) { Fail 'More than one device is connected. Re-run with -Serial <serial or ip:port>.' }
-if ($devs[0] -notmatch '\sdevice$') { Fail 'The device is not ready (offline or unauthorized). Accept the prompt on the TV.' }
+
+# The TV Home app must be installed (install needs Brian's OK, task T11).
+$pm = Invoke-Adb @('shell', 'pm', 'path', 'com.gnosh.tvhome')
+if ($pm.Text -notmatch 'package:') { Fail 'TV Home is not installed on the TV yet (install waits for task T11). Nothing was sent.' }
 
 function Show-State {
     $q = Invoke-Adb @('shell', 'content', 'query', '--uri', $Uri)
@@ -96,32 +113,34 @@ try {
     $bytes = [System.Text.Encoding]::ASCII.GetBytes($value)   # no BOM, no newline: the TV refuses a trailing newline
 
     $w = Invoke-Adb @('shell', 'content', 'write', '--uri', $Uri) $bytes
-    $unavailable = ($w.Code -ne 0) -or ($w.Text -match 'Unknown command|No such|Error|Exception|not found')
-    if ($unavailable) {
-        # Fallback: value rides in a command line for under a second (documented, accepted in the design).
-        Write-Host 'content write is not available; using the am start fallback.'
-        $am = "am start -n com.gnosh.tvhome/.ProvisionActivity --es $Key '$value'"
-        $f = Invoke-Adb @('shell', ('"' + $am + '"'))
-        $am = $null; $f = $null
+    # `content` can exit 0 on errors, so judge by output (e.g. "Unknown authority") and by the read-back below.
+    if ($w.Code -ne 0 -or $w.Text -match 'Unknown|No such|Error|Exception|not found|denied') {
+        Fail 'App not installed or provider unavailable. Nothing was saved.'
     }
     Start-Sleep -Milliseconds 700
     $s = Show-State
-    if ($s.Configured -ne '1') { Fail 'The TV did not store it. Is the TV Home app installed and the TV awake?' }
+    $expected = if ($Key -eq 'calendar_url') { 'SAVED_CALENDAR' } else { 'SAVED_API_KEY' }
+    # A refused rewrite leaves the old value (configured=1) with another "last", so require the exact outcome.
+    if ($s.Configured -ne '1' -or $s.Last -ne $expected) { Fail "The TV did not accept it (last=$($s.Last)). The stored value is unchanged." }
     Write-Host 'Saved on the TV.'
 
     # Calendar only: fetch the feed once from this PC, print counts only (ADR 0004 limits).
     if ($Key -eq 'calendar_url') {
         try {
             Add-Type -AssemblyName System.Net.Http
-            $client = New-Object System.Net.Http.HttpClient
+            $handler = New-Object System.Net.Http.HttpClientHandler
+            $handler.AllowAutoRedirect = $false          # a redirect could leave HTTPS; treat it as a failure
+            $client = New-Object System.Net.Http.HttpClient($handler)
             $client.Timeout = [TimeSpan]::FromSeconds(30)
-            $resp = $client.GetAsync($value, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            $cts = New-Object System.Threading.CancellationTokenSource
+            $cts.CancelAfter([TimeSpan]::FromSeconds(60))  # overall limit, including the body read
+            $resp = $client.GetAsync($value, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
             if (-not $resp.IsSuccessStatusCode) { throw 'status' }
             $stream = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
             $ms = New-Object System.IO.MemoryStream
             $buf = New-Object byte[] 65536
             $cap = 10MB + 1
-            while ($ms.Length -lt $cap -and ($n = $stream.Read($buf, 0, [Math]::Min($buf.Length, $cap - $ms.Length))) -gt 0) { $ms.Write($buf, 0, $n) }
+            while ($ms.Length -lt $cap -and ($n = $stream.ReadAsync($buf, 0, [int][Math]::Min($buf.Length, $cap - $ms.Length), $cts.Token).GetAwaiter().GetResult()) -gt 0) { $ms.Write($buf, 0, $n) }
             $size = $ms.Length
             $text = [System.Text.Encoding]::UTF8.GetString($ms.ToArray())
             $events = ([regex]::Matches($text, '(?m)^BEGIN:VEVENT')).Count
@@ -135,7 +154,7 @@ try {
         } catch {
             Write-Host 'Feed check: could not download the feed from this PC (the link is saved anyway).'
         } finally {
-            $client = $null
+            $client = $null; $handler = $null
         }
     }
 } finally {

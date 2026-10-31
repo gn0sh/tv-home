@@ -15,7 +15,7 @@ Verdict: **APPROVE WITH CHANGES**. #1 must be fixed in the docs before T7, T8 or
    - Fix: show the title, service and which fallback was used.
    - Fix: add injection fixtures to B-AC3.
 3. **MEDIUM `okhttp-key-in-exception`** (arch §3, §4, §7; T3, B3). OkHttp 4.12's `Headers.checkValue` puts the header value in its exception text unless the header is Authorization or a cookie header. `x-api-key` is not exempt. Separately, R8 Log stripping doesn't cover System.out/err or dependency loggers.
-   - Fix: trim the value, then apply strict regexes in both the script and ProvisionActivity. Key: `^sk-ant-[A-Za-z0-9_-]{20,256}$`. URL: `^https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics$`.
+   - Fix: trim the value, then apply strict regexes in both the script and ProvisionActivity. Key: `^sk-ant-[A-Za-z0-9_-]{20,500}$`. URL: `^https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics$`.
    - Fix: catch Throwable at the fetch and assistant boundaries. In release builds, install an uncaught-exception handler that logs class names only.
    - Fix: QA greps System.err, AndroidRuntime and the dropbox `data_app_crash` entries.
 4. **MEDIUM `a11y-settings-overwrite`** (arch §7b, B7). `settings put secure enabled_accessibility_services X` replaces the whole list.

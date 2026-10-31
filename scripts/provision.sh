@@ -17,8 +17,10 @@ command -v adb >/dev/null || { echo "ERROR: adb not found" >&2; exit 1; }
 adbc() { if [[ -n $serial ]]; then adb -s "$serial" "$@"; else adb "$@"; fi; }
 uri="content://com.gnosh.tvhome.provision/$key"
 
-n=$(adb devices | awk 'NR>1 && NF {print}' | { if [[ -n $serial ]]; then grep -c "^$serial[[:space:]]" || true; else grep -c . || true; fi; })
-[[ $n -eq 1 ]] || { echo "ERROR: need exactly one device (found $n); use -s SERIAL" >&2; exit 1; }
+serial_re=${serial//./\\.}
+n=$(adb devices | awk 'NR>1 && $2=="device" {print $1}' | { if [[ -n $serial ]]; then grep -c "^$serial_re\$" || true; else grep -c . || true; fi; })
+[[ $n -eq 1 ]] || { echo "ERROR: need exactly one ready device (found $n); use -s SERIAL" >&2; exit 1; }
+adbc shell pm path com.gnosh.tvhome 2>/dev/null | grep -q '^package:' || { echo "ERROR: TV Home is not installed; nothing sent" >&2; exit 1; }
 
 show_state() {
   local q c l
@@ -26,20 +28,20 @@ show_state() {
   c=$(sed -n 's/.*configured=\([0-9]\).*/\1/p' <<<"$q" | head -n1)
   l=$(sed -n 's/.*last=\([A-Z_]*\).*/\1/p' <<<"$q" | head -n1)
   echo "configured=${c:-?} last=${l:-?}"
+  last_seen=${l:-?}; conf_seen=${c:-?}
   [[ ${c:-?} == 1 ]]
 }
 
 if [[ $clear -eq 1 ]]; then
   adbc shell content delete --uri "$uri" >/dev/null 2>&1 || { echo "ERROR: clear refused" >&2; exit 1; }
-  show_state && { echo "ERROR: still configured" >&2; exit 1; }
+  if show_state; then echo "ERROR: still configured" >&2; exit 1; fi
   echo "Removed."; exit 0
 fi
 
 if [[ -n ${PROVISION_VALUE+x} ]]; then value=$PROVISION_VALUE; unset PROVISION_VALUE
 else IFS= read -r value || true; fi
 # Trim space and tab only (same as the TV).
-value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
-value=${value#$'\r'}; value=${value%$'\r'}
+value="${value#"${value%%[! 	]*}"}"; value="${value%"${value##*[! 	]}"}"
 if [[ -z $value ]]; then echo "ERROR: nothing entered" >&2; exit 1; fi
 case $key in
   calendar_url) re='^https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics$' ;;
@@ -48,11 +50,17 @@ esac
 if [[ ${#value} -gt 1024 || ! $value =~ $re ]]; then value=""; echo "ERROR: not valid for this key; nothing sent" >&2; exit 1; fi
 
 # printf is a bash builtin, so the value never reaches any process's argv. No trailing newline.
-if ! printf '%s' "$value" | adbc shell content write --uri "$uri" >/dev/null 2>&1; then
-  value=""; echo "ERROR: content write failed" >&2; exit 1
+# `content` can exit 0 on errors, so judge by its output too; the output is never shown (it could echo input).
+wout=$(printf '%s' "$value" | adbc shell content write --uri "$uri" 2>&1) && wrc=0 || wrc=$?
+if [[ $wrc -ne 0 ]] || grep -qE 'Unknown|No such|Error|Exception|not found|denied' <<<"$wout"; then
+  value=""; echo "ERROR: app not installed or provider unavailable; nothing saved" >&2; exit 1
 fi
+wout=""
 sleep 1
-if ! show_state; then value=""; echo "ERROR: the TV did not store it" >&2; exit 1; fi
+show_state || true
+case $key in calendar_url) expected=SAVED_CALENDAR ;; *) expected=SAVED_API_KEY ;; esac
+# A refused rewrite leaves the old value (configured=1) with another "last": require the exact outcome.
+if [[ $conf_seen != 1 || $last_seen != "$expected" ]]; then value=""; echo "ERROR: the TV did not accept it; stored value unchanged" >&2; exit 1; fi
 echo "Saved."
 
 if [[ $key == calendar_url && ${PROVISION_CHECK_FEED:-0} == 1 ]]; then
