@@ -25,6 +25,8 @@ sealed interface AgendaState {
         val ageMinutes: Long,
         val ageText: String,
         val emphasised: Boolean,
+        /** Both days empty: render the "Nothing scheduled" body under the stale header (and footer when emphasised). */
+        val nothingScheduled: Boolean,
     ) : AgendaState
 
     sealed interface Unavailable : AgendaState
@@ -57,49 +59,39 @@ fun ageText(ageMinutes: Long): String {
 }
 
 /**
- * The one place that decides what the TV shows.
+ * The one place that decides what the TV shows. A good fetch from this session and the stored cache go through the
+ * same age and window rules (a session Ok is just a fresher [CachedAgenda]); only the "fetch failed" flag differs.
  * - No secret: NotSetUp.
- * - A good fetch this session: its events, age from its fetchedAt (Ok / NothingScheduled).
- * - Else a cache whose window covers today and tomorrow: Ok / NothingScheduled while the last fetch has not failed and
- *   the cache is at most 15 min old; Stale (age shown) if the fetch failed or the cache is older than 15 min with no
- *   fetch yet. Stale is [AgendaState.Stale.emphasised] only past 60 min. A failure with a cache under 60 min old is
- *   therefore silent (design: "plain ok"), the UI renders non-emphasised Stale like Ok.
- * - Else (no usable cache): no fetch yet is Loading; PARSE / TOO_LARGE is Unreadable; any other failure is CantReach.
+ * - Data (session Ok, else cache) whose window covers today and tomorrow:
+ *   Ok / NothingScheduled when the last fetch did not fail and the data is at most 15 min old;
+ *   otherwise Stale (age shown): fetch failed, or older than 15 min with no newer fetch (e.g. offline since).
+ *   Stale is emphasised from exactly 60:00 old, measured in seconds. A failure with data under 60 min old is silent
+ *   (design: "plain ok"): the UI renders non-emphasised Stale like Ok.
+ * - No usable data: no fetch yet, or a session Ok whose window has since passed, is Loading (a refresh is due);
+ *   PARSE / TOO_LARGE is Unreadable; every other failure is CantReach. That includes INSECURE_URL and NOT_CONFIGURED,
+ *   which the app should not reach with a validated secret; CantReach is the safe fallback and never shows the URL.
  */
 fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, now: Instant, zone: ZoneId): AgendaState {
     if (!hasSecret) return AgendaState.NotSetUp
-    val needed = neededRange(now, zone)
-    if (lastFetch is FetchResult.Ok) {
-        return fresh(lastFetch.events, lastFetch.fetchedAt, now, zone)
-    }
-    val usable = cache?.takeIf { it.covers(needed) }
+    val data = if (lastFetch is FetchResult.Ok) cacheOf(lastFetch, zone) else cache
+    val usable = data?.takeIf { it.covers(neededRange(now, zone)) }
     if (usable == null) {
-        return when (lastFetch) {
-            null -> AgendaState.Loading
-            is FetchResult.Failed ->
-                if (lastFetch.error == SourceError.PARSE || lastFetch.error == SourceError.TOO_LARGE) AgendaState.Unreadable
-                else AgendaState.CantReach
-            is FetchResult.Ok -> error("unreachable")
-        }
+        val failed = lastFetch as? FetchResult.Failed ?: return AgendaState.Loading
+        return if (failed.error == SourceError.PARSE || failed.error == SourceError.TOO_LARGE) AgendaState.Unreadable
+        else AgendaState.CantReach
     }
-    val age = ageMinutes(usable.fetchedAt, now)
+    val ageSec = Duration.between(usable.fetchedAt, now).seconds.coerceAtLeast(0)
+    val minutes = ageSec / 60
     val failed = lastFetch is FetchResult.Failed
-    if (!failed && age <= STALE_AFTER_MIN) return fresh(usable.events, usable.fetchedAt, now, zone)
     val (today, tomorrow) = buildAgenda(usable.events, now, zone)
-    return AgendaState.Stale(today, tomorrow, usable.fetchedAt, age, ageText(age), age > EMPHASIS_AFTER_MIN)
-}
-
-private fun fresh(events: List<tvhome.core.calendar.EventInstance>, at: Instant, now: Instant, zone: ZoneId): AgendaState {
-    val (today, tomorrow) = buildAgenda(events, now, zone)
-    val text = ageText(ageMinutes(at, now))
-    return if (today.items.isEmpty() && tomorrow.items.isEmpty()) {
-        AgendaState.NothingScheduled(today, tomorrow, at, text)
-    } else {
-        AgendaState.Ok(today, tomorrow, at, text)
+    val empty = today.items.isEmpty() && tomorrow.items.isEmpty()
+    if (!failed && ageSec <= STALE_AFTER_MIN * 60) {
+        val text = ageText(minutes)
+        return if (empty) AgendaState.NothingScheduled(today, tomorrow, usable.fetchedAt, text)
+        else AgendaState.Ok(today, tomorrow, usable.fetchedAt, text)
     }
+    return AgendaState.Stale(today, tomorrow, usable.fetchedAt, minutes, ageText(minutes), ageSec >= EMPHASIS_AFTER_MIN * 60, empty)
 }
-
-private fun ageMinutes(from: Instant, now: Instant): Long = Duration.between(from, now).toMinutes().coerceAtLeast(0)
 
 /** Start of today to end of tomorrow in [zone]. */
 fun neededRange(now: Instant, zone: ZoneId): InstantRange {
@@ -107,5 +99,5 @@ fun neededRange(now: Instant, zone: ZoneId): InstantRange {
     return InstantRange(today.atStartOfDay(zone).toInstant(), today.plusDays(2).atStartOfDay(zone).toInstant())
 }
 
-/** Builds the cache for a good fetch. */
-fun cacheOf(r: FetchResult.Ok, now: Instant, zone: ZoneId) = CachedAgenda(r.fetchedAt, agendaWindow(now, zone), r.events)
+/** Builds the cache for a good fetch; the window is derived from the fetch time, not from "now". */
+fun cacheOf(r: FetchResult.Ok, zone: ZoneId) = CachedAgenda(r.fetchedAt, agendaWindow(r.fetchedAt, zone), r.events)

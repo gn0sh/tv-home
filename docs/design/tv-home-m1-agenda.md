@@ -61,7 +61,8 @@ Header right side shows the age line in every state that has data.
 | unreadable (no cache, feed arrived but unusable) | Centered: "Calendar data unreadable" and below it "It will try again soon." | none |
 | not set up (no calendar link on device) | Centered: "Calendar not set up" and below it "Set it up from your PC: see the setup steps in the README." | none |
 | nothing scheduled (ok, both days empty) | Both headings kept, each with "Nothing scheduled" | age line as ok |
-- Age wording: under 1 min "just now"; 1-59 "N min ago"; 1-23 hours "N hours ago" ("1 hour ago"); then "N days ago". Amber/bold applies from 60 min up (matches AC 4). Age is computed from the last successful fetch, not app launch.
+| stale and both days empty | Same body as nothing scheduled (the type carries `nothingScheduled = true`) | stale age line; footer too when emphasised |
+- Age wording: under 1 min "just now"; 1-59 "N min ago"; 1-23 hours "N hours ago" ("1 hour ago"); then "N days ago". Amber/bold applies from exactly 60:00 old (60 min or older, measured in seconds; matches AC 4). Age is computed from the last successful fetch, not app launch.
 - A fetch failure with a cache younger than 60 min shows plain ok (no alarm); retry is silent every 15 min.
 - The calendar link is never typed or shown on the TV (AC 6), including in error text. "Not set up" gives a pointer, not the link. Setup happens from Brian's PC (adb push or the README steps the architect defines); the design needs one fixed pointer, so the engineer should use the README title the technical-writer sets.
 - Calendar event text comes from outside: render as plain text only, no markup, one line, ellipsis. Empty title shows "(No title)".

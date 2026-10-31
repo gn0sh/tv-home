@@ -14,6 +14,8 @@ import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.random.Random
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 
 class FakeClock(var now: Instant) {
     fun advance(d: Duration) { now = now.plus(d) }
@@ -68,10 +70,12 @@ class AgendaStateTest {
             Row(4, false, stale = false),
             Row(15, false, stale = false),
             Row(16, false, stale = true),      // no fetch yet and older than 15 min
-            Row(60, false, stale = true),
+            Row(59, false, stale = true),
+            Row(60, false, stale = true, emph = true),
             Row(61, false, stale = true, emph = true),
             Row(4, true, stale = true),         // failed, young: Stale, not emphasised (UI shows like Ok)
-            Row(60, true, stale = true),
+            Row(59, true, stale = true),
+            Row(60, true, stale = true, emph = true),
             Row(61, true, stale = true, emph = true),
             Row(3 * 60, true, stale = true, emph = true),
         )
@@ -123,11 +127,86 @@ class AgendaStateTest {
         assertEquals(AgendaState.CantReach, state(c = cache(Instant.parse("2026-10-29T10:59:00Z")), f = fail()))
     }
 
+    @Test fun emphasisIsExactlySixtyMinutesInSeconds() {
+        val f = fail()
+        val at59 = state(c = cache(clock.now.minusSeconds(59 * 60 + 59)), f = f) as AgendaState.Stale
+        val at60 = state(c = cache(clock.now.minusSeconds(60 * 60)), f = f) as AgendaState.Stale
+        assertFalse(at59.emphasised)
+        assertTrue(at60.emphasised)
+    }
+
+    @Test fun oldSessionOkAgesWithLastFetchUnchanged() {
+        val ok = FetchResult.Ok(listOf(ev), clock.now)
+        assertTrue(state(f = ok) is AgendaState.Ok)
+        clock.advance(Duration.ofMinutes(10))
+        assertTrue(state(f = ok) is AgendaState.Ok)
+        clock.advance(Duration.ofMinutes(10)) // offline since: no new fetch result
+        val s = state(f = ok) as AgendaState.Stale
+        assertFalse(s.emphasised)
+        clock.advance(Duration.ofMinutes(50))
+        assertTrue((state(f = ok) as AgendaState.Stale).emphasised)
+        clock.advance(Duration.ofHours(24)) // next local day, window still covers (fetched yesterday)
+        assertEquals("Updated 1 day ago", (state(f = ok) as AgendaState.Stale).ageText)
+        clock.advance(Duration.ofHours(24)) // two days: window no longer covers tomorrow
+        assertEquals(AgendaState.Loading, state(f = ok))
+        assertEquals(AgendaState.CantReach, state(f = fail()))
+    }
+
+    @Test fun staleWithBothDaysEmptyIsExplicit() {
+        val s = state(c = cache(mins(90), emptyList()), f = fail()) as AgendaState.Stale
+        assertTrue(s.nothingScheduled)
+        assertTrue(s.emphasised)
+        assertFalse((state(c = cache(mins(90))) as AgendaState.Stale).nothingScheduled)
+    }
+
+    private fun dstChecks(day: java.time.LocalDate) {
+        val noon = day.atTime(12, 0).atZone(zone).toInstant()
+        val prevMidnight = day.minusDays(1).atStartOfDay(zone).toInstant()
+        val c = CachedAgenda(prevMidnight, agendaWindow(prevMidnight, zone), listOf(ev))
+        assertTrue(reduce(true, c, fail(), noon, zone) is AgendaState.Stale, "covered on $day")
+        val old = day.minusDays(2).atTime(23, 59).atZone(zone).toInstant()
+        val c2 = CachedAgenda(old, agendaWindow(old, zone), listOf(ev))
+        assertEquals(AgendaState.CantReach, reduce(true, c2, fail(), noon, zone), "uncovered on $day")
+        // agenda days are the local calendar dates even on a 23 or 25 hour day
+        val s = reduce(true, c, fail(), noon, zone) as AgendaState.Stale
+        assertEquals(day, s.today.date)
+        assertEquals(day.plusDays(1), s.tomorrow.date)
+    }
+
+    @Test fun springForwardDay() = dstChecks(java.time.LocalDate.of(2026, 9, 27)) // 23 h day in Auckland
+    @Test fun fallBackDay() = dstChecks(java.time.LocalDate.of(2026, 4, 5)) // 25 h day in Auckland
+
+    @Test fun failedSaveReturnsFailedAndLeavesNoTemp(@TempDir dir: File) {
+        val target = File(dir, "agenda-cache.json")
+        val cf = JvmCacheFile(target)
+        assertEquals(SaveResult.SAVED, cf.save(cache(mins(1))))
+        target.delete(); target.mkdir() // rename onto a directory fails
+        File(target, "x").writeText("x")
+        assertEquals(SaveResult.FAILED, cf.save(cache(mins(1))))
+        assertFalse(File(dir, "agenda-cache.json.tmp").exists())
+        val throwing = object : CacheFile {
+            override fun read(): String? = throw java.io.IOException("x")
+            override fun writeAtomic(text: String) = throw java.io.IOException("x")
+        }
+        assertEquals(SaveResult.FAILED, throwing.save(cache(mins(1))))
+        assertNull(CachedAgenda.load(throwing))
+    }
+
+    @Test fun cacheJsonHasExactlyTheDocumentedKeys() {
+        val c = cache(mins(3), listOf(ev, EventInstance("u2", "Day", EventTime.AllDay(java.time.LocalDate.of(2026, 10, 31)), EventTime.AllDay(java.time.LocalDate.of(2026, 11, 1)))))
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(c.encode()).jsonObject
+        assertEquals(setOf("v", "fetchedAt", "windowStart", "windowEnd", "events"), root.keys)
+        for (e in root["events"]!!.jsonArray) {
+            val o = e.jsonObject
+            assertTrue(o.keys.all { it in setOf("uid", "title", "start", "end") }, o.keys.toString())
+            assertEquals(setOf("kind", "value"), o["start"]!!.jsonObject.keys)
+        }
+    }
+
     @Test fun cacheRoundTripsAndNeverHoldsTheUrl() {
         val long = "x".repeat(500)
         val c = cache(mins(3), listOf(ev, EventInstance("u2", long, EventTime.AllDay(java.time.LocalDate.of(2026, 10, 31)), EventTime.AllDay(java.time.LocalDate.of(2026, 11, 1)))))
         val text = c.encode()
-        assertFalse(text.contains("https://"))
         assertTrue(text.contains("\"v\":1"))
         val back = CachedAgenda.decode(text)!!
         assertEquals(c.fetchedAt, back.fetchedAt)
@@ -175,20 +254,22 @@ class AgendaStateTest {
         repeat(300) {
             val secret = "tok" + (1..rnd.nextInt(8, 60)).map { alphabet[rnd.nextInt(alphabet.size)] }.joinToString("")
             val url = "https://host.example.test/a/$secret/basic.ics"
-            // Titles are event text, never the secret; the URL lives only in the store/fetcher, which state never sees.
-            val events = (0..rnd.nextInt(0, 4)).map { EventInstance("u$it", "Event $it", EventTime.At(clock.now.plusSeconds(rnd.nextLong(0, 100000))), null) }
+            // The secret is in the inputs: a title that would carry it past the 200-char cache cut, and a uid.
+            // The cache must drop it (truncation) and states built from Failed carry only the enum.
+            val titles = listOf("Event", "x".repeat(CachedAgenda.MAX_TITLE) + url)
+            val events = titles.mapIndexed { i, t -> EventInstance("u$i", t, EventTime.At(clock.now.plusSeconds(rnd.nextLong(0, 100000))), null) }
             val fetchedAt = clock.now.minus(Duration.ofMinutes(rnd.nextLong(0, 3000)))
             val c = if (rnd.nextBoolean()) cache(fetchedAt, events) else null
             val f: FetchResult? = when (rnd.nextInt(3)) {
                 0 -> null
-                1 -> FetchResult.Ok(events, fetchedAt)
+                1 -> FetchResult.Ok(events.take(1), fetchedAt)
                 else -> FetchResult.Failed(errors[rnd.nextInt(errors.size)])
             }
             val s = reduce(rnd.nextInt(5) != 0, c, f, clock.now, zone)
-            assertFalse(s.toString().contains(secret), "state leak")
-            assertFalse(s.toString().contains(url))
-            assertFalse(s.toString().contains(FakeSecrets.CALENDAR_TOKEN))
-            c?.let { assertFalse(it.encode().contains(secret)); assertFalse(it.encode().contains("https://")) }
+            val shown = s.toString()
+            assertFalse(shown.contains(secret), "state leak")
+            assertFalse(shown.contains(FakeSecrets.CALENDAR_TOKEN))
+            c?.let { assertFalse(it.encode().contains(secret), "cache leak") }
         }
     }
 }

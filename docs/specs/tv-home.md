@@ -54,7 +54,7 @@ Acceptance criteria
 1. Given fixture ICS files (via `CalendarSource`), the agenda shows today's and tomorrow's events with local start time and title; all-day events labelled "All day"; sorted by start. JVM unit tests.
 2. Fixtures cover weekly RRULE, EXDATE/cancelled instance, a UTC event and an event in another timezone, all at the correct local time.
 3. Fetch at launch, then at most every 15 min while visible; last good result cached on device and shown immediately.
-4. Three states only: ok; stale (fetch failed, cache shown with "Updated N min ago"; stale when older than 60 min, emphasised); unavailable (no cache: "Can't reach calendar", or "Calendar not set up" with a one-line how-to). Empty day shows "Nothing scheduled".
+4. Three states only: ok; stale (fetch failed, cache shown with "Updated N min ago"; stale when 60 minutes or older, emphasised); unavailable (no cache: "Can't reach calendar", or "Calendar not set up" with a one-line how-to). Empty day shows "Nothing scheduled".
 5. Readable at 10 feet and fully D-pad/Back navigable (no focus trap), checked on a TV emulator.
 6. The secret (URL or token) is stored only in private on-device storage; grep of repo, CI output and a captured log finds none of it. Never entered by typing on the TV.
 7. HTTPS only; allowBackup=false; release APK non-debuggable, built by GitHub Actions and signed with the stable key.

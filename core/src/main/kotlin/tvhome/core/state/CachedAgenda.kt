@@ -6,6 +6,7 @@ import tvhome.core.calendar.EventInstance
 import tvhome.core.calendar.EventTime
 import tvhome.core.calendar.InstantRange
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.Instant
@@ -25,8 +26,17 @@ class JvmCacheFile(private val file: File) : CacheFile {
 
     override fun writeAtomic(text: String) {
         val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(text, Charsets.UTF_8)
-        Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        try {
+            FileOutputStream(tmp).use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+                out.flush()
+                out.fd.sync()
+            }
+            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (t: Throwable) {
+            tmp.delete()
+            throw t
+        }
     }
 }
 
@@ -72,7 +82,15 @@ data class CachedAgenda(val fetchedAt: Instant, val window: InstantRange, val ev
     }
 }
 
-fun CacheFile.save(c: CachedAgenda) = writeAtomic(c.encode())
+enum class SaveResult { SAVED, FAILED }
+
+/** Never throws: a failed save leaves the previous cache in place and the app keeps going. */
+fun CacheFile.save(c: CachedAgenda): SaveResult = try {
+    writeAtomic(c.encode())
+    SaveResult.SAVED
+} catch (_: Throwable) {
+    SaveResult.FAILED
+}
 
 @Serializable private class Dto(
     val v: Int,
