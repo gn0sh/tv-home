@@ -178,12 +178,13 @@ that, whatever the bytes are:
    is clock-dependent, and it can only turn a result into `Exhausted`, never into a smaller `Complete`.
 
 On exhaustion: a **parse-wide** limit (deadline, 5,000,000 global steps, 50,000 VEVENTs, 5,000 kept series) gives
-`Exhausted(limit)`; so does a 500-instance cut followed by a RECURRENCE-ID that removes a kept instance
-(`Exhausted(INSTANCES)`: the cut-off instances cannot be known). The answer is unknown, so nothing from it is shown or cached. A **per-item** limit is
+`Exhausted(limit)`. The answer is unknown, so nothing from it is shown or cached. A **per-item** limit is
 deterministic and stays inside `Complete`, counted in `ParseStats`: a malformed VEVENT is skipped; an unsupported
 rule shows its DTSTART only; one series over its own 20,000 steps is skipped; one bad EXDATE/RDATE value is
 ignored; and over 500 instances, the extra ones are cut with today and tomorrow kept first (`truncated`). One UID
-holds at most 48 focus instances per focus day (96 for today and tomorrow); its extra ones are cut (`truncated`).
+holds at most 48 focus instances per local day (48 today, 48 tomorrow; the day of the instance's start, or today
+if it began earlier); its extra ones are cut (`truncated`). RECURRENCE-ID removal keys come from a first, keys-only
+reader pass, so they apply as instances are added and the result does not depend on file order.
 
 ### Contract
 ```kotlin
@@ -251,10 +252,10 @@ For any other `Throwable` it calls `ensureActive()` first, then gives `PARSE` (p
 | Nesting depth | 4 (VCALENDAR > VEVENT > VALARM; VTIMEZONE > STANDARD) | n/a | `IcsReader` (`Rejected`) |
 | VEVENTs per feed | 50,000 | n/a | `IcsReader` (`Exhausted(VEVENTS)`) |
 | Recurring masters that can reach the window (DTSTART before window end, UNTIL not before window start minus span), counted | 5,000 | none kept (expanded as read) | `IcsParser` (`Exhausted(SERIES)`) |
-| RECURRENCE-ID removal keys | one per override, so at most 50,000 | about 64 B each | `IcsReader` |
+| RECURRENCE-ID removal keys | one per override, so at most 50,000 (the VEVENT cap; over: `Exhausted(VEVENTS)`), collected by a keys-only first pass, one step each | about 64 B each | `IcsReader` (keys pass), `IcsParser` |
 | Steps | 5,000,000 per parse, 20,000 per series, charged before work (an RRULE's BYxxx values before its rule is built, which happens only if it can reach the window; its times of day before they are built; each EXDATE before its key) | n/a | `Budget` |
 | Wall clock | 5 s from parse entry | n/a | `Budget` + `IcsReader` |
-| Instances returned | 500; at most 48 focus instances per UID per focus day | one count per UID with focus instances | `Collector` |
+| Instances returned | 500; at most 48 focus instances per (UID, local day) | one count per (UID, day) with focus instances | `Collector` |
 | Cache JSON per instance | uid 600 + title 600 + two times 80 + keys 80 | 1,360 B | `CachedAgenda` |
 | Cache file | 500 x 1,360 B + header | under 700 KB; a file over 1 MiB is read as no cache | `JvmCacheFile`, `CachedAgenda.decode` |
 
@@ -270,7 +271,7 @@ est. under 2.5 s on the TV, so the global budget is 5,000,000 (manager decision)
 | 1 | Provisioning (`ProvisionValidator`, `provision.ps1`, `ProvisionActivity`) | the URL, not the bytes | host pin `calendar.google.com`, private-token regex | script, activity, core validator |
 | 2 | `IcsCalendarSource` | orchestration | re-validates the URL before fetching (H11); maps outcomes; `ensureActive()` before mapping a Throwable | `IcsCalendarSource.fetch` |
 | 3 | `IcsFetcher` | raw bytes from the network | HTTPS only, connect 5 / read 10 / call 15 s, 10 MiB after gzip, every redirect hop's host `calendar.google.com` or `*.google.com` (network interceptor, before the hop's request is sent), returns `ByteArray` (one copy), `call.cancel()` plus `ensureActive()` on cancel | `IcsFetcher.fetch/execute` |
-| 4 | `IcsReader` (replaces `IcsPrepass` and `Biweekly.parse`) | every byte | framing, VERSION, depth, whitelist, line caps, per-VEVENT caps, VEVENT count, kept-series count, deadline and interrupt every 64 KiB; O(bytes) | `IcsReader` |
+| 4 | `IcsReader` (replaces `IcsPrepass` and `Biweekly.parse`) | every byte, twice (a keys-only pass, then the full read) | framing, VERSION, depth, whitelist, line caps, per-VEVENT caps, VEVENT count, kept-series count, deadline and interrupt every 64 KiB; O(bytes) | `IcsReader` |
 | 5 | RRULE parser (in `IcsReader`) | the RRULE line | 1 KiB, domain sets, strict ranges (H9), unknown or repeated part means unsupported | `IcsReader.rule()` |
 | 6 | `ZoneResolver` | TZID strings | 128 chars, set membership (no exceptions), at most 4 suffixes, memo of at most 256 per parse (H8) | `ZoneResolver.resolve` |
 | 7 | `RecurrenceExpander` | rules, dates | static per-period bound charged before work; COUNT counted arithmetically or over one 400-year calendar cycle (count-only periods charged their own bound); 20k per series (skip), 5M global (`Exhausted`); interrupt every 512 steps | `RecurrenceExpander`, `Budget` |

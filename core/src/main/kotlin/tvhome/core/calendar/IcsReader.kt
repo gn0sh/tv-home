@@ -18,6 +18,9 @@ import java.time.LocalDateTime
  * - **Tolerant content**: a bad value marks the VEVENT [VEventRecord.bad] (the parser skips it and counts it); one bad
  *   EXDATE/RDATE value is ignored and counted.
  *
+ * The parser reads a body twice: first with `keysOnly` (UID and RECURRENCE-ID only, for the removal keys), then in
+ * full. Framing is checked the same way both times.
+ *
  * Bounds: the scan is O(bytes) (bound (i)); a kept logical line is buffered up to [MAX_LINE] bytes in one reused
  * buffer; the deadline and interrupt flag are polled every [POLL_BYTES] bytes; more than `maxVevents` top-level
  * VEVENTs throws [Stop] with [ParseLimit.VEVENTS].
@@ -26,6 +29,8 @@ internal class IcsReader(
     private val body: ByteArray,
     private val budget: Budget,
     private val maxVevents: Int,
+    /** The keys pass: only `UID` and `RECURRENCE-ID` are decoded; every other VEVENT line is opaque. */
+    private val keysOnly: Boolean = false,
     private val sink: (VEventRecord) -> Unit,
 ) {
     /** Top-level VEVENTs read so far. */
@@ -134,10 +139,13 @@ internal class IcsReader(
             K_BEGIN, K_END -> true
             K_VERSION, K_CALSCALE -> depth == 1
             K_OTHER -> false
-            else -> record?.let { depth == 2 && it.wants(kind) } ?: false
+            else -> record?.let { wanted(it, kind) } ?: false
         }
         mode = if (keep) KEEP else SKIP
     }
+
+    private fun wanted(r: VEventRecord, k: Int): Boolean =
+        depth == 2 && (!keysOnly || k == K_UID || k == K_RECURRENCE_ID) && r.wants(k)
 
     /** Which whitelisted name buf[0, end) is (ASCII, case-insensitive). */
     private fun classify(end: Int): Int {
@@ -171,7 +179,7 @@ internal class IcsReader(
             if (closed) throw Reject(RejectReason.STRUCTURE)
             val k = classify(len)
             if (k == K_BEGIN || k == K_END || k == K_GROUPED_BEGIN_END) throw Reject(RejectReason.STRUCTURE)
-            record?.let { if (depth == 2 && it.wants(k)) it.bad = true }
+            record?.let { if (wanted(it, k)) it.bad = true }
             return
         }
         if (mode == SKIP) {

@@ -450,45 +450,142 @@ class HostileFeedsTest {
 
     private val real = "BEGIN:VEVENT\r\nUID:real\r\nDTSTART:20260310T190000Z\r\nDTEND:20260310T200000Z\r\nSUMMARY:REAL\r\nEND:VEVENT\r\n"
 
-    /** 900 one-minute instances today 00:00-14:59 local (one master), and RECURRENCE-ID cancellations of the first [n]. */
-    private fun spam(cancel: Int, overridesFirst: Boolean = false): ByteArray {
-        val master = "BEGIN:VEVENT\r\nUID:spam\r\nDTSTART;TZID=America/New_York:20260310T000000\r\n" +
-            "DTEND;TZID=America/New_York:20260310T000100\r\nRRULE:FREQ=DAILY;UNTIL=20260310T235959Z;BYHOUR=" +
-            (0..14).joinToString(",") + ";BYMINUTE=" + (0..59).joinToString(",") + "\r\nSUMMARY:spam\r\nEND:VEVENT\r\n"
+    /** One-minute instances of one master today local ([hours] x [mins]), and RECURRENCE-ID cancellations of the first [cancel]. */
+    private fun spam(
+        cancel: Int,
+        overridesFirst: Boolean = false,
+        uid: String = "spam",
+        hours: String = (0..14).joinToString(","),
+        mins: String = (0..59).joinToString(","),
+        until: String = "20260310T235959Z",
+    ): String {
+        val master = "BEGIN:VEVENT\r\nUID:$uid\r\nDTSTART;TZID=America/New_York:20260310T000000\r\n" +
+            "DTEND;TZID=America/New_York:20260310T000100\r\nRRULE:FREQ=DAILY;UNTIL=$until;BYHOUR=$hours;BYMINUTE=$mins\r\n" +
+            "SUMMARY:$uid\r\nEND:VEVENT\r\n"
         val overrides = StringBuilder()
         for (k in 0 until cancel) {
             val t = "20260310T%02d%02d00".format(k / 60, k % 60)
-            overrides.append("BEGIN:VEVENT\r\nUID:spam\r\nRECURRENCE-ID;TZID=America/New_York:$t\r\n")
+            overrides.append("BEGIN:VEVENT\r\nUID:$uid\r\nRECURRENCE-ID;TZID=America/New_York:$t\r\n")
                 .append("DTSTART;TZID=America/New_York:$t\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\n")
         }
-        val body = if (overridesFirst) overrides.toString() + master else master + overrides
-        return bytes("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n" + real + body + "END:VCALENDAR\r\n")
+        return if (overridesFirst) overrides.toString() + master else master + overrides
     }
 
+    private fun feed(vararg parts: String) = bytes("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n" + parts.joinToString("") + "END:VCALENDAR\r\n")
+
     /**
-     * P34 `instance-cap-removal-order` (security #1): a cut result that then loses kept instances to late
-     * RECURRENCE-ID removals is Exhausted(INSTANCES), never a Complete without the real event; and one dense series
-     * gets at most 48 focus instances per day, so it cannot push a real event out of today.
+     * P34 `instance-cap-removal-order` (security #1, then `instance-cap-exhausted-one-invite` and
+     * `focus-cap-per-range-not-per-day`): removal keys come from a first pass, so a late RECURRENCE-ID can never
+     * remove a kept instance after the cap cut; and one UID gets at most 48 focus instances per local day.
      */
     @Test
     @Tag("instance-cap-removal-order")
-    fun p34CapThenRemovalIsExhaustedAndOneSeriesCannotCrowdOutToday() {
-        // the security repro: Complete(0 events, truncated) before the fix
-        assertEquals(ParseLimit.INSTANCES, exhausted(probe(spam(cancel = 600))))
-        // a dense series alone: capped at 96 focus instances (48 x 2 days), the real event kept
-        val alone = complete(probe(spam(cancel = 0)))
-        assertTrue(alone.events.any { it.title == "REAL" }, "${alone.events.size}")
-        assertEquals(2 * IcsParser.FOCUS_PER_UID_PER_DAY, alone.events.count { it.uid == "spam" })
+    fun p34aDenseSeriesWithCancellationsNeverHidesTheRealEvent() {
+        // probe A (security): 900 instances today, the first 600 cancelled after the master
+        val after = complete(probe(feed(real, spam(cancel = 600))))
+        assertTrue(after.events.any { it.title == "REAL" })
+        assertEquals(IcsParser.FOCUS_PER_UID_PER_DAY, after.events.count { it.uid == "spam" })
+        assertEquals(at("2026-03-10T14:00:00Z"), after.events.first { it.uid == "spam" }.start) // 10:00 EDT, the first not cancelled
+        // overrides before their master: the same answer
+        assertEquals(after.events, complete(probe(feed(real, spam(cancel = 600, overridesFirst = true)))).events)
+        // a dense series alone: 48 today, the real event kept
+        val alone = complete(probe(feed(real, spam(cancel = 0))))
+        assertTrue(alone.events.any { it.title == "REAL" })
+        assertEquals(IcsParser.FOCUS_PER_UID_PER_DAY, alone.events.count { it.uid == "spam" })
         assertTrue(alone.stats.truncated)
-        // overrides before their master are applied as instances arrive: nothing kept is removed later
-        val first = complete(probe(spam(cancel = 600, overridesFirst = true)))
-        assertTrue(first.events.any { it.title == "REAL" })
-        assertEquals(at("2026-03-10T14:00:00Z"), first.events.first { it.uid == "spam" }.start) // 10:00 EDT
-        // the 500 cap cut by many distinct one-off events, then a late cancellation of a kept one
-        val many = StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n")
-        for (i in 0 until 600) many.append("BEGIN:VEVENT\r\nUID:o$i\r\nDTSTART:20260310T%02d%02d00Z\r\nEND:VEVENT\r\n".format(i / 60, i % 60))
-        many.append("BEGIN:VEVENT\r\nUID:o0\r\nRECURRENCE-ID:20260310T000000Z\r\nDTSTART:20260310T000000Z\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\n")
-        assertEquals(ParseLimit.INSTANCES, exhausted(probe(bytes(many.append("END:VCALENDAR\r\n").toString()))))
+        // the 500 cap cut by distinct one-off events, then a cancellation of the earliest: removed before the cut, so
+        // the 500 kept are the best 500 of the rest, the same in either order
+        val ones = (0 until 600).joinToString("") { "BEGIN:VEVENT\r\nUID:o$it\r\nDTSTART:20260310T%02d%02d00Z\r\nEND:VEVENT\r\n".format(it / 60, it % 60) }
+        val cancel = "BEGIN:VEVENT\r\nUID:o0\r\nRECURRENCE-ID:20260310T000000Z\r\nDTSTART:20260310T000000Z\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\n"
+        val late = complete(probe(feed(ones, cancel)))
+        assertEquals(IcsParser.MAX_INSTANCES, late.events.size)
+        assertTrue(late.events.none { it.uid == "o0" })
+        assertEquals(late.events, complete(probe(feed(cancel, ones))).events)
+    }
+
+    /** Probe E (security delta #1): one dense invite plus one moved instance is Complete, real events shown. */
+    @Test
+    @Tag("instance-cap-exhausted-one-invite")
+    fun p34bOneDenseInviteWithAMovedInstanceIsComplete() {
+        val hours = (0..23).joinToString(",")
+        val moved = { t: String -> "BEGIN:VEVENT\r\nUID:s\r\nRECURRENCE-ID;TZID=America/New_York:20260310T$t\r\n" +
+            "DTSTART;TZID=America/New_York:20300310T$t\r\nSUMMARY:s\r\nEND:VEVENT\r\n" }
+        // every 20 minutes today and tomorrow (72 a day), 01:00 today moved to 2030: 48 a day kept
+        val e = complete(probe(feed(real, spam(0, uid = "s", hours = hours, mins = "0,20,40", until = "20260312T035959Z"), moved("010000"))))
+        assertTrue(e.events.any { it.title == "REAL" })
+        assertEquals(2 * IcsParser.FOCUS_PER_UID_PER_DAY, e.events.count { it.uid == "s" })
+        assertTrue(e.events.none { it.start == at("2026-03-10T05:00:00Z") }) // the moved one
+        // every 30 minutes (48 a day, at the cap) with 01:30 moved: 47 today, 48 tomorrow, none cut
+        val c = complete(probe(feed(real, spam(0, uid = "s", hours = hours, mins = "0,30", until = "20260312T035959Z"), moved("013000"))))
+        assertTrue(c.events.any { it.title == "REAL" })
+        assertEquals(95, c.events.count { it.uid == "s" })
+        assertTrue(!c.stats.truncated)
+        // code review: a 20-minute series and an unrelated weekly series whose override follows its master
+        val weekly = "BEGIN:VEVENT\r\nUID:w\r\nDTSTART:20260303T150000Z\r\nDTEND:20260303T160000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:w\r\nEND:VEVENT\r\n" +
+            "BEGIN:VEVENT\r\nUID:w\r\nRECURRENCE-ID:20260310T150000Z\r\nDTSTART:20260310T170000Z\r\nDTEND:20260310T180000Z\r\nSUMMARY:w moved\r\nEND:VEVENT\r\n"
+        val r = complete(probe(feed(real, spam(0, uid = "s", hours = hours, mins = "0,20,40", until = "20260312T035959Z"), weekly)))
+        assertEquals(listOf(at("2026-03-10T17:00:00Z")), r.events.filter { it.uid == "w" }.map { it.start })
+        assertTrue(r.events.any { it.title == "REAL" })
+    }
+
+    /** Probe F (security delta #2): 8 UIDs x 84 instances before 15:00 today; each gets 48, the 15:00 event stays. */
+    @Test
+    @Tag("focus-cap-per-range-not-per-day")
+    fun p34cManyDenseUidsTodayCannotPushOutTheRealEvent() {
+        val hours = (0..13).joinToString(",")
+        val r = complete(probe(feed(real, *Array(8) { spam(0, uid = "u$it", hours = hours, mins = "0,10,20,30,40,50") })))
+        assertTrue(r.events.any { it.title == "REAL" }, "${r.events.size}")
+        for (u in 0 until 8) assertEquals(IcsParser.FOCUS_PER_UID_PER_DAY, r.events.count { it.uid == "u$u" })
+    }
+
+    /**
+     * File order never changes the answer: the same VEVENTs (masters, one-offs, moved and cancelled overrides before
+     * or after their master, a dense series over the per-day cap with cancellations) in random orders.
+     */
+    @Test
+    @Tag("instance-cap-removal-order")
+    fun p34dVeventOrderNeverChangesTheResult() {
+        val rnd = Random(3434)
+        repeat(20) { seed ->
+            val vs = ArrayList<String>()
+            fun v(body: String) { vs += "BEGIN:VEVENT\r\n$body\r\nEND:VEVENT\r\n" }
+            v("UID:real\r\nDTSTART:20260310T190000Z\r\nDTEND:20260310T200000Z\r\nSUMMARY:REAL")
+            repeat(rnd.nextInt(5, 40)) { i ->
+                val h = rnd.nextInt(0, 24)
+                val freq = listOf("DAILY", "WEEKLY", "DAILY;INTERVAL=2")[rnd.nextInt(3)]
+                val d = rnd.nextInt(1, 10)
+                v("UID:m$i\r\nDTSTART:202603%02dT%02d0000Z\r\nDTEND:202603%02dT%02d3000Z\r\nRRULE:FREQ=$freq\r\nSUMMARY:m$i".format(d, h, d, h))
+                if (rnd.nextBoolean()) {
+                    val day = rnd.nextInt(9, 13)
+                    val ovr = if (rnd.nextBoolean()) "STATUS:CANCELLED" else "SUMMARY:m$i moved"
+                    v("UID:m$i\r\nRECURRENCE-ID:202603%02dT%02d0000Z\r\nDTSTART:202603%02dT%02d1500Z\r\n$ovr".format(day, h, day, (h + 1) % 24))
+                }
+            }
+            repeat(rnd.nextInt(0, 30)) { v("UID:o$it\r\nDTSTART:202603%02dT%02d%02d00Z\r\nSUMMARY:o$it".format(rnd.nextInt(9, 13), rnd.nextInt(24), rnd.nextInt(60))) }
+            for (k in 0 until rnd.nextInt(0, 100)) {
+                val t = "20260310T%02d%02d00".format(k / 60, k % 60)
+                v("UID:spam\r\nRECURRENCE-ID;TZID=America/New_York:$t\r\nDTSTART;TZID=America/New_York:$t\r\nSTATUS:CANCELLED")
+            }
+            vs += spam(0)
+            val first = complete(probe(feed(*vs.toTypedArray())))
+            assertTrue(first.events.any { it.title == "REAL" }, "seed $seed")
+            repeat(10) {
+                vs.shuffle(rnd)
+                assertEquals(first.events, complete(probe(feed(*vs.toTypedArray()))).events, "seed $seed")
+            }
+        }
+    }
+
+    /** The keys pass is charged (one step per key) and capped by the VEVENT cap: 50,000 overrides, then one more. */
+    @Test
+    @Tag("instance-cap-removal-order")
+    fun p34eKeysPassIsChargedAndCapped() {
+        fun overrides(n: Int) = HostileFeeds.Bytes(8 shl 20).text(HostileFeeds.HEAD)
+            .repeat("BEGIN:VEVENT\r\nUID:k\r\nRECURRENCE-ID:20260310T150000Z\r\nDTSTART:20260310T150000Z\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\n", n)
+            .text(HostileFeeds.TAIL).bytes()
+        val r = complete(probe(overrides(50_000)))
+        assertTrue(r.stats.steps >= 50_000, "${r.stats.steps}")
+        assertEquals(ParseLimit.VEVENTS, exhausted(probe(overrides(50_001))))
     }
 
     /** P35 `exdate-uncharged` (security #3): 2,000 EXDATEs per VEVENT under more than 256 distinct long TZIDs. */

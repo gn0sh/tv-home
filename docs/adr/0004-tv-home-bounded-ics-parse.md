@@ -74,9 +74,12 @@ unverified, so **the design must hold for any byte string up to the body cap**, 
    A new core `AgendaRefresher` is the only writer of the cache, and writes only on `Ok`. Deterministic per-item
    decisions (a malformed VEVENT skipped, an unsupported rule shown as DTSTART only, one series over its own budget
    skipped) stay inside `Complete` and are counted in `stats`. Parse-wide limits (deadline, global steps, VEVENT
-   count, kept series) give `Exhausted`, because the answer is unknown. So does a 500-instance cut followed by a
-   RECURRENCE-ID that removes a kept instance (`Exhausted(INSTANCES)`, review 2026-10-31): the freed slot belonged
-   to an instance that was cut. One UID holds at most 48 focus instances per day, so one dense series cannot push
+   count, kept series) give `Exhausted`, because the answer is unknown. RECURRENCE-ID removals never depend on file
+   order (delta review 2026-10-31, replacing the earlier `Exhausted(INSTANCES)`): a first, keys-only pass of the
+   reader (UID and RECURRENCE-ID only, one step per key, under the same deadline and 50,000-VEVENT cap) collects
+   every removal key, so originals are dropped before they reach the 500-instance cap and nothing kept is removed
+   later. A VEVENT with a valid UID and RECURRENCE-ID removes its original even if the override is then skipped.
+   One UID holds at most 48 focus instances per local day (48 today, 48 tomorrow), so one dense series cannot push
    real events out of today.
 5. **Cancellation is never a result.** Every `catch (Throwable)` at a boundary calls `ensureActive()` before
    mapping, so a cancelled fetch or parse throws `CancellationException` and changes nothing (no cache write, no

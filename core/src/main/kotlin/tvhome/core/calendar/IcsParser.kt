@@ -19,15 +19,16 @@ import java.util.PriorityQueue
  * - Recurrence is expanded by [RecurrenceExpander] in the event's local frame: TZID events in their zone, floating
  *   ones in the device zone, so wall-clock times hold across DST. Unsupported rules show DTSTART only.
  * - RECURRENCE-ID overrides: the original instance with the same UID and RECURRENCE-ID is dropped and the override
- *   added. RANGE=THISANDFUTURE is not handled: such an override replaces only its own instance. The removal keys are
- *   applied as instances are added and once more at the end (an override can follow its master).
+ *   added. RANGE=THISANDFUTURE is not handled: such an override replaces only its own instance. A first, keys-only
+ *   pass of the reader collects every removal key (one step each, under the same deadline and VEVENT cap), so the
+ *   keys are applied as instances are added and the result never depends on file order (`instance-cap-removal-
+ *   order`). A VEVENT with a valid UID and RECURRENCE-ID removes its original even if the override is then skipped.
  * - STATUS:CANCELLED events and overrides are dropped. One malformed VEVENT is skipped and counted.
  * - Work is bounded by [Limits]: parse-wide limits (deadline from entry, global steps, VEVENTs, kept series) give
  *   [ParseOutcome.Exhausted]; a series over its own budget is skipped and counted. Steps are charged before work.
  * - At most [MAX_INSTANCES] are returned: instances overlapping `focus` (today and tomorrow) are kept first, then the
- *   earliest; the result is in start order. One UID gets at most [FOCUS_PER_UID_PER_DAY] focus instances per focus
- *   day, so one dense series cannot push real events out of today. If the cap cut anything and a RECURRENCE-ID then
- *   removes a kept instance, the cut-off ones cannot be recovered: `Exhausted(INSTANCES)`, never a short Complete.
+ *   earliest; the result is in start order. One UID gets at most [FOCUS_PER_UID_PER_DAY] focus instances on each
+ *   local day of the focus range, so one dense series cannot push real events out of today.
  * - Per-VEVENT work is charged before it is done: an RRULE's size before its rule is built (and only a rule that can
  *   reach the window is built), its times of day before they are built, and each EXDATE before its key is made.
  */
@@ -65,8 +66,11 @@ object IcsParser {
         val deadline = nanoTime() + limits.deadline.toNanos()
         val budget = Budget(limits.maxSteps, limits.maxStepsPerSeries, deadline, nanoTime)
         val run = Run(window, zone, focus ?: window, budget, limits)
-        val reader = IcsReader(body, budget, limits.maxVevents, run::vevent)
         return try {
+            // Pass 1: removal keys only. Its framing verdict is the same as pass 2's, so a reject ends here.
+            IcsReader(body, budget, limits.maxVevents, keysOnly = true, sink = run::removalKey).read()
+                ?.let { return ParseOutcome.Rejected(it) }
+            val reader = IcsReader(body, budget, limits.maxVevents, sink = run::vevent)
             val rejected = reader.read()
             if (rejected != null) ParseOutcome.Rejected(rejected) else run.complete(reader.vevents)
         } catch (s: Stop) {
@@ -135,15 +139,24 @@ object IcsParser {
         val zones = ZoneResolver.Memo(zone)
         val sha256: MessageDigest = MessageDigest.getInstance("SHA-256")
         val out = Collector(focus, zone, window)
-        val replaced = Keys() // RECURRENCE-ID removal keys, one per override (at most maxVevents)
+        val replaced = Keys() // RECURRENCE-ID removal keys from pass 1, one per override (at most maxVevents)
         var series = 0
         var skippedEvents = 0
         var unsupportedRules = 0
         var skippedSeries = 0
         var ignoredValues = 0
 
+        /** Pass 1 sink: one removal key per override with a valid UID line and RECURRENCE-ID, one step each. */
+        fun removalKey(r: VEventRecord) {
+            val rid = r.recurrenceId ?: return
+            if (r.bad) return
+            budget.startSeries()
+            budget.take() // bound: (iii) at most maxVevents keys, each charged before it is made
+            replaced.add(UidKey.of(r.uid ?: "", sha256), point(rid))
+        }
+
         fun complete(vevents: Int): ParseOutcome {
-            val events = out.result(replaced) ?: return ParseOutcome.Exhausted(ParseLimit.INSTANCES)
+            val events = out.result()
             val stats = ParseStats(vevents, skippedEvents, unsupportedRules, skippedSeries, ignoredValues, out.truncated, budget.steps)
             return ParseOutcome.Complete(events, stats)
         }
@@ -197,7 +210,7 @@ object IcsParser {
 
             val rid = r.recurrenceId
             if (rid != null) {
-                replaced.add(key, point(rid))
+                // its removal key came from pass 1
                 if (!cancelled) add(listOf(Raw(uid, title, start.toEventTime(), end)), key, null, removable = false)
                 return
             }
@@ -337,7 +350,7 @@ object IcsParser {
             // bound: (iii) paid for by the charge just above
             for (x in xs) {
                 if (removable && replaced.matches(key, x.start, frame)) continue
-                out.add(x, key, frame, removable)
+                out.add(x, key)
             }
         }
 
@@ -376,18 +389,17 @@ object IcsParser {
 
     /**
      * Keeps the best [MAX_INSTANCES] overlapping instances in a bounded heap: overlapping [focus] first, then earliest.
-     * Each add is O(log 500). One-off and series instances are [removable] by a RECURRENCE-ID that arrives later.
-     * A UID's focus instances beyond [focusCap] are cut (they would only crowd out other events today).
+     * Each add is O(log 500). Removal keys were applied before [add], so nothing kept is ever removed later. A UID's
+     * focus instances beyond [FOCUS_PER_UID_PER_DAY] on one local day are cut (they would only crowd out other
+     * events); the day is the local date of the instance's start, or of the focus start if it began earlier.
      */
     private class Collector(private val focus: InstantRange, private val zone: ZoneId, private val window: InstantRange) {
-        /** [FOCUS_PER_UID_PER_DAY] per day of the focus range, rounded (a 47 or 49 hour DST pair of days is 2). */
-        private val focusCap: Int = FOCUS_PER_UID_PER_DAY *
-            ((Duration.between(focus.start, focus.end).toMinutes() + 720) / 1_440).coerceIn(1, 31).toInt()
+        private class Entry(val e: EventInstance, val focus: Boolean, val sortKey: Instant)
+        private data class DayKey(val uid: UidKey, val day: Long)
 
-        /** Focus instances offered per UID: at most one entry per added instance, so bounded by the steps charged. */
-        private val focusPerUid = HashMap<UidKey, Int>()
-
-        private class Entry(val e: EventInstance, val focus: Boolean, val sortKey: Instant, val key: UidKey, val frame: ZoneId?, val removable: Boolean)
+        /** Focus instances offered per (UID, local day): at most one entry per added instance, each charged. */
+        private val perUidDay = HashMap<DayKey, Int>()
+        private val focusStartDay = focus.start.atZone(zone).toLocalDate()
 
         /** Start order: start, title, uid, end. */
         private val inOrder = Comparator<Entry> { a, b ->
@@ -404,19 +416,20 @@ object IcsParser {
         var truncated = false
             private set
 
-        fun add(r: Raw, key: UidKey, frame: ZoneId?, removable: Boolean) {
+        fun add(r: Raw, key: UidKey) {
             val e = EventInstance(r.uid, r.title, r.start, r.end)
             if (!overlaps(e, window, zone)) return
             val inFocus = overlaps(e, focus, zone)
             if (inFocus) {
-                val n = (focusPerUid[key] ?: 0) + 1
-                focusPerUid[key] = n
-                if (n > focusCap) {
+                val k = DayKey(key, focusDay(e).toEpochDay())
+                val n = (perUidDay[k] ?: 0) + 1
+                perUidDay[k] = n
+                if (n > FOCUS_PER_UID_PER_DAY) {
                     truncated = true
                     return
                 }
             }
-            val entry = Entry(e, inFocus, sortKey(e), key, frame, removable)
+            val entry = Entry(e, inFocus, sortKey(e))
             if (heap.size >= MAX_INSTANCES) {
                 truncated = true
                 if (better.compare(entry, heap.peek()) >= 0) return // no better than the worst kept one
@@ -425,15 +438,15 @@ object IcsParser {
             heap.add(entry)
         }
 
-        /**
-         * The kept instances in start order, or null when a cap cut instances and a late RECURRENCE-ID removed kept
-         * ones: the slots it frees belonged to instances that were cut, so the answer is not known.
-         */
-        fun result(replaced: Keys): List<EventInstance>? {
-            // bound: (ii) at most MAX_INSTANCES entries
-            val kept = heap.filter { !(it.removable && replaced.matches(it.key, it.e.start, it.frame)) }
-            if (truncated && kept.size < heap.size) return null
-            return kept.sortedWith(inOrder).map { it.e } // bound: (ii) at most MAX_INSTANCES
+        /** The kept instances in start order. */
+        fun result(): List<EventInstance> = heap.sortedWith(inOrder).map { it.e } // bound: (ii) at most MAX_INSTANCES
+
+        private fun focusDay(e: EventInstance): LocalDate {
+            val d = when (val s = e.start) {
+                is EventTime.At -> s.instant.atZone(zone).toLocalDate()
+                is EventTime.AllDay -> s.date
+            }
+            return if (d.isBefore(focusStartDay)) focusStartDay else d
         }
 
         private fun sortKey(e: EventInstance): Instant = when (val s = e.start) {

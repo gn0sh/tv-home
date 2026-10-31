@@ -43,12 +43,8 @@ sealed interface ParseOutcome {
     }
 }
 
-/**
- * Parse-wide limits: wall-clock deadline, global steps, VEVENTs per feed, kept recurring series per feed, and
- * INSTANCES: the 500-instance cap cut instances and a RECURRENCE-ID then removed kept ones, so the cut-off ones
- * cannot be known (`instance-cap-removal-order`).
- */
-enum class ParseLimit { DEADLINE, STEPS, VEVENTS, SERIES, INSTANCES }
+/** Parse-wide limits: wall-clock deadline, global steps, VEVENTs per feed, kept recurring series per feed. */
+enum class ParseLimit { DEADLINE, STEPS, VEVENTS, SERIES }
 
 /** Framing violations; each rejects the whole feed. */
 enum class RejectReason { NOT_VCALENDAR, LINE_ENDING, VERSION, CALSCALE, NESTING, STRUCTURE }
