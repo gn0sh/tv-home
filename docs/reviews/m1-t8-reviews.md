@@ -13,3 +13,8 @@ Nit `regex-doc-drift`: API key {20,500} in code vs {20,256} in docs.
 Held up: main path never on argv, SecureString bypasses PSReadLine, non-interactive refused, fixed error strings, trim/regex parity, serial validation, -Clear, bash keeps value off argv, device-side guards, doc asks only at the hidden prompt.
 
 Manager decision: delete the am start fallback (F1). content write is the only path; if it is unsupported, T9 finds out and the plan changes then.
+
+## Delta (security-engineer, ec3e692..7b7275d): APPROVE
+F1-F7 and regex-doc-drift closed. Reordered stdin refusal not weaker. New CI steps (test-provision.sh, pwsh parse + non-interactive smoke) keep hardening. ps1 re-read for 5.1/7: no errors.
+Follow-ups: L1 architecture still described the fallback (fixed by manager in the next commit); L2 `invoke-adb-result-wait` ps1:60 `.Result` with no timeout (devops, with T7); L3 5.1 mid-read cancellation may hang, never leaks (accepted).
+T8 passes review. ps1 first actually runs in CI (pwsh step) after Nov 1.

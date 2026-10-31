@@ -330,10 +330,11 @@ an interactive console.
    PSReadLine history), trims it and checks it against a strict regex (`#3`), printing only "valid" or "not valid":
    - calendar URL: `^https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics$`
    - API key: `^sk-ant-[A-Za-z0-9_-]{20,500}$`
-   It then hands the value to the TV. Preferred, if T9 confirms it works: pipe it over stdin with
+   It then hands the value to the TV only by piping it over stdin with
    `adb shell content write --uri content://com.gnosh.tvhome.provision/calendar_url` into a `DUMP`-guarded
-   `ContentProvider`, so it is never a command-line argument (`#10`). Fallback: `adb shell am start -n
-   com.gnosh.tvhome/.ProvisionActivity --es calendar_url '<value>'` with single-quote escaping.
+   `ContentProvider`, so it is never a command-line argument (`#10`). There is no `am start` fallback (removed after
+   the T8 security review, `provision-fallback-argv`); if T9 finds `content write` over stdin unusable, this design
+   is revisited. ProvisionActivity stays DUMP-guarded but no script uses it.
 2. `ProvisionActivity` (and the provider) is protected by `android:permission="android.permission.DUMP"`, which the
    adb shell user holds and third-party apps cannot get, so no other app on the TV can plant or overwrite a value.
    The activity has no intent-filter, `excludeFromRecents`, `noHistory`; it reads the extra, calls
@@ -349,8 +350,8 @@ Traces, and what tests check (AC6):
 |---|---|---|
 | Claude / agent transcripts | none: Brian runs the script himself | ask wording; script refuses non-interactive stdin |
 | PC PowerShell history | none (`Read-Host`) | script review |
-| PC process list | none with `content write` over stdin; with the `am start` fallback, an adb argument for under a second, visible to Brian's own user only | accepted |
-| TV `am` process args | none with stdin; brief with the fallback; Android hides other apps' /proc | accepted |
+| PC process list | none (`content write` over stdin only) | script review, test-provision.sh |
+| TV `am` process args | none (stdin only) | script review |
 | TV logcat | ActivityTaskManager logs `START u0 {cmp=... (has extras)}`, not extra values | **QA greps a captured logcat after provisioning a dummy value on the emulator** |
 | App logs and crashes | none in release (R8 strips Log; boundaries never let an exception with a secret escape; the uncaught handler only avoids the dropbox) | QA greps logcat incl. `System.err`, `AndroidRuntime` and `logcat -b crash`, and `dumpsys dropbox --print data_app_crash` (`#3`) |
 | Repo / CI | value never present; fixtures use one fixed fake secret | CI greps the build log and the unzipped APK (dex and resources) for `private-[0-9a-f]` and `sk-ant-` (`#9`) |
