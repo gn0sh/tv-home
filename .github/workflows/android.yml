@@ -11,7 +11,15 @@ name: android
 on:
   push:
     branches: [main]
+    # Docs-only changes skip CI (team Actions-minutes rule). The workflow file and scripts/ci/** are not matched here,
+    # so changes to them still trigger it.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   workflow_dispatch:
 
 permissions:
