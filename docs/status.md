@@ -1,7 +1,7 @@
 # tv-home status
 
 Feature: tv-home (custom Google TV home screen). Priority: hip pocket (idle time only; Quick Invoice first).
-Stage: Build M1 (calendar agenda). Core parser/state approved (f95bec0); T5 app and T2b.6 CI in progress. Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
+Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). PAUSED for usage pacing; next is T8 provisioning scripts, T7 signing script, then T9 emulator QA once CI minutes reset Nov 1. Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
 - Usage pacing (coordinator, 2026-10-31 15:25Z): weekly limit at 79%. After the two running T5 reviews, run one subagent at a time and no optional panels until Brian answers the pacing card.
@@ -57,4 +57,7 @@ Stage: Build M1 (calendar agenda). Core parser/state approved (f95bec0); T5 app 
 | 2026-10-31 | devops-engineer | sonnet/low | T2b.6 CI hostile + live job | done (ec37129; manager-reviewed 26-line diff) |
 | 2026-10-31 | frontend-engineer | sonnet/high | T5 :app agenda screen | done (1c81bc8, 238 core tests; :app uncompiled until CI) |
 | 2026-10-31 | ux-designer (manager applied default) | - | T2b.4 stale copy | default text applied (85f0785), mapping corrected in T5 |
-| 2026-10-31 | code-reviewer + security-engineer | opus/high | T5 review | running |
+| 2026-10-31 | security-engineer | opus/high | T5 review | approve with changes (1 medium: crash pre-handler) |
+| 2026-10-31 | code-reviewer | opus/high | T5 review | request changes (ci-core-includes-app) |
+| 2026-10-31 | frontend-engineer | sonnet/high | T5 fixes | done (5d0fc33, 240 tests) |
+| 2026-10-31 | code-reviewer | opus/high | T5 fix review (fresh, CI) | approve with nits |
