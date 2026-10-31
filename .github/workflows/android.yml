@@ -78,6 +78,9 @@ jobs:
           $out = '' | pwsh -NoProfile -File scripts/provision.ps1 2>&1 | Out-String
           if ($LASTEXITCODE -eq 0) { Write-Host 'provision.ps1 accepted redirected stdin'; exit 1 }
           if ($out -notmatch 'own PowerShell window') { Write-Host 'provision.ps1 failed for another reason'; exit 1 }
+          $out = '' | pwsh -NoProfile -File scripts/new-signing-key.ps1 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0) { Write-Host 'new-signing-key.ps1 accepted redirected stdin'; exit 1 }
+          if ($out -notmatch 'own PowerShell window') { Write-Host 'new-signing-key.ps1 failed for another reason'; exit 1 }
           Write-Host 'ps1 checks passed'
       # Hostile ICS probes (tag hostile) in a 96 MiB JVM; runs after :core:test, never alongside it (p14-perf-flaky).
       - name: :core:hostileTest
