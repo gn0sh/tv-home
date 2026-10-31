@@ -13,3 +13,10 @@ INFO: add the script to the CI non-interactive smoke; module logging (4103) woul
 Held: no secret on argv, nothing printed, names/base64 match workflow, keystore ~5 KB, fingerprint regex, overwrite refusal first, finally clears env, provision.ps1 timeout fix correct.
 
 Manager decision: support both Windows PowerShell 5.1 and 7 (5.1 is what Windows ships). Run keytool via ProcessStartInfo (no stderr-as-error), write secrets to gh as raw UTF-8 bytes on StandardInput.BaseStream (no BOM) in both scripts.
+
+## Fresh review of fix (security-engineer, opus/high, 58a68ac): APPROVE WITH CHANGES
+Closed: p12-keypass-ignored (keytool verified on JDK 21), ps51-native-stderr, env-lifetime, remote-overwrite, dpapi-backup-scope.
+Most serious: MEDIUM `stdin-bom` (2nd return) new-signing-key.ps1:48 and provision.ps1: on 5.1, Process.Start wraps stdin in an AutoFlush StreamWriter using Console.InputEncoding, which writes the preamble immediately on a UTF-8 console. Fix: on 5.1 set [Console]::InputEncoding to UTF8Encoding($false) before Start, restore in finally.
+LOW `opaque-failure` 61-63,100,140-142: print a fixed $step label; gh stderr safe to show for gh steps.
+LOW `doc-steps` (2nd return) tv-home-signing.md:17 (`;` chaining), :30 (exact -Rotate command), :9 wording.
+INFO :107 New-Item -LiteralPath.
