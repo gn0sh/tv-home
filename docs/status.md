@@ -16,7 +16,8 @@ Stage: Build M1 (calendar agenda), T2b re-plan in progress. Spec at 7d04d4e cove
 | instance-cap-starves-today | 1 | M1 core code review |
 | floating-recurring-dst | 1 | M1 core code review |
 | one-bad-event-fails-feed | 1 | M1 core code review |
-| rrule-advance-cpu / ics-parse-cpu-memory-dos | 3 | code + security review rounds 1-2; architect re-plan done (ADR 0004, strict reader); T2b.3 is a fresh review |
+| rrule-advance-cpu / ics-parse-cpu-memory-dos | 3 | code + security review rounds 1-2; architect re-plan done (ADR 0004); re-plan failure 1 of 2 at T2b.3 (uncharged setup work), fixing; next failure escalates |
+| instance-cap-removal-order, count-walk-skips-active-series, exdate-uncharged, fetch-redirect-hops-unpinned, p14-perf-flaky, expander-no-differential-test | 1 | T2b.3 reviews (docs/reviews/m1-t2b-reviews.md) |
 | partial-result-replaces-good, cancel-returns-network-error, vtimezone-bare-cr, vcal1-daylight | 1 | round 2 reviews (folded into T2b) |
 | session-ok-never-ages, no-fsync-before-rename, cache-write-throws, emphasis-boundary-60 | 1 | T4 review (fixed) |
 | lenient-verification-with-signing, scan-misses-nested, logs-before-scan | 1 | T6 review (fixed) |
@@ -45,5 +46,8 @@ Stage: Build M1 (calendar agenda), T2b re-plan in progress. Spec at 7d04d4e cove
 | 2026-10-31 | backend-engineer | opus/high | Fix M1 core findings (escalated after bounce) | done (b255e88, own expander, 0/6000 dateutil mismatches) |
 | 2026-10-31 | code-reviewer + security-engineer | opus/high | Round 2 delta on T2+T3 | request changes (3rd return of ics-parse-cpu-memory-dos) |
 | 2026-10-31 | software-architect | opus/high | Re-plan bounded parse (ADR 0004, T2b tasks) | done |
-| 2026-10-31 | backend-engineer | opus/high | T2b.1 strict ICS reader | running |
-| 2026-10-31 | backend-engineer | sonnet/high | T2b.2 fetch/source/state/AgendaRefresher | running |
+| 2026-10-31 | backend-engineer | opus/high | T2b.1 strict ICS reader + merge of T2b.2 | done (d8cdb32, 166 + 34 hostile tests) |
+| 2026-10-31 | backend-engineer | sonnet/high | T2b.2 fetch/source/state/AgendaRefresher | done (310ba73, 144 tests) |
+| 2026-10-31 | code-reviewer | opus/high | T2b.3 fresh review | request changes, 1 must-fix (ics-rule-setup-uncharged) |
+| 2026-10-31 | security-engineer | opus/high | T2b.3 fresh review | request changes, 1 high (instance-cap-removal-order) |
+| 2026-10-31 | backend-engineer | opus/high | Fix T2b findings | running |
