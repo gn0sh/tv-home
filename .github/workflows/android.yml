@@ -16,10 +16,14 @@ on:
     paths-ignore:
       - "docs/**"
       - "**/*.md"
+      - "tv-remote/**"
+      - ".github/workflows/tv-remote.yml"
   pull_request:
     paths-ignore:
       - "docs/**"
       - "**/*.md"
+      - "tv-remote/**"
+      - ".github/workflows/tv-remote.yml"
   workflow_dispatch:
 
 permissions:
