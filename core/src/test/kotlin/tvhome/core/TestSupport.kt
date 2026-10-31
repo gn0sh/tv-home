@@ -1,9 +1,8 @@
 package tvhome.core
 
-import kotlin.coroutines.Continuation
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.coroutines.startCoroutine
-import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.runBlocking
+import tvhome.core.calendar.BodyFetcher
+import tvhome.core.calendar.IcsFetchResult
 
 /**
  * The ONE fake secret used by every test fixture, so CI's grep for `private-` / `sk-ant-` patterns can exclude it by
@@ -16,11 +15,8 @@ object FakeSecrets {
     val API_KEY: String = "sk-ant-" + "f".repeat(40)
 }
 
-/** Runs a suspend block to completion without kotlinx.coroutines (not a :core dependency). */
-fun <T> runSuspend(block: suspend () -> T): T {
-    val latch = CountDownLatch(1)
-    var result: Result<T>? = null
-    block.startCoroutine(Continuation(EmptyCoroutineContext) { result = it; latch.countDown() })
-    latch.await()
-    return result!!.getOrThrow()
-}
+/** Runs a suspend block to completion on the calling thread. */
+fun <T> runSuspend(block: suspend () -> T): T = runBlocking { block() }
+
+/** Blocking call of a [BodyFetcher], for tests. */
+fun BodyFetcher.fetchNow(url: String): IcsFetchResult = runSuspend { fetch(url) }

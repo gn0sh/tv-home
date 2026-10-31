@@ -1,5 +1,12 @@
 package tvhome.core.calendar
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -16,25 +23,32 @@ sealed interface IcsFetchResult {
     data class Error(val error: SourceError) : IcsFetchResult
 }
 
+/**
+ * Downloads one URL. Contract (relied on by the app, T5): main-safe (does its own dispatching), cancellable
+ * (cancelling the caller cancels the HTTP call), never throws except [CancellationException].
+ */
 fun interface BodyFetcher {
-    fun fetch(url: String): IcsFetchResult
+    suspend fun fetch(url: String): IcsFetchResult
 }
 
 data class FetchTimeouts(val connectMs: Long = 5_000, val readMs: Long = 10_000, val callMs: Long = 15_000)
 
 /**
- * Blocking HTTPS fetch of an ICS feed. Callers must run it off the main thread (the app wraps it in
- * Dispatchers.IO). Policy: https only (checked before any I/O), connect 5 s / read 10 s / call 15 s,
- * no redirect that changes scheme (https to http comes back as HTTP_STATUS), body capped at [maxBytes] after
- * decompression. Every failure becomes a [SourceError]; nothing from an exception escapes.
+ * HTTPS fetch of an ICS feed. Main-safe: the blocking OkHttp call runs on Dispatchers.IO, and cancelling the
+ * calling coroutine cancels the call. Policy: https only (checked before any I/O), connect 5 s / read 10 s /
+ * call 15 s, no redirect that changes scheme (https to http comes back as HTTP_STATUS), body capped at [maxBytes]
+ * after decompression. Every failure becomes a [SourceError]; nothing from an exception escapes.
  *
- * [customize] is for tests (trust store, interceptors). It runs first and cannot loosen the policy above.
+ * The public constructor uses the platform trust store and cannot be loosened. The internal one takes [customize]
+ * for tests in this module only (trust store, DNS): it runs first, so it cannot change the timeouts or redirects.
  */
-class IcsFetcher(
-    timeouts: FetchTimeouts = FetchTimeouts(),
-    private val maxBytes: Long = MAX_BYTES,
-    customize: OkHttpClient.Builder.() -> Unit = {},
+class IcsFetcher internal constructor(
+    timeouts: FetchTimeouts,
+    private val maxBytes: Long,
+    customize: OkHttpClient.Builder.() -> Unit,
 ) : BodyFetcher {
+
+    constructor(timeouts: FetchTimeouts = FetchTimeouts(), maxBytes: Long = MAX_BYTES) : this(timeouts, maxBytes, {})
 
     private val client: OkHttpClient = OkHttpClient.Builder().apply(customize)
         .connectTimeout(timeouts.connectMs, TimeUnit.MILLISECONDS)
@@ -44,26 +58,28 @@ class IcsFetcher(
         .followRedirects(true)
         .build()
 
-    override fun fetch(url: String): IcsFetchResult {
+    override suspend fun fetch(url: String): IcsFetchResult {
         val parsed = when (val c = checkUrl(url)) {
             is UrlCheck.Rejected -> return IcsFetchResult.Error(c.error)
             is UrlCheck.Ok -> c.url
         }
         return try {
             val request = Request.Builder().url(parsed).header("Accept", "text/calendar, text/plain;q=0.5").get().build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return IcsFetchResult.Error(SourceError.HTTP_STATUS)
-                val body = response.body ?: return IcsFetchResult.Error(SourceError.HTTP_STATUS)
-                val declared = body.contentLength()
-                if (declared > maxBytes) return IcsFetchResult.Error(SourceError.TOO_LARGE)
-                val source = body.source()
-                val buffer = okio.Buffer()
-                while (true) {
-                    val n = source.read(buffer, 8192)
-                    if (n == -1L) break
-                    if (buffer.size > maxBytes) return IcsFetchResult.Error(SourceError.TOO_LARGE)
+            val call = client.newCall(request)
+            coroutineScope {
+                // Cancelling this scope cancels the call, which makes the blocking execute() below throw at once.
+                val canceller = launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        call.cancel() // idempotent; a no-op once the response has been read
+                    }
                 }
-                IcsFetchResult.Body(buffer.readUtf8())
+                try {
+                    withContext(Dispatchers.IO) { execute(call) }
+                } finally {
+                    canceller.cancel()
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -71,6 +87,21 @@ class IcsFetcher(
             // Deliberately Throwable and deliberately no text: OkHttp messages can contain the URL or header values.
             IcsFetchResult.Error(if (isDnsFailure(t)) SourceError.OFFLINE else SourceError.NETWORK)
         }
+    }
+
+    private fun execute(call: Call): IcsFetchResult = call.execute().use { response ->
+        if (!response.isSuccessful) return IcsFetchResult.Error(SourceError.HTTP_STATUS)
+        val body = response.body ?: return IcsFetchResult.Error(SourceError.HTTP_STATUS)
+        val declared = body.contentLength()
+        if (declared > maxBytes) return IcsFetchResult.Error(SourceError.TOO_LARGE)
+        val source = body.source()
+        val buffer = okio.Buffer()
+        while (true) {
+            val n = source.read(buffer, 8192)
+            if (n == -1L) break
+            if (buffer.size > maxBytes) return IcsFetchResult.Error(SourceError.TOO_LARGE)
+        }
+        IcsFetchResult.Body(buffer.readUtf8())
     }
 
     companion object {

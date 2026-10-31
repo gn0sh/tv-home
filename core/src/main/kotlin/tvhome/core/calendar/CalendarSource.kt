@@ -12,6 +12,10 @@ sealed interface FetchResult {
     data class Failed(val error: SourceError) : FetchResult
 }
 
+/**
+ * Contract: [fetch] is main-safe and cancellable, and never throws except CancellationException (see
+ * [IcsCalendarSource]).
+ */
 interface CalendarSource {
     suspend fun fetch(window: InstantRange): FetchResult
 }

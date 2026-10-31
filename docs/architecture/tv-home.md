@@ -79,6 +79,15 @@ enum class SecretKey { CALENDAR_URL, ANTHROPIC_API_KEY }
 interface SecretStore { fun get(k: SecretKey): String?; fun put(k: SecretKey, v: String); fun clear(k: SecretKey) }
 class Redactor(secrets: () -> Collection<String>) { fun redact(s: String): String }
 ```
+**Threading contract (T5):** `CalendarSource.fetch` and `BodyFetcher.fetch` are main-safe; call them from any
+dispatcher, including Main. The secret read and the download run on `Dispatchers.IO`, the parse on
+`Dispatchers.Default` inside `runInterruptible`. Cancelling the calling coroutine (e.g. the lifecycle scope on
+`ON_STOP`) cancels the OkHttp call and interrupts the parse; `fetch` then throws `CancellationException`, which the
+app must let propagate. Nothing else is thrown. `:core` exposes kotlinx-coroutines-core 1.9.0 as an `api` dependency.
+`IcsFetcher`'s client-customising constructor is `internal` (tests only); the app uses `IcsFetcher()`.
+`toString()` of `EventInstance`, `FetchResult.Ok`, `AgendaDay` and `AgendaItem` prints counts and times only, never
+titles or uids.
+
 No exception, exception message or URL crosses from `calendar` into `state` or `app`: errors are the `SourceError`
 enum only. That is the main redaction control; `Redactor` is defence in depth for anything that is logged.
 

@@ -11,6 +11,11 @@ import tvhome.core.runSuspend
 import tvhome.core.secrets.InMemorySecretStore
 import tvhome.core.secrets.Redactor
 import tvhome.core.secrets.SecretKey
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.time.Instant
 import kotlin.random.Random
@@ -84,7 +89,7 @@ class IcsCalendarSourceTest {
         server.start()
         try {
             val client = HandshakeCertificates.Builder().addTrustedCertificate(held.certificate).build()
-            val fetcher = IcsFetcher { sslSocketFactory(client.sslSocketFactory(), client.trustManager) }
+            val fetcher = IcsFetcher(FetchTimeouts(), IcsFetcher.MAX_BYTES) { sslSocketFactory(client.sslSocketFactory(), client.trustManager) }
             server.enqueue(MockResponse().setBody("BEGIN:VCALENDAR"))
             val u = server.url("/ical/x/${FakeSecrets.CALENDAR_TOKEN}/basic.ics").toString()
             val r = runSuspend { source(storeWithUrl(u), fetcher).fetch(window) }
@@ -94,6 +99,29 @@ class IcsCalendarSourceTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    /** blocking-in-suspend: fetch is main-safe and cancelling it interrupts a parse in progress. */
+    @Test fun cancellingFetchInterruptsTheParse() {
+        val started = java.util.concurrent.CountDownLatch(1)
+        val interrupted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val spinning = IcsParse { _, _ ->
+            started.countDown()
+            while (!Thread.currentThread().isInterrupted) { /* CPU-bound work that polls the interrupt flag */ }
+            interrupted.set(true)
+            throw InterruptedException()
+        }
+        val s = source(storeWithUrl(), { IcsFetchResult.Body("BEGIN:VCALENDAR") }, spinning)
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(10)) {
+            runBlocking { // single thread: the parse must not run on it
+                val job = async { s.fetch(window) }
+                withContext(Dispatchers.IO) { assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+                job.cancel()
+                val r = runCatching { job.await() }
+                assertTrue(r.exceptionOrNull() is CancellationException, r.toString())
+            }
+        }
+        assertTrue(interrupted.get())
     }
 
     /**

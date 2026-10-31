@@ -19,6 +19,8 @@ dependencies {
     implementation(libs.biweekly)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    // api: CalendarSource.fetch is a suspend API whose contract (main-safe, cancellable) the app relies on.
+    api(libs.kotlinx.coroutines.core)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
