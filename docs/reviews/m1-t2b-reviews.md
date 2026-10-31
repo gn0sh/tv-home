@@ -25,3 +25,13 @@ Held up: Stop as Throwable, Exhausted/Rejected never saved, refresher locking, e
 - `ics-parse-cpu-memory-dos` family: re-plan failure 1 of 2 (uncharged setup work). Cheap fixes, not a new architecture. A second failure after this fix escalates per playbook.
 - Step budget (#4): raise maxSteps from 1M to 5M (about 0.3 s here, est. under 2.5 s on the TV), so it stays inside the 5 s deadline with margin. Reversible constant; architect may revise.
 - P14 perf flake (#6): give the wall-clock assert a 2x margin and run hostileTest after test, not in parallel.
+
+## Delta round (f9d21dc)
+Code review: APPROVE WITH NITS. Closed: ics-rule-setup-uncharged, count-walk-skips-active-series (MONTHLY/YEARLY; COUNT boundaries exact vs brute force), expander-no-differential-test. Remaining walked shape (DAILY/WEEKLY + BYMONTH/BYMONTHDAY + COUNT) accepted. New should-fix `instances-exhausted-overbroad`: a per-UID cut makes any late RECURRENCE-ID turn the whole feed Exhausted(INSTANCES).
+Security: APPROVE WITH CHANGES. Probes A-C fixed, D no longer exhausts, G 6,000 COUNT checks 0 mismatches.
+1. MEDIUM `instance-cap-exhausted-one-invite` (same as code review's): one ~560-byte invite (DAILY;BYHOUR=0..23;BYMINUTE=0,20,40 + one moved instance) -> Exhausted(INSTANCES); every-15-min series with one moved instance also trips it. Availability only.
+2. LOW `focus-cap-per-range-not-per-day`: cap is 48 x focus days per UID over the range, not per day; 8 UIDs x 84 before 15:00 push a real event out (visible, Complete).
+3. INFO: 5M steps ~0.6 s frozen clock, est. 3-5 s on TV; don't raise further without TV measurement.
+Probe files: m1-t2b-secprobes.kt.txt (A-D), m1-t2b-secprobes2.kt.txt (E-H).
+
+Manager decision: take security's by-construction fix. A first reader-only pass collects RECURRENCE-ID keys (bounded, charged), so removals are applied at add time, never depend on file order, and ParseLimit.INSTANCES is removed. Per-UID cap becomes per (UID, local day). Delta re-reviews after.
