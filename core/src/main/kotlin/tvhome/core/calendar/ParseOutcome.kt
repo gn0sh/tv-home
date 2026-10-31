@@ -5,7 +5,7 @@ import java.time.ZoneId
 
 /**
  * Seam to [IcsParser] (architecture section 3a, ADR 0004): takes the raw body bytes and the window, returns exactly
- * one [ParseOutcome]. Blocking and CPU-bound; [IcsCalendarSource] runs it on its CPU dispatcher inside
+ * one [ParseOutcome], never throws for any input. Blocking and CPU-bound; [IcsCalendarSource] runs it on its CPU dispatcher inside
  * `runInterruptible`. It throws only [InterruptedException] (cancellation); anything else is a bug that the source
  * boundary maps to `PARSE`.
  */

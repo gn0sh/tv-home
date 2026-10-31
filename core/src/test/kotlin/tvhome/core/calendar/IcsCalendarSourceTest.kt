@@ -14,6 +14,7 @@ import tvhome.core.secrets.SecretKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -24,29 +25,35 @@ class IcsCalendarSourceTest {
     private val window = InstantRange(Instant.parse("2026-10-30T00:00:00Z"), Instant.parse("2026-11-03T00:00:00Z"))
     private val now = Instant.parse("2026-10-31T12:00:00Z")
     private val oneEvent = listOf(EventInstance("u1", "Dentist", EventTime.At(now), null))
-    // Minimal stub for T2's IcsParser: any text containing VCALENDAR parses to one event, anything else throws.
+    private val stats = ParseStats(1, 0, 0, 0, 0, truncated = false, steps = 1)
+    private fun complete(events: List<EventInstance> = oneEvent) = ParseOutcome.Complete(events, stats)
+
+    // Stub for the bounded parse (T2b.1 supplies the real one): a body containing VCALENDAR is Complete with one
+    // event, anything else throws (a bug in the parser, mapped to PARSE).
     private val stubParser = IcsParse { body, _ ->
-        if (String(body).contains("VCALENDAR")) ParseOutcome.Complete(oneEvent, ParseStats(1, 0, 0, 0, 0, false, 1))
-        else throw IllegalStateException("bad ics near ${FakeSecrets.CALENDAR_URL}")
+        if (String(body).contains("VCALENDAR")) complete() else throw IllegalStateException("bad ics near ${FakeSecrets.CALENDAR_URL}")
     }
 
+    private fun body(s: String) = IcsFetchResult.Body(s.toByteArray())
+
+    /** Test source: the stored-URL check is open, because the test servers and fake hosts are not Google. */
     private fun source(store: InMemorySecretStore, fetcher: BodyFetcher, parser: IcsParse = stubParser) =
-        IcsCalendarSource(store, fetcher, parser) { now }
+        IcsCalendarSource(store, fetcher, parser, Dispatchers.IO, Dispatchers.Default, { now }, { true })
 
     private fun storeWithUrl(u: String = FakeSecrets.CALENDAR_URL) = InMemorySecretStore(mapOf(SecretKey.CALENDAR_URL to u))
 
     @Test fun noSecretIsNotConfiguredAndNeverFetches() {
         var called = false
-        val s = source(InMemorySecretStore(), { called = true; IcsFetchResult.Body("") })
+        val s = source(InMemorySecretStore(), { called = true; body("") })
         assertEquals(FetchResult.Failed(SourceError.NOT_CONFIGURED), runSuspend { s.fetch(window) })
         assertFalse(called)
-        val blank = source(storeWithUrl("  "), { called = true; IcsFetchResult.Body("") })
+        val blank = source(storeWithUrl("  "), { called = true; body("") })
         assertEquals(FetchResult.Failed(SourceError.NOT_CONFIGURED), runSuspend { blank.fetch(window) })
         assertFalse(called)
     }
 
     @Test fun goodBodyParsesToOk() {
-        val s = source(storeWithUrl(), { IcsFetchResult.Body("BEGIN:VCALENDAR") })
+        val s = source(storeWithUrl(), { body("BEGIN:VCALENDAR") })
         assertEquals(FetchResult.Ok(oneEvent, now), runSuspend { s.fetch(window) })
     }
 
@@ -58,7 +65,7 @@ class IcsCalendarSourceTest {
     }
 
     @Test fun parserFailureIsParseWithNoText() {
-        val s = source(storeWithUrl(), { IcsFetchResult.Body("garbage") })
+        val s = source(storeWithUrl(), { body("garbage") })
         val r = runSuspend { s.fetch(window) }
         assertEquals(FetchResult.Failed(SourceError.PARSE), r)
         assertFalse(r.toString().contains(FakeSecrets.CALENDAR_TOKEN))
@@ -70,14 +77,14 @@ class IcsCalendarSourceTest {
         assertEquals(FetchResult.Failed(SourceError.NETWORK), r)
     }
 
-    @Test fun realParserMapsIcsParseExceptionToParseAndGoodFeedToOk() {
-        val bad = source(storeWithUrl(), { IcsFetchResult.Body("not a calendar ${FakeSecrets.CALENDAR_URL}") }, IcsParse.ics { java.time.ZoneOffset.UTC })
+    @Test fun realParserAdapterMapsIcsParseExceptionToParseAndGoodFeedToOk() {
+        val bad = source(storeWithUrl(), { body("not a calendar ${FakeSecrets.CALENDAR_URL}") }, IcsParse.ics { java.time.ZoneOffset.UTC })
         val r = runSuspend { bad.fetch(window) }
         assertEquals(FetchResult.Failed(SourceError.PARSE), r)
         assertFalse(r.toString().contains(FakeSecrets.CALENDAR_TOKEN))
         val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:a@t\r\nDTSTAMP:20260101T000000Z\r\n" +
             "DTSTART:20261031T150000Z\r\nDTEND:20261031T160000Z\r\nSUMMARY:Lunch\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-        val good = source(storeWithUrl(), { IcsFetchResult.Body(ics) }, IcsParse.ics { java.time.ZoneOffset.UTC })
+        val good = source(storeWithUrl(), { body(ics) }, IcsParse.ics { java.time.ZoneOffset.UTC })
         val ok = runSuspend { good.fetch(window) } as FetchResult.Ok
         assertEquals(listOf("Lunch"), ok.events.map { it.title })
     }
@@ -90,7 +97,7 @@ class IcsCalendarSourceTest {
         server.start()
         try {
             val client = HandshakeCertificates.Builder().addTrustedCertificate(held.certificate).build()
-            val fetcher = IcsFetcher(FetchTimeouts(), IcsFetcher.MAX_BYTES) { sslSocketFactory(client.sslSocketFactory(), client.trustManager) }
+            val fetcher = IcsFetcher(FetchTimeouts(), IcsFetcher.MAX_BYTES, { true }) { sslSocketFactory(client.sslSocketFactory(), client.trustManager) }
             server.enqueue(MockResponse().setBody("BEGIN:VCALENDAR"))
             val u = server.url("/ical/x/${FakeSecrets.CALENDAR_TOKEN}/basic.ics").toString()
             val r = runSuspend { source(storeWithUrl(u), fetcher).fetch(window) }
@@ -112,7 +119,7 @@ class IcsCalendarSourceTest {
             interrupted.set(true)
             throw InterruptedException()
         }
-        val s = source(storeWithUrl(), { IcsFetchResult.Body("BEGIN:VCALENDAR") }, spinning)
+        val s = source(storeWithUrl(), { body("BEGIN:VCALENDAR") }, spinning)
         assertTimeoutPreemptively(java.time.Duration.ofSeconds(10)) {
             runBlocking { // single thread: the parse must not run on it
                 val job = async { s.fetch(window) }
@@ -147,7 +154,7 @@ class IcsCalendarSourceTest {
             }
             val store = storeWithUrl(u)
             val viaFetcher = source(store, { throw thrown })
-            val viaParser = source(store, { IcsFetchResult.Body("x") }, { _, _ -> throw thrown })
+            val viaParser = source(store, { body("x") }, { _, _ -> throw thrown })
             val results = listOf(runSuspend { viaFetcher.fetch(window) }, runSuspend { viaParser.fetch(window) })
             val redactor = Redactor { listOfNotNull(store.get(SecretKey.CALENDAR_URL)) }
             for (r in results) {
@@ -160,5 +167,89 @@ class IcsCalendarSourceTest {
             assertFalse(redactor.redact(careless).contains(token), careless)
             assertFalse(store.toString().contains(token))
         }
+    }
+
+    // ---- T2b.2 ----
+
+    /** ADR 0004 item 4: only Complete is Ok; Exhausted is PARSE_LIMIT; Rejected is PARSE. No path to Ok otherwise. */
+    @Test fun outcomesMapToResults() {
+        fun run(o: ParseOutcome) = runSuspend { source(storeWithUrl(), { body("x") }, { _, _ -> o }).fetch(window) }
+        assertEquals(FetchResult.Ok(oneEvent, now), run(complete()))
+        assertEquals(FetchResult.Ok(emptyList(), now), run(complete(emptyList())))
+        for (l in ParseLimit.values()) assertEquals(FetchResult.Failed(SourceError.PARSE_LIMIT), run(ParseOutcome.Exhausted(l)))
+        for (r in RejectReason.values()) assertEquals(FetchResult.Failed(SourceError.PARSE), run(ParseOutcome.Rejected(r)))
+    }
+
+    @Test fun parserReceivesTheExactBytesAndWindow() {
+        val raw = byteArrayOf(0, 1, -1, -128, 127, 13, 10)
+        var seen: ByteArray? = null
+        var seenWindow: InstantRange? = null
+        val s = source(storeWithUrl(), { IcsFetchResult.Body(raw) }, { b, w -> seen = b; seenWindow = w; complete() })
+        runSuspend { s.fetch(window) }
+        assertSame(raw, seen)          // no copy between fetcher and parser
+        assertEquals(window, seenWindow)
+    }
+
+    /** H11: a stored URL that fails the provisioning check is NOT_CONFIGURED and makes no request. */
+    @Test fun storedUrlIsRevalidatedBeforeAnyRequest() {
+        var called = false
+        val bad = listOf(
+            "http://calendar.google.com/calendar/ical/a/private-" + "f".repeat(32) + "/basic.ics",
+            "https://evil.example.test/calendar/ical/a/private-" + "f".repeat(32) + "/basic.ics",
+            "https://calendar.google.com/calendar/ical/a/private-short/basic.ics",
+            "https://calendar.google.com.evil.test/calendar/ical/a/private-" + "f".repeat(32) + "/basic.ics",
+            "https://calendar.google.com/calendar/ical/a/b/c/basic.ics",
+            "not a url",
+        )
+        for (u in bad) {
+            val s = IcsCalendarSource(storeWithUrl(u), { called = true; body("BEGIN:VCALENDAR") }, stubParser) // the real check
+            assertEquals(FetchResult.Failed(SourceError.NOT_CONFIGURED), runSuspend { s.fetch(window) }, u)
+        }
+        assertFalse(called)
+        val good = IcsCalendarSource(storeWithUrl(), { called = true; body("BEGIN:VCALENDAR") }, stubParser, clock = { now })
+        assertEquals(FetchResult.Ok(oneEvent, now), runSuspend { good.fetch(window) })
+        assertTrue(called)
+    }
+
+    /** What `fetch` itself produced when its caller was cancelled while [blocked] was running. */
+    private fun outcomeOnCancel(s: IcsCalendarSource, started: java.util.concurrent.CountDownLatch, afterCancel: () -> Unit = {}): Result<FetchResult> =
+        runBlocking {
+            val out = kotlinx.coroutines.CompletableDeferred<Result<FetchResult>>()
+            val job = launch(Dispatchers.Default) { out.complete(runCatching { s.fetch(window) }) }
+            withContext(Dispatchers.IO) { assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+            job.cancel()
+            afterCancel()
+            kotlinx.coroutines.withTimeout(10_000) { out.await() }
+        }
+
+    /** cancel-returns-network-error (C2), download phase: a fetcher that fails because of the cancel. */
+    @Test fun cancelDuringDownloadThrowsEvenIfTheFetcherFailsWithAnIoError() {
+        val started = java.util.concurrent.CountDownLatch(1)
+        val fetcher = BodyFetcher {
+            started.countDown()
+            try { kotlinx.coroutines.awaitCancellation() } catch (e: CancellationException) { throw IOException("Canceled") }
+        }
+        val r = outcomeOnCancel(source(storeWithUrl(), fetcher), started)
+        assertTrue(r.exceptionOrNull() is CancellationException, "fetch returned: $r")
+    }
+
+    /** C2, parse phase: the parser fails with something other than InterruptedException when interrupted. */
+    @Test fun cancelDuringParseThrowsEvenIfTheParserThrowsSomethingElse() {
+        val started = java.util.concurrent.CountDownLatch(1)
+        val parser = IcsParse { _, _ ->
+            started.countDown()
+            while (!Thread.currentThread().isInterrupted) { /* spin until the cancel interrupts us */ }
+            throw IllegalStateException("parser bug after interrupt")
+        }
+        val r = outcomeOnCancel(source(storeWithUrl(), { body("x") }, parser), started)
+        assertTrue(r.exceptionOrNull() is CancellationException, "fetch returned: $r")
+    }
+
+    /** Without a cancel the same failures are still PARSE / NETWORK (the fix must not swallow real errors). */
+    @Test fun uncancelledFailuresStillMapToEnums() {
+        assertEquals(FetchResult.Failed(SourceError.PARSE),
+            runSuspend { source(storeWithUrl(), { body("x") }, { _, _ -> throw IllegalStateException() }).fetch(window) })
+        assertEquals(FetchResult.Failed(SourceError.NETWORK),
+            runSuspend { source(storeWithUrl(), { throw IOException() }).fetch(window) })
     }
 }

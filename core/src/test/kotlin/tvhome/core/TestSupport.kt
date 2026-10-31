@@ -20,3 +20,7 @@ fun <T> runSuspend(block: suspend () -> T): T = runBlocking { block() }
 
 /** Blocking call of a [BodyFetcher], for tests. */
 fun BodyFetcher.fetchNow(url: String): IcsFetchResult = runSuspend { fetch(url) }
+
+/** The events of a Complete outcome; fails the test for anything else. */
+fun tvhome.core.calendar.ParseOutcome.completeEvents(): List<tvhome.core.calendar.EventInstance> =
+    (this as? tvhome.core.calendar.ParseOutcome.Complete)?.events ?: throw AssertionError("not Complete: $this")

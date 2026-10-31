@@ -2,6 +2,7 @@ package tvhome.core.calendar
 
 import java.time.Instant
 
+/** [PARSE_LIMIT]: a parse-wide limit ran out ([ParseOutcome.Exhausted]); [PARSE]: the feed was rejected or a bug threw. */
 enum class SourceError { NOT_CONFIGURED, OFFLINE, NETWORK, HTTP_STATUS, TOO_LARGE, PARSE, PARSE_LIMIT, INSECURE_URL }
 
 sealed interface FetchResult {
@@ -16,6 +17,6 @@ sealed interface FetchResult {
  * Contract: [fetch] is main-safe and cancellable, and never throws except CancellationException (see
  * [IcsCalendarSource]).
  */
-interface CalendarSource {
+fun interface CalendarSource {
     suspend fun fetch(window: InstantRange): FetchResult
 }
