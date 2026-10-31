@@ -76,6 +76,20 @@ Acceptance criteria
 9. Uses Brian's Anthropic API credits (included in his plan). Architect estimates cost per question (tokens per request, model choice) in the architecture doc before build; the app shows no cost UI. Only the spoken/typed text and installed app names are sent, never calendar data.
 10. Titles and requests are not stored beyond the single session.
 
+### M1c: Control from Claude (typing on laptop or phone)
+As Brian, I want to type to Claude on my laptop or phone and have it control my TV, so I don't need the remote.
+Scope is outcomes only; the mechanism is the architect's. Reaches the TV from his Windows PC over the home network (LAN only); the phone works through the PC, which must be on.
+Acceptance criteria
+1. From Claude on his laptop, "open Stranger Things" opens the right installed service on the title or its search page, reusing M1b's find-and-open logic (same fixtures pass for both entry points).
+2. Claude can press remote buttons on the Google TV (Home, Back, D-pad, OK, play/pause) on request; each is observed working on the device.
+3. Claude can control the LG TV: power on/off, volume up/down/set, mute, and switch input. Each is observed working on the TV.
+4. LG pairing is a one-time prompt accepted on the TV; after that, commands work without prompts, including after a reboot of the PC.
+5. Allowed actions are an explicit list. Uninstall, settings changes, factory reset, account changes and anything outside the list are refused with a clear message (tested by asking for each).
+6. LAN only: the TV is not exposed to the internet and no cloud relay is added (checked by listening ports and outbound connections during use).
+7. If the PC, a TV or the network is unreachable, Claude says which one and does nothing else (tested with each unplugged/off).
+8. Phone use works via the PC; when the PC is off, the failure message says so.
+9. Nothing is installed on his PC, and no network debugging or pairing is enabled on either device, without Brian's OK (hard stop, asked once per item).
+
 ### M2 (conditional on M0 showing a gap Brian cares about): our own launcher
 Only started after Brian names the gap. Scope is only that gap, for example:
 1. Lists apps with a TV launcher entry (`<queries>` LEANBACK_LAUNCHER), favorites first in configured order, rest alphabetical; JVM test for ordering incl. missing and duplicate favorites.
@@ -98,6 +112,7 @@ Optional weather: free keyless source, "Weather unavailable" on failure; cut if 
 | M0 | Install Projectivy from the Play Store, arrange apps, report gaps | 30 |
 | M1 | Decide ICS vs OAuth; approve sideload once (Developer options, adb from PC or downloader app); give ICS URL or OAuth client via adb push/QR | 30-45 first time |
 | M1b | Provide a dedicated, spend-limited Anthropic API key with his typed OK (adb push or QR/phone step); try 5 requests and say which worked | 15 |
+| M1c | OK installing the control tool on his PC; enable network debugging on the Google TV and accept the LG pairing prompt on the TV; try 5 commands | 20 |
 | M2 | Name the gap; approve install of updates | 10 |
 | M3 | Approve adb change, run rollback test with us | 20 |
 
