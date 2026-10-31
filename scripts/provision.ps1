@@ -53,6 +53,7 @@ function Invoke-Adb([string[]]$AdbArgs, [byte[]]$Stdin = $null, [int]$TimeoutMs 
         $p.StandardInput.Close()
         if (-not $p.WaitForExit($TimeoutMs)) { throw 'adb timed out' }
         $p.WaitForExit()   # let the async readers finish
+        if (-not $outTask.Wait($TimeoutMs) -or -not $errTask.Wait($TimeoutMs)) { throw 'adb output read timed out' }
     } catch {
         try { $p.Kill() } catch { }
         return [pscustomobject]@{ Code = -1; Text = '' }   # fixed outcome; never the exception text
