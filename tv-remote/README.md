@@ -35,10 +35,11 @@ for example `host = "10.0.5.20/16"`. The subnet's network and broadcast addresse
 `192.168.68.255`) are refused.
 
 Pairing material is stored in the same folder and is never returned by a tool or written to logs.
-- Google TV (C4, built): `atv-client-cert.pem` (public), `atv-client-key.sealed` (the private key, sealed with DPAPI
-  for Brian's Windows user and never written unencrypted), and `atv-tv-cert.sha256`, the TV's certificate fingerprint
-  pinned when pairing succeeds. If the TV later presents a different certificate, every Google TV command is refused
-  until it is paired again. Pairing needs Windows. Elsewhere the server refuses to store keys.
+- Google TV (C4, built): `atv-client-cert.pem` (public), `atv-client-key.pem` (the private key as encrypted PKCS#8,
+  never written unencrypted), `atv-client-key.pw.sealed` (its random password, sealed with DPAPI for Brian's Windows
+  user), and `atv-tv-cert.sha256`, the TV's certificate fingerprint pinned when pairing succeeds. The pin is checked
+  inside every TLS handshake, before anything is sent. If the TV presents a different certificate, every Google TV
+  command is refused until it is paired again. If the key can no longer be unsealed, `tv_pair` creates a new one. Pairing needs Windows. Elsewhere the server refuses to store keys.
 - LG (C3): client key with DPAPI and pinned fingerprint, **not built yet**. On non-Windows machines (tests, development) set `TV_REMOTE_CONFIG_DIR` to the folder.
 
 ## Run and test

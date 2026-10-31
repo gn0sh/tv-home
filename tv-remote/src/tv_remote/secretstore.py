@@ -9,7 +9,8 @@ from __future__ import annotations
 import sys
 from typing import Protocol
 
-# Extra entropy scopes the blob to this app: another program running as Brian must also know it to unseal.
+# Fixed, public entropy: it only keeps other apps' DPAPI blobs and ours apart. It is not a secret, so any program
+# running as Brian can still unseal this. DPAPI protects against other users and offline copies of the disk.
 _ENTROPY = b"tv-remote pairing secret v1"
 
 
