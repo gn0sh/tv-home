@@ -1,0 +1,92 @@
+package tvhome.core.calendar
+
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
+import tvhome.core.agenda.agendaFocus
+import tvhome.core.agenda.agendaWindow
+import java.time.Instant
+import java.time.ZoneId
+
+@Tag("hostile")
+class SecProbeTest {
+    private val ny = ZoneId.of("America/New_York")
+    private val now = Instant.parse("2026-03-10T14:00:00Z")
+    private val window = agendaWindow(now, ny)
+    private val HEAD = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n"
+    private val TAIL = "END:VCALENDAR\r\n"
+
+    private fun run(name: String, body: ByteArray, frozen: Boolean = true): ParseOutcome {
+        System.gc()
+        val rt = Runtime.getRuntime()
+        val t0 = System.nanoTime()
+        val r = if (frozen) IcsParser.parse(body, window, ny, agendaFocus(window, ny)) { 0L }
+                else IcsParser.parse(body, window, ny, agendaFocus(window, ny))
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        val extra = if (r is ParseOutcome.Complete) " titles=" + r.events.map { it.title }.groupingBy { it }.eachCount() else ""
+        println("PROBE $name: ${body.size} B, $ms ms, used=${(rt.totalMemory()-rt.freeMemory())/1048576}MiB max=${rt.maxMemory()/1048576}MiB, $r$extra")
+        return r
+    }
+
+    // A: 500-cap truncation, then late RECURRENCE-ID removals: real event vanishes, outcome still Complete
+    @Test fun aTruncationThenRemoval() {
+        val sb = StringBuilder(HEAD)
+        sb.append("BEGIN:VEVENT\r\nUID:real\r\nDTSTART:20260310T190000Z\r\nDTEND:20260310T200000Z\r\nSUMMARY:REAL\r\nEND:VEVENT\r\n")
+        val hours = (0..14).joinToString(","); val mins = (0..59).joinToString(",")
+        sb.append("BEGIN:VEVENT\r\nUID:spam\r\nDTSTART;TZID=America/New_York:20260310T000000\r\nDTEND;TZID=America/New_York:20260310T000100\r\n" +
+            "RRULE:FREQ=DAILY;UNTIL=20260310T235959Z;BYHOUR=$hours;BYMINUTE=$mins\r\nSUMMARY:spam\r\nEND:VEVENT\r\n")
+        // cancel the first 600 instances (00:00..09:59 local)
+        for (k in 0 until 600) {
+            val h = k / 60; val m = k % 60
+            val t = "20260310T%02d%02d00".format(h, m)
+            sb.append("BEGIN:VEVENT\r\nUID:spam\r\nRECURRENCE-ID;TZID=America/New_York:$t\r\nDTSTART;TZID=America/New_York:$t\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\n")
+        }
+        sb.append(TAIL)
+        run("A-trunc-removal", sb.toString().toByteArray())
+        // control: no spam
+        run("A-control", (HEAD + "BEGIN:VEVENT\r\nUID:real\r\nDTSTART:20260310T190000Z\r\nDTEND:20260310T200000Z\r\nSUMMARY:REAL\r\nEND:VEVENT\r\n" + TAIL).toByteArray())
+    }
+
+    // B: EXDATE flood with >256 distinct TZIDs (memo defeated): uncharged per-value work
+    @Test fun bExdateFlood() {
+        val sb = StringBuilder(HEAD)
+        var v = 0
+        while (sb.length < 10_300_000) {
+            val tz = "/x" + v + "/" + "a".repeat(100) + "/America/New_York"
+            sb.append("BEGIN:VEVENT\r\nUID:e$v\r\nDTSTART;TZID=America/New_York:19700101T090000\r\n")
+            repeat(4) {
+                val vals = StringBuilder()
+                while (vals.length < 7_900) vals.append("19700101T090000,")
+                sb.append("EXDATE;TZID=$tz:").append(vals, 0, vals.length - 1).append("\r\n")
+            }
+            sb.append("END:VEVENT\r\n")
+            v++
+        }
+        sb.append(TAIL)
+        run("B-exdate-flood", sb.toString().toByteArray())
+    }
+
+    // C: RRULE construction flood (series never reach the window: no steps charged)
+    @Test fun cRruleBuildFlood() {
+        val sb = StringBuilder(HEAD)
+        val hours = (0..23).joinToString(","); val mins = (0..40).joinToString(",")
+        var v = 0
+        while (sb.length < 10_400_000 && v < 50_000) {
+            sb.append("BEGIN:VEVENT\r\nUID:$v\r\nDTSTART:19700101T000000\r\nRRULE:FREQ=DAILY;UNTIL=19700102T000000Z;BYHOUR=$hours;BYMINUTE=$mins\r\nEND:VEVENT\r\n")
+            v++
+        }
+        sb.append(TAIL)
+        println("C vevents=$v")
+        run("C-rrule-build", sb.toString().toByteArray())
+    }
+
+    // D: how many crafted series exhaust the 1M global budget, and how long 1M steps take
+    @Test fun dGlobalBudget() {
+        for (n in listOf(40, 49, 50, 60)) {
+            val sb = StringBuilder(HEAD)
+            sb.append("BEGIN:VEVENT\r\nUID:real\r\nDTSTART:20260310T190000Z\r\nSUMMARY:REAL\r\nEND:VEVENT\r\n")
+            for (i in 0 until n) sb.append("BEGIN:VEVENT\r\nUID:s$i\r\nDTSTART:00010101T000000Z\r\nRRULE:FREQ=YEARLY;BYDAY=1MO,-1FR;COUNT=1000000000\r\nEND:VEVENT\r\n")
+            sb.append(TAIL)
+            run("D-series-$n", sb.toString().toByteArray(), frozen = false)
+        }
+    }
+}
