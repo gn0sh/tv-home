@@ -153,5 +153,5 @@ Past installs got bogged down by bloat; that comes from third-party "builds" and
 - New allowlisted `kodi_*` tools in tv-remote over Kodi's JSON-RPC (home network only, RFC 1918 host, its own
   credentials stored like the other pairing secrets): play/pause/next, search and play from the library, add a
   media source, show or hide home-menu items, switch skin among installed ones. No add-on installs without Brian's OK.
-- Open: what he mainly watches (own files, free official add-ons, or both) sets which tools come first.
+- Brian chose both (2026-10-31 23:25Z): library tools first (sources, search, play, next episode), then our own free-legal-sources add-on (Pluto, Tubi, PBS, Internet Archive). No unlicensed-stream add-ons.
 Acceptance: Brian says "play the next episode of <show>" and "hide Music from the menu" and both happen on screen.
