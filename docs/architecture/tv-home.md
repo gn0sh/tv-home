@@ -37,8 +37,9 @@ tv-home/
   scripts/           provision.ps1 / provision.sh (put secrets on the TV over adb), keystore helper.
   .github/workflows/ android.yml (core tests, APK build, signing), tv-remote.yml (pytest).
 ```
-`settings.gradle.kts` always includes `:core` and `:assistant-claude`, and includes `:app` only when an Android SDK is
-present (`ANDROID_HOME` set or `local.properties` has `sdk.dir`), so `gradle :core:test` works in the sandbox.
+`settings.gradle.kts` always includes `:core` and `:assistant-claude`, and includes `:app` only when `TVHOME_BUILD_APP=true`
+(set only in CI's app job; GitHub runners preset `ANDROID_HOME`, so SDK presence alone would pull AGP into the core job).
+Local and Android Studio builds must set `TVHOME_BUILD_APP=true` or no `:app` module appears. `gradle :core:test` works in the sandbox.
 Versions are pinned in `gradle/libs.versions.toml`. The Gradle wrapper is checked in (services.gradle.org is reachable).
 
 ### core packages

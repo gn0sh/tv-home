@@ -19,3 +19,9 @@ Should-fix:
 4. `provision-no-live-refresh` AgendaSession.kt:50-52: hasSecret read only at ON_START; content write provisioning shows "not set up" until relaunch. Fix: re-read on IO every tick.
 Nits: `compile-sdk-drift` app/build.gradle.kts:14 (35 vs workflow's android-34); `app-lockfile-missing` app/build.gradle.kts:81; `row-key-by-index` AgendaScreen.kt:116,120 (key by event identity); ProvisionActivity.kt:32 Keystore/fsync on main; ProvisionProvider.kt:86 write after content write returns, query can race.
 Held up: API 31 availability, tv-material/Compose API use at BOM 2024.12.01, lifecycle + cancellation, secrets/manifest, lint.
+
+## Fix review (code-reviewer, opus/high, fresh because CI changed, 5175b0b..5d0fc33): APPROVE WITH NITS
+Closed: ci-core-includes-app, compile-sdk-drift, initial-focus-offscreen, provision-no-live-refresh, backup-rules-no-path, crash-prehandler wording, manifest-merged-not-checked (fails closed on stubbed bad manifests). CI hardening intact.
+Should-fix `app-optin-doc-stale` architecture line 41: fixed by manager in the next commit.
+Open nits (deferred to the next app task): `row-key-day-rollover` AgendaScreen.kt:114-128 (key by date, not t/m); `apkanalyzer-guard` android.yml:216; `secret-change-same-value-state` AgendaSession.kt:66-71 (re-provisioning a new URL can wait up to 15 min).
+T5 passes review.
