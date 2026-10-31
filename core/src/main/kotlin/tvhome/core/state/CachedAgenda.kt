@@ -2,6 +2,7 @@ package tvhome.core.state
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import tvhome.core.io.readUpTo
 import tvhome.core.calendar.EventInstance
 import tvhome.core.calendar.EventTime
 import tvhome.core.calendar.InstantRange
@@ -25,7 +26,7 @@ class JvmCacheFile(private val file: File) : CacheFile {
     /** A file over [CachedAgenda.MAX_FILE_BYTES] is read as no cache; at most that many plus one byte are read. */
     override fun read(): String? {
         if (!file.isFile) return null
-        val bytes = file.inputStream().use { it.readNBytes(CachedAgenda.MAX_FILE_BYTES + 1) }
+        val bytes = file.inputStream().use { it.readUpTo(CachedAgenda.MAX_FILE_BYTES + 1) }
         return if (bytes.size > CachedAgenda.MAX_FILE_BYTES) null else String(bytes, Charsets.UTF_8)
     }
 
