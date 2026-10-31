@@ -1,7 +1,7 @@
 # tv-home status
 
 Feature: tv-home (custom Google TV home screen). Priority: hip pocket (idle time only; Quick Invoice first).
-Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). PAUSED for usage pacing; next is T8 provisioning scripts, T7 signing script, then T9 emulator QA once CI minutes reset Nov 1. Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
+Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). T8 provisioning and T7 signing scripts approved (2dd6d92). Remaining M1: first CI run + T9 emulator QA after the Nov 1 minutes reset (reminder set for 01:00Z), PR to main, then Brian runs the signing script and T11 install (hard stop). Later milestones wait for the Nov 2 20:00Z usage reset (Brian's pacing choice). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
 - Usage pacing (coordinator, 2026-10-31 15:25Z): weekly limit at 79%. After the two running T5 reviews, run one subagent at a time and no optional panels until Brian answers the pacing card.
@@ -18,6 +18,10 @@ Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on cla
 | floating-recurring-dst | 1 | M1 core code review |
 | one-bad-event-fails-feed | 1 | M1 core code review |
 | rrule-advance-cpu / ics-parse-cpu-memory-dos | 3 | code + security review rounds 1-2; architect re-plan done (ADR 0004); re-plan failure 1 of 2 at T2b.3 (uncharged setup work); fixed and approved at f95bec0 (two-pass removals) |
+| provision-fallback-argv, provision-stale-success | 1 | T8 security review (fixed) |
+| p12-keypass-ignored, ps51-native-stderr, remote-overwrite | 1 | T7 security review (fixed) |
+| stdin-bom | 2 | T7 reviews (fixed f824a04) |
+| doc-steps | 3 | T7 reviews (minor doc wording; closed by manager 2dd6d92) |
 | instance-cap-removal-order, count-walk-skips-active-series, exdate-uncharged, fetch-redirect-hops-unpinned, p14-perf-flaky, expander-no-differential-test | 1 | T2b.3 reviews (docs/reviews/m1-t2b-reviews.md) |
 | partial-result-replaces-good, cancel-returns-network-error, vtimezone-bare-cr, vcal1-daylight | 1 | round 2 reviews (folded into T2b) |
 | session-ok-never-ages, no-fsync-before-rename, cache-write-throws, emphasis-boundary-60 | 1 | T4 review (fixed) |
@@ -61,3 +65,7 @@ Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on cla
 | 2026-10-31 | code-reviewer | opus/high | T5 review | request changes (ci-core-includes-app) |
 | 2026-10-31 | frontend-engineer | sonnet/high | T5 fixes | done (5d0fc33, 240 tests) |
 | 2026-10-31 | code-reviewer | opus/high | T5 fix review (fresh, CI) | approve with nits |
+| 2026-10-31 | devops-engineer | sonnet/medium | T8 provisioning scripts + 2 fix rounds + pwsh CI check | done (7b7275d) |
+| 2026-10-31 | security-engineer | opus/high | T8 review + delta | approve with changes (provision-fallback-argv) -> approve |
+| 2026-10-31 | devops-engineer | sonnet/medium | T7 signing script + 2 fix rounds | done (f824a04) |
+| 2026-10-31 | security-engineer | opus/high | T7 review + 2 fresh re-reviews | request changes (p12-keypass-ignored) -> approve with changes (stdin-bom) -> approve |
