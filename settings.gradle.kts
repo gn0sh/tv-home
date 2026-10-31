@@ -41,8 +41,11 @@ rootProject.name = "tv-home"
 
 include(":core")
 
-// :app needs an Android SDK. Include it only when one is present, so `:core:test` works in the sandbox.
+// :app is included only on explicit opt-in: TVHOME_BUILD_APP=true, set only in the app job of
+// .github/workflows/android.yml. Runners and dev PCs often have an Android SDK (ubuntu-latest sets ANDROID_HOME), and
+// configuring :app resolves AGP and Compose, which the core and live jobs and the sandbox must never do.
 val onCi: Boolean = System.getenv("CI") == "true"
+val buildApp: Boolean = System.getenv("TVHOME_BUILD_APP") == "true"
 
 fun sdkDirExists(): Boolean {
     val env = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
@@ -54,10 +57,10 @@ fun sdkDirExists(): Boolean {
     return !dir.isNullOrBlank() && file(dir).isDirectory
 }
 
-if (file("app/build.gradle.kts").exists()) {
+if (buildApp && file("app/build.gradle.kts").exists()) {
     if (sdkDirExists()) {
         include(":app")
     } else if (onCi) {
-        throw GradleException("CI: app/build.gradle.kts exists but no Android SDK was found (ANDROID_HOME, ANDROID_SDK_ROOT or local.properties sdk.dir)")
+        throw GradleException("CI: TVHOME_BUILD_APP=true and app/build.gradle.kts exists but no Android SDK was found (ANDROID_HOME, ANDROID_SDK_ROOT or local.properties sdk.dir)")
     }
 }

@@ -176,6 +176,43 @@ class AgendaSessionTest {
         assertEquals(AgendaState.NotSetUp, r.session.state.value)
     }
 
+    @Test fun secretProvisionedWhileRunningIsPickedUpWithinAMinute() {
+        val r = Rig(CalendarSource { ok() }, secret = false)
+        var n = 0
+        val seen = ArrayList<AgendaState>()
+        try {
+            runBlocking {
+                r.session.runWhileStarted { ms ->
+                    seen += r.session.state.value
+                    if (n++ == 2) r.secret = true
+                    if (n > 4) throw Stop()
+                    r.clock.set(r.clock.get().plusMillis(ms))
+                }
+            }
+        } catch (_: Stop) {
+        }
+        assertEquals(AgendaState.NotSetUp, seen[0])
+        assertEquals(AgendaState.NotSetUp, seen[2]) // flipped during this pause; the next step sees it
+        assertTrue(seen[3] is AgendaState.Ok, "was ${seen[3]}")
+        assertEquals(1, r.fetches.get())
+    }
+
+    @Test fun secretRemovedWhileRunningGoesBackToNotSetUp() {
+        val r = Rig(CalendarSource { ok() })
+        var n = 0
+        try {
+            runBlocking {
+                r.session.runWhileStarted { ms ->
+                    if (n++ == 1) r.secret = false
+                    if (n > 3) throw Stop()
+                    r.clock.set(r.clock.get().plusMillis(ms))
+                }
+            }
+        } catch (_: Stop) {
+        }
+        assertEquals(AgendaState.NotSetUp, r.session.state.value)
+    }
+
     @Test fun cancelDuringAFetchSavesNothingAndTheNextStartWorks() {
         val started = CompletableDeferred<Unit>()
         var hang = true

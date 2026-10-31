@@ -10,7 +10,7 @@ plugins {
 
 android {
     namespace = "com.gnosh.tvhome"
-    // compileSdk 35 because activity-compose and the Compose BOM need it; targetSdk stays 34 (architecture section 4).
+    // compileSdk 35 (build-time only; the workflow installs platforms;android-35); targetSdk stays 34 (architecture section 4).
     compileSdk = 35
 
     defaultConfig {

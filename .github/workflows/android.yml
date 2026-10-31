@@ -33,8 +33,10 @@ env:
   CI: "true"
   # gradle/verification-metadata.xml covers :core only (generated in the sandbox). :app dependencies (AGP, Compose)
   # cannot resolve there, so the :app job runs lenient until the file is regenerated on CI.
-  # TODO: regenerate with `./gradlew --write-verification-metadata sha256 :app:lintRelease :app:assembleRelease`
-  # on a runner, review the diff, commit it, then set this to "strict".
+  # TODO (before the first signed release), on a runner with TVHOME_BUILD_APP=true:
+  #   1. `./gradlew --write-locks :app:dependencies` and commit app/gradle.lockfile (and settings lock changes);
+  #   2. `./gradlew --write-verification-metadata sha256 :app:lintRelease :app:assembleRelease`, review the diff, commit;
+  #   3. set this to "strict".
   APP_DEP_VERIFICATION: lenient
 
 jobs:
@@ -68,6 +70,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      # The only job that includes :app (settings.gradle.kts); core and live never resolve AGP or Compose.
+      TVHOME_BUILD_APP: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,7 +102,7 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
-          packages: "platform-tools platforms;android-34 build-tools;35.0.0"
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
 
       - if: steps.detect.outputs.present == 'true'
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
@@ -198,6 +203,48 @@ jobs:
           grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt" \
             && { echo "::error::aapt2 badging says application-debuggable"; fail=1; }
 
+          exit "$fail"
+
+      # The APK's manifest is the merged one (AndroidX libraries add receivers, a provider and a permission), so this is
+      # the check that matters; AppManifestTest only sees the source manifest.
+      - name: Check merged manifest (permissions and exported components)
+        if: steps.detect.outputs.present == 'true'
+        env:
+          APK: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          apkanalyzer=$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | sort -V | tail -1)
+          fail=0
+          "$apkanalyzer" manifest permissions "$APK" | sort -u > "$RUNNER_TEMP/perms.actual"
+          printf '%s\n' \
+            android.permission.ACCESS_NETWORK_STATE \
+            android.permission.INTERNET \
+            com.gnosh.tvhome.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION | sort -u > "$RUNNER_TEMP/perms.expected"
+          diff "$RUNNER_TEMP/perms.expected" "$RUNNER_TEMP/perms.actual" \
+            || { echo "::error::merged manifest permissions differ from the allowed set"; fail=1; }
+
+          # Every exported component: name and permission. Allowed: our two activities and provider (DUMP-guarded except
+          # the launcher activity), and AndroidX's profileinstaller receiver (also DUMP-guarded).
+          "$apkanalyzer" manifest print "$APK" | python3 -c '
+          import sys, xml.etree.ElementTree as ET
+          A = "{http://schemas.android.com/apk/res/android}"
+          root = ET.fromstring(sys.stdin.read())
+          app = root.find("application")
+          rows = []
+          for el in app:
+              if el.tag in ("activity", "activity-alias", "service", "receiver", "provider") and el.get(A + "exported") == "true":
+                  rows.append((el.tag, el.get(A + "name"), el.get(A + "permission") or "-"))
+          for r in sorted(rows): print(" ".join(r))
+          ' > "$RUNNER_TEMP/exported.actual"
+          cat > "$RUNNER_TEMP/exported.expected" <<'EOF'
+          activity com.gnosh.tvhome.AgendaActivity -
+          activity com.gnosh.tvhome.ProvisionActivity android.permission.DUMP
+          provider com.gnosh.tvhome.ProvisionProvider android.permission.DUMP
+          receiver androidx.profileinstaller.ProfileInstallReceiver android.permission.DUMP
+          EOF
+          sed -i 's/^ *//' "$RUNNER_TEMP/exported.expected"
+          diff "$RUNNER_TEMP/exported.expected" "$RUNNER_TEMP/exported.actual" \
+            || { echo "::error::exported components differ from the allowed list"; fail=1; }
           exit "$fail"
 
       - name: Scan APK (dex and resources) and logs for secret patterns

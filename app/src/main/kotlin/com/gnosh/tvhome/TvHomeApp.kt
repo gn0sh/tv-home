@@ -19,9 +19,12 @@ class TvHomeApp : Application() {
 }
 
 /**
- * Release builds only (`#3 okhttp-key-in-exception`). The stock handler prints the exception message and stack to
- * logcat and the dropbox, and a message can carry a header value. This one writes exception class names only, then
- * ends the process. It never delegates to the stock handler. (R8 removes the platform Log calls in release, so this uses System.err.)
+ * Release builds only (`#3 okhttp-key-in-exception`). This is NOT the control that keeps secrets out of crash logs:
+ * since Android 8 the runtime's own logging handler runs first and already writes "FATAL EXCEPTION" with the message
+ * and stack to `logcat -b crash`, before this handler is reached. The control is that no exception carrying a secret
+ * escapes (the fetch, provisioning, Keystore and cache boundaries catch Throwable and map to enums). What this handler
+ * adds: it does not delegate to the stock handler, so no `data_app_crash` entry reaches the dropbox, and it writes only
+ * class names itself. (R8 removes the platform Log calls in release, so it uses System.err.)
  */
 object ReleaseCrashHandler {
     fun install() {

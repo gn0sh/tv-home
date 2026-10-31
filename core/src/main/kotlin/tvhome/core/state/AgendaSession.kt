@@ -23,7 +23,8 @@ import java.time.ZoneId
  * - Offline (policy `SKIP_OFFLINE`): no fetch; the state is computed as if the fetch failed with OFFLINE, so an old
  *   cache shows "Can't reach calendar. Showing the last copy." and no cache shows the CantReach screen. The next tick
  *   after the network returns fetches (an offline skip does not count as an attempt).
- * - No secret: NotSetUp, no fetch.
+ * - No secret: NotSetUp, no fetch. The secret is re-read on [io] at start and on every tick, so a link provisioned
+ *   (or removed) while the screen is up shows within a minute, without a relaunch.
  *
  * One collector at a time: [runWhileStarted] is not re-entrant, which `repeatOnLifecycle` guarantees.
  */
@@ -60,6 +61,15 @@ class AgendaSession(
     }
 
     private suspend fun step(trigger: RefreshPolicy.Trigger) {
+        if (trigger == RefreshPolicy.Trigger.TICK) {
+            // Provisioning (content write / am start) can happen while this screen is up: re-read on IO every tick.
+            val now = withContext(io) { hasSecret() }
+            if (now != secret) {
+                secret = now
+                lastFetch = null
+                lastAttempt = null // a new or removed secret restarts the cycle: the next step fetches at once
+            }
+        }
         val now = clock()
         if (secret) {
             when (policy.decide(trigger, online(), lastAttempt, now)) {

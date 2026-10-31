@@ -281,7 +281,7 @@ est. under 2.5 s on the TV, so the global budget is 5,000,000 (manager decision)
 | 11 | `CachedAgenda` encode/decode | at most 500 instances; our own file | written only from `Ok`; read cap 1 MiB; decode on IO | `CachedAgenda`, `JvmCacheFile` |
 | 12 | `reduce()` | `FetchResult`, cache | `PARSE_LIMIT` handled like `PARSE`; Stale carries `cause` | `AgendaState.kt` |
 | 13 | `AgendaRefresher` (new) | `FetchResult` | single-flight; only cache writer; Ok only; cancel changes nothing | `state/AgendaRefresher.kt` |
-| 14 | Android refresh loop and threads (T5) | none directly | `lifecycleScope` coroutine calls `refresher.refresh()` on ON_START and each 15-min TICK; parse on `Dispatchers.Default`; cache I/O on IO; ON_STOP cancels (interrupts the parse); never Main; release uncaught handler logs class names only | `AgendaActivity` (T5 review) |
+| 14 | Android refresh loop and threads (T5) | none directly | `lifecycleScope` coroutine calls `refresher.refresh()` on ON_START and each 15-min TICK; parse on `Dispatchers.Default`; cache I/O on IO; ON_STOP cancels (interrupts the parse); never Main; release uncaught handler (does not delegate, so no dropbox entry; it is not the secret control, see section 4) | `AgendaActivity` (T5 review) |
 | 15 | Tests and CI | fixtures | `*.ics` kept CRLF via `.gitattributes`; `:core:hostileTest` (96 MiB heap) in CI job 1; live public-Google-feed check (manual job) | T2b.6 |
 
 Not consumers: M1b's assistant (never sees calendar data), M1c's `tv-remote` (no calendar access). A later
@@ -296,8 +296,11 @@ Not consumers: M1b's assistant (never sees calendar data), M1c's `tv-remote` (no
 - Screen: two columns (Today, Tomorrow), 32 sp titles, 28 sp times, high contrast, 5% overscan margins. In M1 the
   only focusable element is the screen; Back exits. M1b adds one "Ask Claude" button that takes initial focus (spec
   M1b AC1); Back still exits. No focus trap by construction.
-- Release builds install an uncaught-exception handler that logs the exception class name only, never the message
-  or stack, then lets the process die (`#3`).
+- Release builds install an uncaught-exception handler that writes exception class names only to `System.err` and
+  ends the process without delegating, so no `data_app_crash` dropbox entry is made (`#3`). It is **not** what keeps
+  secrets out of crash output: since Android 8 the runtime's `LoggingHandler` runs first and logs the message and
+  stack to `logcat -b crash`. The control is that no exception carrying a secret escapes: fetch, provisioning,
+  Keystore and cache boundaries catch `Throwable` and map to enums (T9 proves it with a marker repro).
 - `KeystoreSecretStore`: AES-256-GCM key in AndroidKeyStore (non-exportable), ciphertext in `noBackupFilesDir`.
   (EncryptedSharedPreferences is deprecated; using the Keystore directly avoids the dependency.)
 - Manifest: `allowBackup=false`, `dataExtractionRules`/`fullBackupContent` excluding everything,
@@ -307,7 +310,13 @@ Not consumers: M1b's assistant (never sees calendar data), M1c's `tv-remote` (no
   are off until enabled over adb. Never `QUERY_ALL_PACKAGES`.
 - Release build: `isDebuggable=false`, R8 on, `-assumenosideeffects class android.util.Log { *; }` so no log call
   survives. Debug builds are for the emulator only and are never installed on Brian's TV.
-- minSdk 31, targetSdk 34, compileSdk 34 (bump target to 35 only if a Compose for TV release needs it). AGP pinned in
+- minSdk 31, targetSdk 34 (runtime behaviour), **compileSdk 35** (a build-time choice: AndroidX releases from late 2024 need
+  it, and a lower value could only fail in CI's `checkAarMetadata`, which the sandbox cannot run; the workflow installs
+  `platforms;android-35`).
+- Compose pins, T5 (2026-10-31): BOM 2024.12.01 (Compose 1.7), tv-material 1.0.0, activity-compose 1.9.3, lifecycle
+  2.8.7 instead of the earlier BOM 2025.06.00 / tv-material 1.0.1 / activity-compose 1.10.1. Reason: Kotlin is pinned at
+  2.0.21 and could not be compile-checked against the newer Compose here (no SDK), so T5 used the generation that
+  matches Kotlin 2.0.x. Revisit when CI is green: bump together with Kotlin, not one at a time. AGP pinned in
   the catalog to the newest stable release that supports Gradle 8.14 (devops-engineer records the exact version).
 
 ## 5. Getting secrets onto the TV (calendar URL, M1b API key)
@@ -342,7 +351,7 @@ Traces, and what tests check (AC6):
 | PC process list | none with `content write` over stdin; with the `am start` fallback, an adb argument for under a second, visible to Brian's own user only | accepted |
 | TV `am` process args | none with stdin; brief with the fallback; Android hides other apps' /proc | accepted |
 | TV logcat | ActivityTaskManager logs `START u0 {cmp=... (has extras)}`, not extra values | **QA greps a captured logcat after provisioning a dummy value on the emulator** |
-| App logs and crashes | none in release (R8 strips Log; uncaught handler logs class names only) | QA greps logcat incl. `System.err` and `AndroidRuntime`, and `dumpsys dropbox --print data_app_crash` (`#3`) |
+| App logs and crashes | none in release (R8 strips Log; boundaries never let an exception with a secret escape; the uncaught handler only avoids the dropbox) | QA greps logcat incl. `System.err`, `AndroidRuntime` and `logcat -b crash`, and `dumpsys dropbox --print data_app_crash` (`#3`) |
 | Repo / CI | value never present; fixtures use one fixed fake secret | CI greps the build log and the unzipped APK (dex and resources) for `private-[0-9a-f]` and `sk-ant-` (`#9`) |
 
 ## 6. Signing and CI

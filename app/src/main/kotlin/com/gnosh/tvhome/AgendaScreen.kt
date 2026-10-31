@@ -111,13 +111,21 @@ private sealed interface Entry {
 private fun entriesOf(m: ScreenModel.Agenda): List<Entry> {
     val out = ArrayList<Entry>()
     var flat = 0
+    // Rows are keyed by what identifies them (day, time, title, occurrence), not by position, so a refresh that
+    // inserts an event keeps focus on the same event. Identical rows get an occurrence number.
+    val seen = HashMap<String, Int>()
+    fun keyOf(day: String, r: RowModel): String {
+        val base = "$day|${r.time}|${r.title}"
+        val n = seen.merge(base, 1, Int::plus)!!
+        return "$base|$n"
+    }
     // Today's heading is the fixed header, so its rows have no heading item above them.
     if (m.today.rows.isEmpty()) out += Entry.Empty("today-empty")
-    m.today.rows.forEach { out += Entry.Row("r${flat}", flat, it, null); flat++ }
+    m.today.rows.forEach { out += Entry.Row(keyOf("t", it), flat, it, null); flat++ }
     val tomorrowHeading = out.size
     out += Entry.Heading("tomorrow-heading", m.tomorrow)
     if (m.tomorrow.rows.isEmpty()) out += Entry.Empty("tomorrow-empty")
-    m.tomorrow.rows.forEachIndexed { i, r -> out += Entry.Row("r${flat}", flat, r, if (i == 0) tomorrowHeading else null); flat++ }
+    m.tomorrow.rows.forEachIndexed { i, r -> out += Entry.Row(keyOf("m", r), flat, r, if (i == 0) tomorrowHeading else null); flat++ }
     return out
 }
 
@@ -192,8 +200,18 @@ private fun AgendaList(m: ScreenModel.Agenda, modifier: Modifier) {
         val item = entries.indexOfFirst { it is Entry.Row && it.flat == target }
         if (item < 0) return@LaunchedEffect
         listState.scrollToItem(item)
-        withFrameNanos { } // let the row be laid out and attached before asking for focus
-        runCatching { initialRequester.requestFocus() }
+        // Wait until the row is laid out (in the visible items) so its FocusRequester is attached; give up after a
+        // few frames rather than loop forever. Retry once if the first request races the attach.
+        var frames = 0
+        while (listState.layoutInfo.visibleItemsInfo.none { it.index == item } && frames < 30) {
+            withFrameNanos { }
+            frames++
+        }
+        withFrameNanos { }
+        if (runCatching { initialRequester.requestFocus() }.isFailure) {
+            withFrameNanos { }
+            runCatching { initialRequester.requestFocus() }
+        }
     }
 
     Box(modifier) {
