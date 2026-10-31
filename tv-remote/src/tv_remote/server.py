@@ -14,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import AfterValidator, Field
 
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, config_dir, load_config
 from .devices import (
     VOLUME_CAP,
     DeviceUnreachable,
@@ -87,8 +87,9 @@ ContentId = Annotated[
 
 
 def _no_format_chars(q: str) -> str:
-    # Unicode Cf covers bidi overrides and zero-width characters that can disguise a query.
-    if any(unicodedata.category(ch) == "Cf" for ch in q):
+    # Cf: bidi overrides and zero-width characters that can disguise a query. Cc: control characters
+    # (including C1, e.g. U+0085). Zl, Zp: line and paragraph separators.
+    if any(unicodedata.category(ch) in {"Cf", "Cc", "Zl", "Zp"} for ch in q):
         raise ValueError("search_query must not contain invisible or bidi control characters")
     return q
 
@@ -281,7 +282,16 @@ def main() -> None:
         print(f"tv-remote: {exc}", file=sys.stderr)
         sys.exit(2)
     lg = LgStub(config.lg.host, config.lg.mac) if config.lg else None
-    gtv = GoogleTvStub(config.googletv.host) if config.googletv else None
+    gtv = None
+    if config.googletv:
+        from .googletv import GoogleTvRemote, KeyVault
+        from .secretstore import SecretStoreError, default_protector
+
+        try:
+            gtv = GoogleTvRemote(config.googletv.host, KeyVault(config_dir(), default_protector()))
+        except SecretStoreError as exc:
+            print(f"tv-remote: Google TV disabled: {exc}", file=sys.stderr)
+            gtv = GoogleTvStub(config.googletv.host)
     server = build_server(config, lg, gtv, DiscoveryStub())
     asyncio.run(server.run_stdio_async())  # stdio only: no listening port (AC6)
 

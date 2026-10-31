@@ -34,12 +34,17 @@ Either section may be left out. Hosts are checked as if the home subnet is a /24
 for example `host = "10.0.5.20/16"`. The subnet's network and broadcast addresses (such as `192.168.68.0` and
 `192.168.68.255`) are refused.
 
-Pairing material (LG client key, Google TV client cert and key, both TVs' pinned fingerprints) will be stored in the
-same folder by the device backends. The plan is to encrypt it with DPAPI (built in C3 and C4; **not built yet**). It
-is never returned by a tool or written to logs. On non-Windows machines (tests, development) set `TV_REMOTE_CONFIG_DIR` to the folder.
+Pairing material is stored in the same folder and is never returned by a tool or written to logs.
+- Google TV (C4, built): `atv-client-cert.pem` (public), `atv-client-key.sealed` (the private key, sealed with DPAPI
+  for Brian's Windows user and never written unencrypted), and `atv-tv-cert.sha256`, the TV's certificate fingerprint
+  pinned when pairing succeeds. If the TV later presents a different certificate, every Google TV command is refused
+  until it is paired again. Pairing needs Windows. Elsewhere the server refuses to store keys.
+- LG (C3): client key with DPAPI and pinned fingerprint, **not built yet**. On non-Windows machines (tests, development) set `TV_REMOTE_CONFIG_DIR` to the folder.
 
 ## Run and test
-Dependencies are locked with hashes in `uv.lock` (security finding #8). Always use `--locked`:
+Dependencies are locked with hashes in `uv.lock` (security finding #8). Always use `--locked`. Use uv 0.11.x:
+the build backend is `uv_build>=0.11,<0.12`, which uv builds directly only when its own version is in that range.
+Another uv version would download the backend unhashed. Bump the range and uv together.
 
 ```
 uv run --locked tv-remote      # the MCP server (stdio)
@@ -50,6 +55,5 @@ Claude Code registration (on Brian's PC, after his OK): `claude mcp add tv-remot
 <path-to>\tv-remote tv-remote`.
 
 ## Status
-C1 skeleton: config, tool allowlist, refusals, unreachable errors, fakes. The real device wrappers are stubs that say
-which task builds them: LG in C3 (`lg.py`), Google TV in C4 (`googletv.py`), deep links for `tv_open` in C2
-(`links.py`).
+C1: config, tool allowlist, refusals and unreachable errors. C4: the Google TV backend (`googletv.py`, `secretstore.py`).
+Not built yet, and their tools say so: LG in C3 (`lg.py`), deep links for `tv_open` in C2 (`links.py`), discovery.

@@ -98,7 +98,8 @@ def test_volume_above_cap_is_brought_down_not_raised(h):
     h.lg.volume = 75  # e.g. set with the physical remote
     assert "set to 60" in h.text("lg_volume", level="up")
     assert h.lg.volume == 60
-    assert "volume is 74" in h.text("lg_volume", level="down") or h.lg.volume == 59
+    assert "volume is 59" in h.text("lg_volume", level="down")
+    assert h.lg.volume == 59
 
 
 def test_volume_up_refused_when_volume_unknown(h):
@@ -137,7 +138,8 @@ def test_content_id_accepts_plain_ids(cid):
     h.text("tv_open", service="netflix", content_id=cid)
 
 
-@pytest.mark.parametrize("q", ["stranger\u202ethings", "a\u200bb", "x\ufeff", "a\u2066b"])
+@pytest.mark.parametrize("q", ["stranger\u202ethings", "a\u200bb", "x\ufeff", "a\u2066b",
+                               "a\x85b", "a\u2028b", "a\u2029b", "a\x9bb"])
 def test_search_query_refuses_format_characters(h, q):
     with pytest.raises(ToolError, match="invisible or bidi"):
         h.call("tv_open", service="netflix", search_query=q)
@@ -215,5 +217,5 @@ def test_real_backend_stubs_report_their_task():
     server = build_server(Config(LgConfig(lg.host, lg.mac), GoogleTvConfig(gtv.host)), lg, gtv, DiscoveryStub())
     with pytest.raises(ToolError, match="C3"):
         asyncio.run(server.call_tool("lg_power", {"state": "off"}))
-    with pytest.raises(ToolError, match="C4"):
+    with pytest.raises(ToolError, match="needs Windows"):
         asyncio.run(server.call_tool("tv_key", {"key": "OK"}))

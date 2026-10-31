@@ -31,6 +31,18 @@ class NotPaired(Exception):
         super().__init__(f"{DEVICE_NAMES[device]} is not paired yet. Run tv_pair with device='{device}'.")
 
 
+class CertificateChanged(NotPaired):
+    """The TV presented a TLS certificate other than the one pinned at pairing (finding #6). Nothing is sent."""
+
+    def __init__(self, device: Device):
+        self.device = device
+        Exception.__init__(
+            self,
+            f"Refused: the {DEVICE_NAMES[device]}'s security certificate has changed since pairing, so nothing was "
+            f"sent. If the TV was reset or replaced, pair again with tv_pair device='{device}'.",
+        )
+
+
 @dataclass
 class LgStatus:
     power: str  # "on" | "off" | "unknown"
@@ -95,11 +107,17 @@ class LgStub(_Stub):
         self.host, self.mac = host, mac
 
 
-class GoogleTvStub(_Stub):
-    _task = "task C4, googletv.py"
+class GoogleTvStub:
+    """Used when secure key storage (DPAPI) is unavailable, i.e. not on Windows. The real backend is googletv.py."""
 
     def __init__(self, host: str):
         self.host = host
+
+    def __getattr__(self, name: str):
+        async def _unavailable(*_a, **_k):
+            raise NotImplementedError("Google TV control is unavailable here: its key storage (DPAPI) needs Windows.")
+
+        return _unavailable
 
 
 class DiscoveryStub(_Stub):
