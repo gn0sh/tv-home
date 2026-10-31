@@ -43,7 +43,50 @@ class AgendaStateTest {
         assertEquals(AgendaState.CantReach, state(f = fail(SourceError.OFFLINE)))
         assertEquals(AgendaState.CantReach, state(f = fail(SourceError.HTTP_STATUS)))
         assertEquals(AgendaState.Unreadable, state(f = fail(SourceError.PARSE)))
+        assertEquals(AgendaState.Unreadable, state(f = fail(SourceError.PARSE_LIMIT)))
         assertEquals(AgendaState.Unreadable, state(f = fail(SourceError.TOO_LARGE)))
+        for (e in listOf(SourceError.NOT_CONFIGURED, SourceError.OFFLINE, SourceError.NETWORK, SourceError.HTTP_STATUS, SourceError.INSECURE_URL))
+            assertEquals(AgendaState.CantReach, state(f = fail(e)), "$e")
+    }
+
+    /** R1: a parse failure keeps the last copy as Stale with cause UNREADABLE; emphasis from exactly 60:00; no cache is Unreadable. */
+    @Test fun parseFailuresKeepTheLastCopyWithCauseUnreadable() {
+        for (e in listOf(SourceError.PARSE, SourceError.PARSE_LIMIT, SourceError.TOO_LARGE)) {
+            val young = state(c = cache(mins(4)), f = fail(e)) as AgendaState.Stale
+            assertEquals(StaleCause.UNREADABLE, young.cause, "$e")
+            assertFalse(young.emphasised)
+            assertEquals(1, young.today.items.size)
+            val at59 = state(c = cache(clock.now.minusSeconds(59 * 60 + 59)), f = fail(e)) as AgendaState.Stale
+            val at60 = state(c = cache(clock.now.minusSeconds(60 * 60)), f = fail(e)) as AgendaState.Stale
+            assertFalse(at59.emphasised)
+            assertTrue(at60.emphasised)
+            assertEquals(StaleCause.UNREADABLE, at60.cause)
+        }
+    }
+
+    @Test fun staleCauseForOtherFailuresAndOverdue() {
+        for (e in listOf(SourceError.OFFLINE, SourceError.NETWORK, SourceError.HTTP_STATUS, SourceError.NOT_CONFIGURED, SourceError.INSECURE_URL))
+            assertEquals(StaleCause.CANT_REACH, (state(c = cache(mins(30)), f = fail(e)) as AgendaState.Stale).cause, "$e")
+        assertEquals(StaleCause.OVERDUE, (state(c = cache(mins(30))) as AgendaState.Stale).cause)
+        // a session Ok that has aged past 15 min with no newer fetch is overdue too
+        assertEquals(StaleCause.OVERDUE, (state(f = FetchResult.Ok(listOf(ev), mins(20))) as AgendaState.Stale).cause)
+    }
+
+    /** Cache read cap: a file over 1 MiB is no cache; exactly 1 MiB is read (and then fails to decode, also no cache). */
+    @Test fun cacheFileOverOneMibIsReadAsNoCache(@TempDir dir: File) {
+        val f = File(dir, "agenda-cache.json")
+        val cf = JvmCacheFile(f)
+        val good = cache(mins(1)).encode()
+        f.writeText(good)
+        assertEquals(good, cf.read())
+        f.writeBytes(ByteArray(CachedAgenda.MAX_FILE_BYTES) { ' '.code.toByte() })
+        assertEquals(CachedAgenda.MAX_FILE_BYTES, cf.read()!!.length)
+        f.writeBytes(ByteArray(CachedAgenda.MAX_FILE_BYTES + 1) { ' '.code.toByte() })
+        assertNull(cf.read())
+        assertNull(CachedAgenda.load(cf))
+        // a valid document padded past the cap is refused by decode as well, whatever the CacheFile returns
+        assertNull(CachedAgenda.decode(good + " ".repeat(CachedAgenda.MAX_FILE_BYTES)))
+        assertNotNull(CachedAgenda.decode(good))
     }
 
     @Test fun unreadableCopy() {

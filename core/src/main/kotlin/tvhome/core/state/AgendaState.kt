@@ -10,6 +10,13 @@ import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 
+/** Why a [AgendaState.Stale] copy is shown. */
+enum class StaleCause { OVERDUE, CANT_REACH, UNREADABLE }
+
+/** Errors where the feed arrived (or was too big) but could not be used: PARSE, PARSE_LIMIT, TOO_LARGE. */
+private fun SourceError.isUnreadable(): Boolean =
+    this == SourceError.PARSE || this == SourceError.PARSE_LIMIT || this == SourceError.TOO_LARGE
+
 sealed interface AgendaState {
     /** Fresh enough to show without alarm. [ageText] is the header line, e.g. "Updated 4 min ago". */
     data class Ok(val today: AgendaDay, val tomorrow: AgendaDay, val updatedAt: Instant, val ageText: String) : AgendaState
@@ -17,7 +24,12 @@ sealed interface AgendaState {
     /** Ok, but both days are empty: both headings render "Nothing scheduled". */
     data class NothingScheduled(val today: AgendaDay, val tomorrow: AgendaDay, val updatedAt: Instant, val ageText: String) : AgendaState
 
-    /** Showing a cache after a failed or overdue fetch. [emphasised] (age over 60 min) means amber, bold, warning and footer. */
+    /**
+     * Showing a cache after a failed or overdue fetch. [emphasised] (age over 60 min) means amber, bold, warning and
+     * footer. [cause] picks the footer wording: CANT_REACH "Can't reach calendar. Showing the last copy.",
+     * UNREADABLE "Calendar data unreadable. Showing the last copy." (T2b.4), OVERDUE (no newer fetch yet) the plain
+     * age line.
+     */
     data class Stale(
         val today: AgendaDay,
         val tomorrow: AgendaDay,
@@ -25,6 +37,7 @@ sealed interface AgendaState {
         val ageMinutes: Long,
         val ageText: String,
         val emphasised: Boolean,
+        val cause: StaleCause,
         /** Both days empty: render the "Nothing scheduled" body under the stale header (and footer when emphasised). */
         val nothingScheduled: Boolean,
     ) : AgendaState
@@ -33,7 +46,7 @@ sealed interface AgendaState {
     object NotSetUp : Unavailable { override fun toString() = "NotSetUp" }
     object CantReach : Unavailable { override fun toString() = "CantReach" }
 
-    /** No usable cache and the feed arrived but could not be used (PARSE, TOO_LARGE). */
+    /** No usable cache and the feed arrived but could not be used (PARSE, PARSE_LIMIT, TOO_LARGE). */
     object Unreadable : Unavailable {
         const val TITLE = "Calendar data unreadable"
         const val DETAIL = "It will try again soon."
@@ -65,10 +78,12 @@ fun ageText(ageMinutes: Long): String {
  * - Data (session Ok, else cache) whose window covers today and tomorrow:
  *   Ok / NothingScheduled when the last fetch did not fail and the data is at most 15 min old;
  *   otherwise Stale (age shown): fetch failed, or older than 15 min with no newer fetch (e.g. offline since).
+ *   [Stale.cause] is UNREADABLE after PARSE / PARSE_LIMIT / TOO_LARGE (the last good copy stays, ADR 0004),
+ *   CANT_REACH after any other failure, OVERDUE when no fetch failed.
  *   Stale is emphasised from exactly 60:00 old, measured in seconds. A failure with data under 60 min old is silent
  *   (design: "plain ok"): the UI renders non-emphasised Stale like Ok.
  * - No usable data: no fetch yet is Loading; a session Ok whose window has since passed is CantReach;
- *   PARSE / TOO_LARGE is Unreadable; every other failure is CantReach. That includes INSECURE_URL and NOT_CONFIGURED,
+ *   PARSE / PARSE_LIMIT / TOO_LARGE is Unreadable; every other failure is CantReach. That includes INSECURE_URL and NOT_CONFIGURED,
  *   which the app should not reach with a validated secret; CantReach is the safe fallback and never shows the URL.
  */
 fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, now: Instant, zone: ZoneId): AgendaState {
@@ -79,12 +94,16 @@ fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, no
         if (lastFetch == null) return AgendaState.Loading
         // A session Ok whose window has passed is treated like a failed fetch: nothing usable to show.
         val failed = lastFetch as? FetchResult.Failed ?: return AgendaState.CantReach
-        return if (failed.error == SourceError.PARSE || failed.error == SourceError.TOO_LARGE) AgendaState.Unreadable
-        else AgendaState.CantReach
+        return if (failed.error.isUnreadable()) AgendaState.Unreadable else AgendaState.CantReach
     }
     val ageSec = Duration.between(usable.fetchedAt, now).seconds.coerceAtLeast(0)
     val minutes = ageSec / 60
     val failed = lastFetch is FetchResult.Failed
+    val cause = when {
+        lastFetch !is FetchResult.Failed -> StaleCause.OVERDUE
+        lastFetch.error.isUnreadable() -> StaleCause.UNREADABLE
+        else -> StaleCause.CANT_REACH
+    }
     val (today, tomorrow) = buildAgenda(usable.events, now, zone)
     val empty = today.items.isEmpty() && tomorrow.items.isEmpty()
     if (!failed && ageSec <= STALE_AFTER_MIN * 60) {
@@ -92,7 +111,7 @@ fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, no
         return if (empty) AgendaState.NothingScheduled(today, tomorrow, usable.fetchedAt, text)
         else AgendaState.Ok(today, tomorrow, usable.fetchedAt, text)
     }
-    return AgendaState.Stale(today, tomorrow, usable.fetchedAt, minutes, ageText(minutes), ageSec >= EMPHASIS_AFTER_MIN * 60, empty)
+    return AgendaState.Stale(today, tomorrow, usable.fetchedAt, minutes, ageText(minutes), ageSec >= EMPHASIS_AFTER_MIN * 60, cause, empty)
 }
 
 /** Start of today to end of tomorrow in [zone]. */

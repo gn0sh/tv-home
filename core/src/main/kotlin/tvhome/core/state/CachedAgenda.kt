@@ -22,7 +22,12 @@ interface CacheFile {
 
 /** java.io implementation: write to a sibling temp file, then atomic rename. */
 class JvmCacheFile(private val file: File) : CacheFile {
-    override fun read(): String? = if (file.isFile) file.readText(Charsets.UTF_8) else null
+    /** A file over [CachedAgenda.MAX_FILE_BYTES] is read as no cache; at most that many plus one byte are read. */
+    override fun read(): String? {
+        if (!file.isFile) return null
+        val bytes = file.inputStream().use { it.readNBytes(CachedAgenda.MAX_FILE_BYTES + 1) }
+        return if (bytes.size > CachedAgenda.MAX_FILE_BYTES) null else String(bytes, Charsets.UTF_8)
+    }
 
     override fun writeAtomic(text: String) {
         val tmp = File(file.parentFile, file.name + ".tmp")
@@ -60,11 +65,14 @@ data class CachedAgenda(val fetchedAt: Instant, val window: InstantRange, val ev
 
     companion object {
         const val MAX_TITLE = 200
+
+        /** A cache file over 1 MiB is read as no cache (a real one is under 700 KB). */
+        const val MAX_FILE_BYTES = 1024 * 1024
         private val json = Json { ignoreUnknownKeys = true }
 
         /** Null for anything that is not a valid v1 document (corrupt, truncated, other version): treated as no cache. */
         fun decode(text: String?): CachedAgenda? {
-            if (text == null) return null
+            if (text == null || text.length > MAX_FILE_BYTES) return null
             return try {
                 val d = json.decodeFromString(Dto.serializer(), text)
                 if (d.v != 1) return null

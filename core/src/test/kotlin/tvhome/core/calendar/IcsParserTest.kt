@@ -1,5 +1,6 @@
 package tvhome.core.calendar
 
+import tvhome.core.completeEvents
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -196,7 +197,7 @@ class IcsParserTest {
         assertTrue(titles.none { it[0] == 'D' })
         assertEquals(r.sortedBy { (it.start as EventTime.At).instant }, r) // returned in start order
         // the real adapter passes the focus too
-        val viaAdapter = IcsParse.ics { ny }.parse(sb.toString(), w)
+        val viaAdapter = IcsParse.ics { ny }.parse(sb.toString().toByteArray(), w).completeEvents()
         assertEquals(r, viaAdapter)
     }
 
@@ -208,7 +209,7 @@ class IcsParserTest {
                 .append("DTSTART:20260301T000000Z\r\nDTEND:20260301T000100Z\r\nRRULE:FREQ=DAILY;BYHOUR=${(0..23).joinToString(",")}\r\nSUMMARY:R $i\r\nEND:VEVENT\r\n")
         }
         sb.append("END:VCALENDAR\r\n")
-        val r = IcsParse.ics { ny }.parse(sb.toString(), agendaWindow(now, ny))
+        val r = IcsParse.ics { ny }.parse(sb.toString().toByteArray(), agendaWindow(now, ny)).completeEvents()
         assertEquals(IcsParser.MAX_INSTANCES, r.size)
         // Today starts 04:00Z (midnight EDT). 100 series x 5 hours = 500: today's 04:00Z..08:00Z, nothing else.
         val hours = r.map { (it.start as EventTime.At).instant }.groupingBy { it }.eachCount()

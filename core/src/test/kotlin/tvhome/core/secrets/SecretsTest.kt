@@ -96,6 +96,40 @@ class SecretsTest {
         assertEquals("feeds basic.ics", Redactor { listOf(other) }.redact("feeds basic.ics"))
     }
 
+    /** redactor-over-redacts residual (round 2): case, other schemes, and double-encoded forms. */
+    @Test fun redactorIgnoresCaseAndCatchesWebcalAndDoubleEncoding() {
+        val url = FakeSecrets.CALENDAR_URL
+        val hex = FakeSecrets.CALENDAR_TOKEN.removePrefix("private-")
+        val user = java.net.URLDecoder.decode(FakeSecrets.CALENDAR_PATH_USER, "UTF-8")
+        val leaks = listOf(
+            FakeSecrets.CALENDAR_TOKEN.uppercase(), "Private-" + hex.uppercase(), hex.uppercase(),
+            url.uppercase(), url.replace("https://", "HTTPS://"),
+            url.replaceFirst("https://", "webcal://"), url.replaceFirst("https://", "WEBCAL://"),
+            url.replaceFirst("https://", "webcals://"),
+            "fake%2540example.test", "FAKE%2540EXAMPLE.TEST", "fake%2540example%252Etest",
+            java.net.URLEncoder.encode(java.net.URLEncoder.encode(url, "UTF-8"), "UTF-8"),
+            java.net.URLEncoder.encode(url, "UTF-8").lowercase(),
+            user.uppercase(),
+        )
+        val r = Redactor { listOf(url) }
+        for (l in leaks) {
+            val out = r.redact("failed: $l end")
+            assertFalse(out.contains(hex, ignoreCase = true), "$l -> $out")
+            assertFalse(out.contains("example", ignoreCase = true), "$l -> $out")
+        }
+        // a secret stored as a webcal:// URL gets the URL treatment too (token, user segment, host+path)
+        val webcal = url.replaceFirst("https://", "webcal://")
+        val rw = Redactor { listOf(webcal) }
+        for (l in listOf(url, hex, FakeSecrets.CALENDAR_TOKEN, "fake%2540example.test", user, "calendar.google.com/calendar/ical/")) {
+            val out = rw.redact("x $l y")
+            assertFalse(out.contains(hex) || out.contains("example"), "$l -> $out")
+        }
+        // still no over-redaction of ordinary words, in any case
+        val plain = "Calendar sync: ICAL feed Basic.ics from calendar.google.com, 3 events"
+        assertEquals(plain, r.redact(plain))
+        assertEquals(plain, rw.redact(plain))
+    }
+
     @Test fun redactorReadsSecretsLazily() {
         val store = InMemorySecretStore()
         val r = Redactor { listOfNotNull(store.get(SecretKey.ANTHROPIC_API_KEY)) }
