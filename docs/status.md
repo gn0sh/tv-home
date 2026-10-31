@@ -4,6 +4,7 @@ Feature: tv-home (custom Google TV home screen). Priority: hip pocket (idle time
 Stage: Build M1 (calendar agenda). Core parser/state approved (f95bec0); T5 app and T2b.6 CI in progress. Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
+- Usage pacing (coordinator, 2026-10-31 15:25Z): weekly limit at 79%. After the two running T5 reviews, run one subagent at a time and no optional panels until Brian answers the pacing card.
 - No Android SDK in the cloud sandbox (dl.google.com blocked). APKs build in GitHub Actions; private-repo minutes reset 2026-11-01 00:00Z.
 
 ## Waiting on the CEO
