@@ -78,6 +78,24 @@ class SecretsTest {
         assertEquals("x", Redactor { listOf("", "  ") }.redact("x"))
     }
 
+    /** redactor-over-redacts: only the token, its hex and the user segment are needles, not the URL's common words. */
+    @Test fun redactorLeavesOrdinaryWordsOfTheUrlAlone() {
+        val url = FakeSecrets.CALENDAR_URL
+        val r = Redactor { listOf(url) }
+        val plain = "calendar sync: ical feed basic.ics from calendar.google.com, 3 events"
+        assertEquals(plain, r.redact(plain))
+        val hex = FakeSecrets.CALENDAR_TOKEN.removePrefix("private-")
+        val user = java.net.URLDecoder.decode(FakeSecrets.CALENDAR_PATH_USER, "UTF-8")
+        for (leak in listOf(FakeSecrets.CALENDAR_TOKEN, hex, FakeSecrets.CALENDAR_PATH_USER, user)) {
+            val out = r.redact("x $leak y")
+            assertEquals("x ${Redactor.MARKER} y", out, leak)
+        }
+        // a generic provider's long random path token is still caught on its own
+        val other = "https://cal.example.test/feeds/Zx81kQ0pL2mN7vB4cX9a/basic.ics"
+        assertEquals("token ${Redactor.MARKER} seen", Redactor { listOf(other) }.redact("token Zx81kQ0pL2mN7vB4cX9a seen"))
+        assertEquals("feeds basic.ics", Redactor { listOf(other) }.redact("feeds basic.ics"))
+    }
+
     @Test fun redactorReadsSecretsLazily() {
         val store = InMemorySecretStore()
         val r = Redactor { listOfNotNull(store.get(SecretKey.ANTHROPIC_API_KEY)) }
