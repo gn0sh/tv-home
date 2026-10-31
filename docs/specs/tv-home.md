@@ -37,7 +37,7 @@ Calendar source: open decision for Brian, needed only when the agenda app is bui
 - OAuth device flow, calendar.readonly: real-time. Cost: Brian creates a Google Cloud OAuth client and consents (credential step, hard stop 5).
 - URL/credentials are never typed on the TV: entry via adb push or a QR/phone step.
 
-Technical constraints (for the architect): use maintained libraries (ical4j or similar) and an HTTP client, not a hand-rolled parser; minSdk 31, target 34; `<queries>` with LEANBACK_LAUNCHER, not QUERY_ALL_PACKAGES; allowBackup=false, non-debuggable release builds, secrets scrubbed from exceptions and logs; one stable signing key kept in Actions secrets.
+Technical constraints (for the architect): use a maintained HTTP client; read ICS with our own strict reader for the subset Google Calendar emits, with biweekly kept only as a test oracle (ADR 0004, after the bounded-parse re-plan); minSdk 31, target 34; `<queries>` with LEANBACK_LAUNCHER, not QUERY_ALL_PACKAGES; allowBackup=false, non-debuggable release builds, secrets scrubbed from exceptions and logs; one stable signing key kept in Actions secrets.
 
 ## Milestones and user stories
 Order: M0 (Brian, no code) then M1 (agenda app). M2 and M3 are conditional.
