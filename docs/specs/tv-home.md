@@ -27,6 +27,7 @@ The stock Google TV home is dominated by recommendations and ads, and has no cal
 |---|---|---|---|
 | A1 | Device is Chromecast with Google TV or Google TV Streamer (Android TV based); exact model unknown | Unverified | Medium |
 | A2 | Google TV has no setting to pick another home app. The real path to being home is adb (`cmd package set-home-activity`, else `pm disable-user` on the stock launcher); side effects, OTA updates may undo it, rollback needs a PC. An accessibility service cannot catch Home: it can only redirect after the stock home appears (flash, launcher-name dependent, no boot coverage), so it is fallback only | Unverified on his device | Medium |
+| A7 | Brian wants the mockup's full home screen (app row + calendar + Ask Claude on one screen) | Unconfirmed in words (inferred from "More than that" after seeing the mockup, 2026-10-31) | Medium |
 | A6 | Free launchers (Projectivy and similar) already cover the app row, favorites order and home handling; Projectivy installs from the Play Store, no sideload | Unverified | Medium |
 | A3 | Installing our APK means sideloading: Developer options + adb over the network from his PC, or a downloader app. Installing on his TV is a hard stop (needs his OK) | Unverified on his device | High |
 | A4 | Builds run in GitHub Actions (no Android SDK in our cloud sandbox); pure logic (app ordering, ICS parsing, date windows, staleness) must be unit-testable on a plain JVM | Verified (sandbox) | High |
@@ -42,11 +43,12 @@ Technical constraints (for the architect): use maintained libraries (ical4j or s
 ## Milestones and user stories
 Order: M0 (Brian, no code) then M1 (agenda app). M2 and M3 are conditional.
 
-### M0: Try an existing launcher (no build, no sideload)
+### M0: Try an existing launcher (no build, no sideload) - RESOLVED 2026-10-31
 As Brian, I want to try a ready-made launcher first, so I only get custom work for what is truly missing.
 1. Brian installs Projectivy Launcher from the Play Store and sets up his app row (about 30 min).
 2. He reports back: does it cover his app row and favorites order, does it become Home, and what is missing (calendar expected).
-3. Done when the gap list is recorded in `docs/status.md`. Projectivy remains the app row; our app (agenda + Ask Claude) opens from it as a tile. If the only gaps are the calendar and Ask Claude, M2 is dropped.
+RESOLVED: Brian answered "More than that" (not "just the calendar", not "it covers everything") after seeing the mockup. Result: M2 is unconditional (below).
+3. (Original) Done when the gap list is recorded in `docs/status.md`. Projectivy remains the app row; our app (agenda + Ask Claude) opens from it as a tile. If the only gaps are the calendar and Ask Claude, M2 is dropped.
 
 ### M1: Calendar agenda app (usable from any launcher)
 As Brian, I want today's and tomorrow's events on the TV, as an app/tile in whatever launcher I use, so I see my day at a glance.
@@ -102,15 +104,15 @@ Acceptance criteria
 8. Phone use works via the PC; when the PC is off, the failure message says so.
 9. Nothing is installed on his PC, and no network debugging or pairing is enabled on either device, without Brian's OK (hard stop, asked once per item).
 
-### M2 (conditional on M0 showing a gap Brian cares about): our own launcher
-Only started after Brian names the gap. Scope is only that gap, for example:
+### M2: Our home screen (app row + calendar + Ask Claude, like the mockup)
+No longer conditional. One home screen combines the app row, the calendar panel (M1) and the Ask Claude button (M1b), as in the mockup. Projectivy is no longer the app row; it can stay installed as the fallback. Criteria:
 1. Lists apps with a TV launcher entry (`<queries>` LEANBACK_LAUNCHER), favorites first in configured order, rest alphabetical; JVM test for ordering incl. missing and duplicate favorites.
 2. OK launches the app; Back returns; D-pad focus has no dead ends; focused tile visibly distinct.
-3. No INTERNET permission in this module unless the calendar panel is included.
+3. The home screen shows the app row, the calendar panel and the Ask Claude button together; D-pad moves between all three with no dead ends. Calendar or Claude failures never block the app row (tested with network off).
 4. Measurements (cold start, screenshots) only where they protect a stated gap, with the method written in the PR.
 
 ### M3 (conditional): becoming the default home
-Only after M0 or M2 and only if the launcher in use does not already do it. A spike, not a build.
+Only after M2 and only if the launcher in use does not already do it. A spike, not a build.
 1. Spike: on the real device, `adb shell cmd package set-home-activity <component>` is tried; result (works, survives reboot, survives Home press from Netflix and YouTube within 2 s) is recorded.
 2. If it fails: `pm disable-user` on the stock launcher is evaluated; fallback of last resort is an accessibility redirect, with its flash, naming dependence and no boot coverage written down for Brian.
 3. Rollback documented and tested before handing over: restore stock home in at most 3 adb steps from a PC; the steps also cover an OTA update undoing the change.
@@ -125,7 +127,7 @@ Optional weather: free keyless source, "Weather unavailable" on failure; cut if 
 | M1 | Decide ICS vs OAuth; approve sideload once (Developer options, adb from PC or downloader app); give ICS URL or OAuth client via adb push/QR | 30-45 first time |
 | M1b | Provide a dedicated, spend-limited Anthropic API key with his typed OK (adb push or QR/phone step); try 5 requests and say which worked | 15 |
 | M1c | OK installing the control tool on his PC; enable network debugging on the Google TV and accept the LG pairing prompt on the TV; try 5 commands | 20 |
-| M2 | Name the gap; approve install of updates | 10 |
+| M2 | Approve install of updates; list favorites order | 10 |
 | M3 | Approve adb change, run rollback test with us | 20 |
 
 ## Open questions (none block work; default applies if unanswered)
