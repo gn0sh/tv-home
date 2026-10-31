@@ -130,9 +130,9 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
   (`TOO_LARGE`). Parsing runs off the main thread. Before fetching, the app checks connectivity; offline gives
   `OFFLINE` immediately (AC8: launch with network off in under 2 s).
 - **Cache.** After a good fetch, store the expanded instances for the window above as JSON
-  (`{"v":1,"fetchedAt":...,"events":[...]}`, kotlinx.serialization) in `noBackupFilesDir/agenda-cache.json`
+  (`{"v":1,"fetchedAt":...,"windowStart":...,"windowEnd":...,"events":[...]}`, kotlinx.serialization) in `noBackupFilesDir/agenda-cache.json`
   (atomic write via temp file + rename). Titles are truncated to 200 chars before caching. The cache never contains
-  the URL. A cache whose window no longer covers today counts as no cache.
+  the URL. A cache whose window no longer covers all of today and tomorrow counts as no cache. Added T4 states: `NothingScheduled` (fresh and both days empty), `Unreadable` (no cache, PARSE/TOO_LARGE); `Ok`/`Stale` carry `ageText`.
 - **State.** No secret: `NotSetUp`. No usable cache and first fetch in flight: `Loading` (transient, at most the
   15 s call timeout). No usable cache and fetch failed: `CantReach`. Cache and last fetch this session succeeded:
   `Ok`. Cache and (last fetch failed, or none yet and cache older than 15 min): `Stale` with "Updated N min ago",
