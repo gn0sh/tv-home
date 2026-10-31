@@ -40,7 +40,13 @@ Pairing material is stored in the same folder and is never returned by a tool or
   user), and `atv-tv-cert.sha256`, the TV's certificate fingerprint pinned when pairing succeeds. The pin is checked
   inside every TLS handshake, before anything is sent. If the TV presents a different certificate, every Google TV
   command is refused until it is paired again. If the key can no longer be unsealed, `tv_pair` creates a new one. Pairing needs Windows. Elsewhere the server refuses to store keys.
-- LG (C3): client key with DPAPI and pinned fingerprint, **not built yet**. On non-Windows machines (tests, development) set `TV_REMOTE_CONFIG_DIR` to the folder.
+- LG (C3, built): `lg-client-key.sealed` (the client key, sealed with DPAPI, never written unencrypted) and
+  `lg-tv-cert.sha256`. Connections use wss on port 3001 only, never ws on 3000. tv-remote registers with only 8
+  permissions (launch, power, audio, TV input, and reading the input list, running apps, power state and app status),
+  so the stored key cannot change settings, show toasts or send input events. The TV certificate is pinned the first
+  time pairing succeeds. LG pairing has no code to check, so that first pairing trusts the certificate it sees; do
+  it at the TV. Power on uses Wake-on-LAN (limited broadcast to port 9, which stays on the LAN): enable "Turn on via
+  Wi-Fi" or Quick Start+ on the TV. On non-Windows machines (tests, development) set `TV_REMOTE_CONFIG_DIR` to the folder.
 
 ## Run and test
 Dependencies are locked with hashes in `uv.lock` (security finding #8). Always use `--locked`. Use uv 0.11.x:
@@ -56,5 +62,6 @@ Claude Code registration (on Brian's PC, after his OK): `claude mcp add tv-remot
 <path-to>\tv-remote tv-remote`.
 
 ## Status
-C1: config, tool allowlist, refusals and unreachable errors. C4: the Google TV backend (`googletv.py`, `secretstore.py`).
-Not built yet, and their tools say so: LG in C3 (`lg.py`), deep links for `tv_open` in C2 (`links.py`), discovery.
+Built: C1 (config, tool allowlist, refusals, unreachable errors), C4 (Google TV, `googletv.py`) and C3 (LG, `lg.py`).
+Shared pieces are `secretstore.py` (DPAPI) and `tlspin.py` (certificate pin checked in the TLS handshake). Not built
+yet, and their tools say so: deep links for `tv_open` (C2, `links.py`) and discovery.

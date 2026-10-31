@@ -82,11 +82,18 @@ class FakeRemote:
             self.mismatch = True
             raise InvalidAuth("Need to pair")
         self._transport = FakeTransport(der, self.world)
+        self.connected_at = self.world["clock"]
         self.world.setdefault("connects", 0)
         self.world["connects"] += 1
 
     def pin_mismatch(self):
         return self.mismatch
+
+    def last_rx(self):
+        # A healthy TV pings every 5 s, so "now"; a half-open link goes silent after the connect.
+        if self.world.get("tv_silent"):
+            return self.connected_at
+        return self.world["clock"]
 
     def api_transport(self):
         return self._transport
@@ -140,7 +147,8 @@ def vault(tmp_path):
 def make(vault, **world):
     world.setdefault("clock", 0.0)
     world.setdefault("sent", [])
-    return GoogleTvRemote(HOST, vault, lambda v, h, pin: FakeRemote(world, v, h, pin)), world
+    return GoogleTvRemote(HOST, vault, lambda v, h, pin: FakeRemote(world, v, h, pin),
+                          clock=lambda: world["clock"]), world
 
 
 def run(coro):
@@ -508,6 +516,40 @@ def test_idle_link_is_replaced_not_silently_dropped(vault):
     run(b.send_key("BACK"))
     assert world["connects"] == 2 and world["sent"][-1] == ("key", "KEYCODE_BACK")
     assert "dropped" not in world
+
+
+def test_half_open_link_silent_for_7s_is_replaced(vault):
+    b, world = _connected(vault)
+    world["tv_silent"] = True  # Wi-Fi blip: transport still looks open, but no pings arrive
+    world["clock"] += 8  # well inside the 16 s idle close
+    run(b.send_key("UP"))
+    assert world["connects"] == 2 and world["sent"][-1] == ("key", "KEYCODE_DPAD_UP")
+
+
+def test_link_with_recent_pings_is_reused(vault):
+    b, world = _connected(vault)
+    world["clock"] += 6
+    run(b.send_key("UP"))
+    assert world["connects"] == 1
+
+
+def test_start_pairing_clears_a_stale_pending_pin(vault):
+    b, world = make(vault)
+    run(b.start_pairing())  # abandoned: Brian never typed the code
+    world["pair_error"] = CannotConnect("x")
+    with pytest.raises(DeviceUnreachable):
+        run(b.start_pairing())
+    with pytest.raises(NotPaired):
+        run(b.finish_pairing("ab12cd"))
+    assert vault.pinned() is None
+
+
+def test_missing_key_file_is_not_paired(vault, tmp_path):
+    vault.create_identity()
+    (tmp_path / g.KEY_FILE).unlink()
+    (tmp_path / g.KEY_FILE).mkdir()  # unreadable as a file: OSError on load
+    with pytest.raises(NotPaired):
+        vault.ssl_context()
 
 
 def test_reconnect_rechecks_the_pin(vault):

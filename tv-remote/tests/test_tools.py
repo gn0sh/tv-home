@@ -215,7 +215,7 @@ def test_real_backend_stubs_report_their_task():
     from tv_remote.config import LgConfig
 
     server = build_server(Config(LgConfig(lg.host, lg.mac), GoogleTvConfig(gtv.host)), lg, gtv, DiscoveryStub())
-    with pytest.raises(ToolError, match="C3"):
+    with pytest.raises(ToolError, match="needs Windows"):
         asyncio.run(server.call_tool("lg_power", {"state": "off"}))
     with pytest.raises(ToolError, match="needs Windows"):
         asyncio.run(server.call_tool("tv_key", {"key": "OK"}))

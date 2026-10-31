@@ -16,13 +16,13 @@ handshake, before the protocol sends anything, and a mismatch refuses all comman
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import re
 import secrets
 import ssl
 import tempfile
+import time
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives import serialization
 
 from .devices import CertificateChanged, DeviceUnreachable, Key, NotPaired
 from .secretstore import Protector, SecretStoreError
+from .tlspin import PinMismatch, TvSSLContext, fingerprint, peer_fingerprint, pinned_client_context  # noqa: F401
 
 log = logging.getLogger("tv_remote.googletv")
 
@@ -44,6 +45,8 @@ KEY_PW_FILE = "atv-client-key.pw.sealed"
 PIN_FILE = "atv-tv-cert.sha256"
 CONNECT_TIMEOUT = 8.0
 APP_WAIT = 1.5
+# The TV pings every 5 s on an idle link; this much silence means the link is half-open, so reconnect first.
+SILENCE_LIMIT = 7.0
 
 KEYCODES: dict[str, str] = {
     "UP": "KEYCODE_DPAD_UP",
@@ -65,41 +68,8 @@ REASON_CLOSED = "connection closed"
 REASON_TIMEOUT = "timed out"
 
 
-def fingerprint(der: bytes) -> str:
-    return hashlib.sha256(der).hexdigest()
-
-
-def peer_fingerprint(transport: Any) -> str | None:
-    ssl_obj = transport.get_extra_info("ssl_object") if transport is not None else None
-    der = ssl_obj.getpeercert(True) if ssl_obj is not None else None
-    return fingerprint(der) if der else None
-
-
 def transport_open(transport: Any) -> bool:
     return transport is not None and not transport.is_closing()
-
-
-class PinMismatch(ssl.SSLCertVerificationError):
-    pass
-
-
-class _PinnedSSLObject(ssl.SSLObject):
-    """Checks the TV's certificate as soon as the handshake completes, before any protocol message is sent."""
-
-    def do_handshake(self) -> None:
-        super().do_handshake()  # raises SSLWantReadError until the handshake is done
-        ctx = self.context
-        pin = getattr(ctx, "tv_pin", None)
-        if pin is not None:
-            der = self.getpeercert(True)
-            if not der or fingerprint(der) != pin:
-                ctx.tv_pin_mismatch = True
-                raise PinMismatch("TV certificate does not match the pinned fingerprint")
-
-
-class TvSSLContext(ssl.SSLContext):
-    tv_pin: str | None = None
-    tv_pin_mismatch: bool = False
 
 
 class KeyVault:
@@ -154,16 +124,12 @@ class KeyVault:
     def ssl_context(self, pin: str | None = None) -> TvSSLContext:
         """Client TLS context. With `pin`, the handshake fails unless the TV presents that certificate."""
         password = self._password()
-        ctx = TvSSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        # The TV's certificate is self-signed; trust comes from the pin, checked inside the handshake.
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.sslobject_class = _PinnedSSLObject
-        ctx.tv_pin = pin
+        ctx = pinned_client_context(pin)
         try:
             ctx.load_cert_chain(str(self.cert_path), str(self.dir / KEY_FILE), password=password)
-        except ssl.SSLError:
-            log.warning("Google TV client key could not be loaded.")
+        except (ssl.SSLError, OSError) as exc:
+            # OSError: a file vanished or is unreadable. Either way the identity is unusable until re-paired.
+            log.warning("Google TV client key could not be loaded: %s", type(exc).__name__)
             raise NotPaired("googletv") from None
         return ctx
 
@@ -214,6 +180,24 @@ class SealedKeyRemote(AndroidTVRemote):
     def pin_mismatch(self) -> bool:
         return bool(getattr(self._ssl_context, "tv_pin_mismatch", False))
 
+    async def async_connect(self) -> None:
+        await super().async_connect()
+        # Record when the TV last sent anything. It pings every 5 s on an idle link, so a long silence means the
+        # link is half-open (e.g. Wi-Fi blip) even though the transport still looks open.
+        proto = self._remote_message_protocol
+        self._last_rx = time.monotonic()
+        if proto is not None:
+            inner = proto.data_received
+
+            def data_received(data: bytes) -> None:
+                self._last_rx = time.monotonic()
+                inner(data)
+
+            proto.data_received = data_received
+
+    def last_rx(self) -> float:
+        return getattr(self, "_last_rx", 0.0)
+
     def api_transport(self) -> Any:
         proto = self._remote_message_protocol
         return proto.transport if proto is not None else None
@@ -229,8 +213,9 @@ RemoteFactory = Callable[[KeyVault, str, "str | None"], Any]
 class GoogleTvRemote:
     """GoogleTvBackend over androidtvremote2 (see devices.GoogleTvBackend)."""
 
-    def __init__(self, host: str, vault: KeyVault, remote_factory: RemoteFactory = SealedKeyRemote):
-        self.host, self._vault, self._factory = host, vault, remote_factory
+    def __init__(self, host: str, vault: KeyVault, remote_factory: RemoteFactory = SealedKeyRemote,
+                 clock: Callable[[], float] = time.monotonic):
+        self.host, self._vault, self._factory, self._clock = host, vault, remote_factory, clock
         self._remote: Any = None
         self._connected = False
         self._pending_pin: str | None = None
@@ -254,10 +239,10 @@ class GoogleTvRemote:
             # androidtvremote2 silently drops sends on a closed link (base.py _send_message), and the TV closes idle
             # links and drops them on standby or a Wi-Fi blip. So a link only counts while its transport is open;
             # otherwise reconnect, which re-checks the pin.
-            if self._connected and self._remote is not None and transport_open(self._remote.api_transport()):
+            if self._connected and self._remote is not None and self._link_alive(self._remote):
                 return self._remote
-            pinned = self._vault.pinned()
-            if pinned is None or not self._vault.has_identity():
+            pinned, has_identity = await asyncio.to_thread(lambda: (self._vault.pinned(), self._vault.has_identity()))
+            if pinned is None or not has_identity:
                 self._drop()
                 raise NotPaired("googletv")
             remote = self._new_remote(pinned)
@@ -289,6 +274,9 @@ class GoogleTvRemote:
                 raise self._unreachable(REASON_CLOSED)
             self._connected = True
             return remote
+
+    def _link_alive(self, remote: Any) -> bool:
+        return transport_open(remote.api_transport()) and self._clock() - remote.last_rx() <= SILENCE_LIMIT
 
     def _send(self, remote: Any, fn: Callable[[], None]) -> None:
         if not transport_open(remote.api_transport()):
@@ -334,12 +322,13 @@ class GoogleTvRemote:
     async def start_pairing(self) -> str:
         async with self._lock:
             self._drop()
+            self._pending_pin = None  # a pin from an earlier, abandoned pairing must never be used
             try:
                 # A key that can no longer be unsealed (e.g. Windows profile restored) would make pairing impossible;
                 # start over with a new identity, which also clears the old pin.
-                if self._vault.has_identity() and not self._vault.identity_usable():
+                if await asyncio.to_thread(lambda: self._vault.has_identity() and not self._vault.identity_usable()):
                     log.warning("Google TV client identity is unusable; creating a new one.")
-                    self._vault.create_identity()
+                    await asyncio.to_thread(self._vault.create_identity)
                 remote = self._new_remote(None)
                 await remote.async_generate_cert_if_missing()
                 await asyncio.wait_for(remote.async_start_pairing(), CONNECT_TIMEOUT)
@@ -372,7 +361,7 @@ class GoogleTvRemote:
                 self._drop()
                 self._pending_pin = None
                 raise self._unreachable(REASON_CLOSED) from None
-            self._vault.pin(pending)
+            await asyncio.to_thread(self._vault.pin, pending)
             self._pending_pin = None
             self._drop()
             return "Google TV paired."

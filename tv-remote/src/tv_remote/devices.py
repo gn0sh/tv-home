@@ -20,9 +20,15 @@ VOLUME_CAP = 60
 class DeviceUnreachable(Exception):
     """A TV did not answer. `device` says which one so the tool can tell Brian (AC7)."""
 
-    def __init__(self, device: Device, host: str, reason: str = "no answer"):
-        self.device, self.host, self.reason = device, host, reason
+    def __init__(self, device: Device, host: str, reason: str = "no answer", sent: bool = False):
+        # sent: the request went out before the link failed, so the TV may have acted on it.
+        self.device, self.host, self.reason, self.sent = device, host, reason, sent
         super().__init__(f"{DEVICE_NAMES[device]} at {host} is unreachable ({reason}).")
+
+
+class DeviceRefused(Exception):
+    """The TV answered but refused the request (for example a call outside the registered permissions).
+    The message is a fixed string chosen by the backend; TV error text is not passed through."""
 
 
 class NotPaired(Exception):
@@ -100,11 +106,17 @@ class _Stub:
         return _not_built
 
 
-class LgStub(_Stub):
-    _task = "task C3, lg.py"
+class LgStub:
+    """Used when secure key storage (DPAPI) is unavailable, i.e. not on Windows. The real backend is lg.py."""
 
     def __init__(self, host: str, mac: str):
         self.host, self.mac = host, mac
+
+    def __getattr__(self, name: str):
+        async def _unavailable(*_a, **_k):
+            raise NotImplementedError("LG TV control is unavailable here: its key storage (DPAPI) needs Windows.")
+
+        return _unavailable
 
 
 class GoogleTvStub:

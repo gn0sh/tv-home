@@ -17,6 +17,7 @@ from pydantic import AfterValidator, Field
 from .config import Config, ConfigError, config_dir, load_config
 from .devices import (
     VOLUME_CAP,
+    DeviceRefused,
     DeviceUnreachable,
     Discovery,
     DiscoveryStub,
@@ -137,10 +138,13 @@ def build_server(
         try:
             return await action
         except DeviceUnreachable as exc:
+            if exc.sent:
+                raise ToolError(f"{exc} The request went out but no reply came back, so it may or may not have "
+                                "taken effect.") from None
             raise ToolError(f"{exc} Nothing was sent; check that it is on and on the home network.") from None
         except NotPaired as exc:
             raise ToolError(str(exc)) from None
-        except NotImplementedError as exc:
+        except (NotImplementedError, DeviceRefused) as exc:
             raise ToolError(str(exc)) from None
 
     read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
@@ -157,7 +161,7 @@ def build_server(
                              "input": s.input, "foreground_app": s.foreground_app}
             except DeviceUnreachable as exc:
                 out["lg"] = {"reachable": False, "error": str(exc)}
-            except (NotPaired, NotImplementedError) as exc:
+            except (NotPaired, NotImplementedError, DeviceRefused) as exc:
                 out["lg"] = {"reachable": None, "error": str(exc)}
         else:
             out["lg"] = {"configured": False}
@@ -166,7 +170,7 @@ def build_server(
                 out["googletv"] = {"reachable": True, "current_app": await gtv.current_app()}
             except DeviceUnreachable as exc:
                 out["googletv"] = {"reachable": False, "error": str(exc)}
-            except (NotPaired, NotImplementedError) as exc:
+            except (NotPaired, NotImplementedError, DeviceRefused) as exc:
                 out["googletv"] = {"reachable": None, "error": str(exc)}
         else:
             out["googletv"] = {"configured": False}
@@ -206,7 +210,7 @@ def build_server(
                     f"{exc} {sent} of {repeat} {key} presses were sent before it stopped answering; "
                     "nothing more was sent."
                 ) from None
-            except (NotPaired, NotImplementedError) as exc:
+            except (NotPaired, NotImplementedError, DeviceRefused) as exc:
                 raise ToolError(f"{exc} {sent} of {repeat} presses were sent.") from None
         return f"Pressed {key} x{repeat} on the Google TV."
 
@@ -281,7 +285,16 @@ def main() -> None:
     except ConfigError as exc:
         print(f"tv-remote: {exc}", file=sys.stderr)
         sys.exit(2)
-    lg = LgStub(config.lg.host, config.lg.mac) if config.lg else None
+    lg = None
+    if config.lg:
+        from .lg import LgRemote, LgVault
+        from .secretstore import SecretStoreError, default_protector
+
+        try:
+            lg = LgRemote(config.lg.host, config.lg.mac, LgVault(config_dir(), default_protector()))
+        except SecretStoreError as exc:
+            print(f"tv-remote: LG TV disabled: {exc}", file=sys.stderr)
+            lg = LgStub(config.lg.host, config.lg.mac)
     gtv = None
     if config.googletv:
         from .googletv import GoogleTvRemote, KeyVault
