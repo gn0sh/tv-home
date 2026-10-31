@@ -38,7 +38,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install uv (hash-pinned)
-        run: python3 -m pip install --user --no-deps --require-hashes -r ci/uv-requirements.txt
+      - name: Install uv (hash-pinned, in its own venv; the runner's system pip refuses installs under PEP 668)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/uv-venv"
+          "$RUNNER_TEMP/uv-venv/bin/python" -m pip install --no-deps --require-hashes -r ci/uv-requirements.txt
       - name: Run tests
-        run: python3 -m uv run --locked pytest -q
+        run: '"$RUNNER_TEMP/uv-venv/bin/uv" run --locked pytest -q'

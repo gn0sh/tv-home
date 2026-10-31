@@ -30,9 +30,13 @@ mac = "AA:BB:CC:DD:EE:FF"    # for Wake-on-LAN power on
 host = "192.168.68.81"
 ```
 
-Either section may be left out. Pairing material (LG client key, Google TV client cert and key, both TVs' pinned
-fingerprints) is stored in the same folder by the device backends, encrypted with DPAPI, and is never returned by a
-tool or written to logs. On non-Windows machines (tests, development) set `TV_REMOTE_CONFIG_DIR` to the folder.
+Either section may be left out. Hosts are checked as if the home subnet is a /24. If it is wider, write the prefix,
+for example `host = "10.0.5.20/16"`. The subnet's network and broadcast addresses (such as `192.168.68.0` and
+`192.168.68.255`) are refused.
+
+Pairing material (LG client key, Google TV client cert and key, both TVs' pinned fingerprints) will be stored in the
+same folder by the device backends. The plan is to encrypt it with DPAPI (built in C3 and C4; **not built yet**). It
+is never returned by a tool or written to logs. On non-Windows machines (tests, development) set `TV_REMOTE_CONFIG_DIR` to the folder.
 
 ## Run and test
 Dependencies are locked with hashes in `uv.lock` (security finding #8). Always use `--locked`:

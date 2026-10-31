@@ -17,11 +17,9 @@ tv-remote = "tv_remote.server:main"
 dev = ["pytest==8.4.2"]
 
 [build-system]
-requires = ["hatchling==1.27.0"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/tv_remote"]
+# uv_build has no dependencies of its own, so a fresh install fetches nothing outside uv.lock (finding #8).
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

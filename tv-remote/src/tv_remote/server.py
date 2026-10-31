@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
-from pydantic import Field
+from pydantic import AfterValidator, Field
 
 from .config import Config, ConfigError, load_config
 from .devices import (
@@ -71,8 +72,30 @@ def _link_builder_not_built(service: str, content_id: str | None, search_query: 
     raise NotImplementedError("Opening a title or search is not built yet (task C2, links.py).")
 
 
-ContentId = Annotated[str, Field(pattern=r"^[A-Za-z0-9._:-]{1,64}$", description="The service's own title id")]
-SearchQuery = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f\x7f]+$")]
+# No / ? # % : @ and no "..", so an id can never change the link's path, query or host (finding #12).
+def _no_dot_dot(cid: str) -> str:
+    if ".." in cid:
+        raise ValueError("content_id must not contain '..'")
+    return cid
+
+
+ContentId = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z0-9._-]{1,64}$", description="The service's own title id"),
+    AfterValidator(_no_dot_dot),
+]
+
+
+def _no_format_chars(q: str) -> str:
+    # Unicode Cf covers bidi overrides and zero-width characters that can disguise a query.
+    if any(unicodedata.category(ch) == "Cf" for ch in q):
+        raise ValueError("search_query must not contain invisible or bidi control characters")
+    return q
+
+
+SearchQuery = Annotated[
+    str, Field(min_length=1, max_length=100, pattern=r"^[^\x00-\x1f\x7f]+$"), AfterValidator(_no_format_chars)
+]
 PairCode = Annotated[str, Field(pattern=r"^[0-9A-Fa-f]{6}$", description="6-character code shown on the Google TV")]
 
 
@@ -80,6 +103,13 @@ class TvRemoteServer(MCPServer):
     async def call_tool(self, name: str, arguments: dict[str, Any], context=None):
         if name not in ALLOWED_TOOLS:
             raise ToolError(REFUSAL.format(name=name))
+        tool = self._tool_manager.get_tool(name)
+        known = set((tool.parameters or {}).get("properties", {})) if tool else set()
+        extra = sorted(set(arguments or {}) - known)
+        if extra:
+            raise ToolError(
+                f"Refused: {name} does not take {', '.join(extra)}. It takes: {', '.join(sorted(known)) or 'nothing'}."
+            )
         return await super().call_tool(name, arguments, context)
 
 
@@ -165,8 +195,18 @@ def build_server(
     async def tv_key(key: Key, repeat: Annotated[int, Field(ge=1, le=10)] = 1) -> str:
         """Press a remote button on the Google TV, 1-10 times."""
         g = need_gtv()
-        for _ in range(repeat):
-            await run(g.send_key(key))
+        for sent in range(repeat):
+            try:
+                await g.send_key(key)
+            except DeviceUnreachable as exc:
+                if sent == 0:
+                    raise ToolError(f"{exc} Nothing was sent; check that it is on and on the home network.") from None
+                raise ToolError(
+                    f"{exc} {sent} of {repeat} {key} presses were sent before it stopped answering; "
+                    "nothing more was sent."
+                ) from None
+            except (NotPaired, NotImplementedError) as exc:
+                raise ToolError(f"{exc} {sent} of {repeat} presses were sent.") from None
         return f"Pressed {key} x{repeat} on the Google TV."
 
     @server.tool(annotations=acts)
@@ -181,8 +221,20 @@ def build_server(
         """Set the LG TV volume to 0-60 (capped at 60), or step it up/down."""
         t = need_lg()
         if level in ("up", "down"):
+            if level == "up":
+                # Enforce the cap here, not in the backend: never step above 60 (finding volume-step-cap).
+                current = (await run(t.status())).volume
+                if current is None:
+                    raise ToolError("Refused: the LG TV did not report its volume, so it cannot be raised safely.")
+                if current >= VOLUME_CAP:
+                    if current > VOLUME_CAP:
+                        new = await run(t.set_volume(VOLUME_CAP))
+                        return f"LG TV volume was {current}, above the cap; set to {new}."
+                    return f"LG TV volume is already at the cap ({VOLUME_CAP})."
             new = await run(t.volume_step(level))
         else:
+            if not 0 <= level <= VOLUME_CAP:  # schema also checks; kept so the cap never depends on it
+                raise ToolError(f"Refused: volume must be 0-{VOLUME_CAP}.")
             new = await run(t.set_volume(level))
         return f"LG TV volume is {new}."
 

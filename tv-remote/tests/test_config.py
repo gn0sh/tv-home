@@ -45,10 +45,18 @@ def test_private_hosts_ok(host):
     assert check_private_host(host, "x") == host
 
 
+@pytest.mark.parametrize("host,bare", [("10.0.5.0/16", "10.0.5.0"), ("192.168.68.61/24", "192.168.68.61"),
+                                       ("172.20.1.255/16", "172.20.1.255")])
+def test_prefix_given_in_config(host, bare):
+    assert check_private_host(host, "x") == bare
+
+
 @pytest.mark.parametrize(
     "host",
     ["8.8.8.8", "172.32.0.1", "127.0.0.1", "169.254.1.1", "100.64.0.1", "0.0.0.0", "tv.local",
-     "192.168.68.61.evil.com", "::1", "fe80::1", "", 3232252989],
+     "192.168.68.61.evil.com", "::1", "fe80::1", "", 3232252989,
+     "192.168.68.0", "192.168.68.255", "10.0.0.0/8", "10.255.255.255/8", "172.16.0.0/16", "10.1.2.3/7",
+     "192.168.1.5/31", "192.168.1.5/abc", "8.8.8.8/24"],
 )
 def test_non_private_hosts_refused(host):
     with pytest.raises(ConfigError):

@@ -62,17 +62,30 @@ def config_dir() -> Path:
 
 
 def check_private_host(host: object, field: str) -> str:
-    """Accept only a literal IPv4 address inside RFC 1918. Host names are refused (DNS could point anywhere)."""
+    """Accept only a literal IPv4 address inside RFC 1918. Host names are refused (DNS could point anywhere).
+
+    The subnet is assumed to be /24 (a home router's default) unless the value gives a prefix, as in
+    "10.0.5.20/16". The subnet's network and broadcast addresses are refused, because a packet to them reaches
+    every device on the LAN. Returns the bare address.
+    """
     if not isinstance(host, str):
         raise ConfigError(f"{field} must be a string IPv4 address.")
+    text = host.strip()
+    if "/" not in text:
+        text += "/24"
     try:
-        addr = ipaddress.IPv4Address(host.strip())
-    except ipaddress.AddressValueError:
+        iface = ipaddress.IPv4Interface(text)
+    except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, ValueError):
         raise ConfigError(f"{field} must be a literal IPv4 address on the home network, got {host!r}.") from None
-    if not any(addr in net for net in _PRIVATE_NETS):
+    addr, net = iface.ip, iface.network
+    if not any(net.subnet_of(n) for n in _PRIVATE_NETS):
         raise ConfigError(
             f"{field} {addr} is not a private (RFC 1918) address; only 10/8, 172.16/12 and 192.168/16 are allowed."
         )
+    if net.prefixlen > 30:
+        raise ConfigError(f"{field}: prefix /{net.prefixlen} is too narrow for a home network; use /8 to /30.")
+    if addr in (net.network_address, net.broadcast_address):
+        raise ConfigError(f"{field} {addr} is the network or broadcast address of {net}, not a single TV.")
     return str(addr)
 
 

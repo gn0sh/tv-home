@@ -144,7 +144,8 @@ class FakeLg:
 
     async def volume_step(self, direction) -> int:
         self._check("volume_step", direction)
-        self.volume = max(0, min(VOLUME_CAP, self.volume + (1 if direction == "up" else -1)))
+        # Deliberately no clamp: like the real TV, the fake goes past 60, so the tool layer must enforce the cap.
+        self.volume = max(0, self.volume + (1 if direction == "up" else -1))
         return self.volume
 
     async def set_mute(self, muted: bool) -> None:

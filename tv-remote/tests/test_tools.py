@@ -74,15 +74,84 @@ def test_happy_paths(h):
     h.text("lg_input", source="HDMI_2")
     h.text("lg_power", state="off")
     h.text("lg_power", state="on")
-    assert [c[0] for c in h.lg.calls] == ["set_volume", "volume_step", "set_mute", "set_input", "power_off", "power_on"]
+    assert [c[0] for c in h.lg.calls] == ["set_volume", "status", "volume_step", "set_mute", "set_input", "power_off", "power_on"]
     h.text("tv_key", key="DOWN", repeat=3)
     h.text("tv_launch_app", service="netflix")
     assert h.gtv.calls == [("send_key", "DOWN")] * 3 + [("launch_package", "com.netflix.ninja")]
 
 
-def test_volume_up_never_passes_cap(h):
-    h.lg.volume = 60
+def test_volume_up_never_passes_cap_with_non_clamping_fake(h):
+    h.lg.volume = 59
     assert "volume is 60" in h.text("lg_volume", level="up")
+    assert "already at the cap" in h.text("lg_volume", level="up")
+    assert h.lg.volume == 60 and [c[0] for c in h.lg.calls].count("volume_step") == 1
+
+
+def test_fake_does_not_clamp_itself():
+    from tv_remote.devices import FakeLg
+
+    lg = FakeLg(volume=60)
+    assert asyncio.run(lg.volume_step("up")) == 61  # proves the cap test above exercises the tool layer
+
+
+def test_volume_above_cap_is_brought_down_not_raised(h):
+    h.lg.volume = 75  # e.g. set with the physical remote
+    assert "set to 60" in h.text("lg_volume", level="up")
+    assert h.lg.volume == 60
+    assert "volume is 74" in h.text("lg_volume", level="down") or h.lg.volume == 59
+
+
+def test_volume_up_refused_when_volume_unknown(h):
+    h.lg.volume = None
+    with pytest.raises(ToolError, match="cannot be raised safely"):
+        h.call("lg_volume", level="up")
+    assert "volume_step" not in [c[0] for c in h.lg.calls]
+
+
+def test_partial_key_presses_are_reported(h):
+    orig = h.gtv.send_key
+    count = {"n": 0}
+
+    async def flaky(key):
+        count["n"] += 1
+        if count["n"] == 3:
+            h.gtv.reachable = False
+        await orig(key)
+
+    h.gtv.send_key = flaky
+    with pytest.raises(ToolError) as e:
+        h.call("tv_key", key="DOWN", repeat=5)
+    assert "2 of 5 DOWN presses were sent" in str(e.value) and "Google TV at 192.168.68.81" in str(e.value)
+    assert len(h.gtv.calls) == 2
+
+
+@pytest.mark.parametrize("cid", ["a/b", "a?b", "a#b", "a%2Fb", "a:b", "a@b", "..", "a..b", "x" * 65, ""])
+def test_content_id_refuses_link_changing_characters(h, cid):
+    with pytest.raises(ToolError, match="tv_open"):
+        h.call("tv_open", service="netflix", content_id=cid)
+
+
+@pytest.mark.parametrize("cid", ["80057281", "tt0123_x-1.2", "a.b"])
+def test_content_id_accepts_plain_ids(cid):
+    h = Harness(links=lambda s, c, q: f"https://example.test/{c}")
+    h.text("tv_open", service="netflix", content_id=cid)
+
+
+@pytest.mark.parametrize("q", ["stranger\u202ethings", "a\u200bb", "x\ufeff", "a\u2066b"])
+def test_search_query_refuses_format_characters(h, q):
+    with pytest.raises(ToolError, match="invisible or bidi"):
+        h.call("tv_open", service="netflix", search_query=q)
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [("tv_status", {"verbose": True}), ("lg_mute", {"muted": True, "uri": "ssap://x"}),
+     ("tv_key", {"key": "OK", "keycode": 26})],
+)
+def test_unknown_argument_keys_are_refused(h, name, args):
+    with pytest.raises(ToolError, match=f"Refused: {name} does not take"):
+        h.call(name, **args)
+    assert h.lg.calls == [] and h.gtv.calls == []
 
 
 def test_unreachable_names_the_device_and_does_nothing_else(h):
