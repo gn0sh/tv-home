@@ -20,3 +20,7 @@ Most serious: MEDIUM `stdin-bom` (2nd return) new-signing-key.ps1:48 and provisi
 LOW `opaque-failure` 61-63,100,140-142: print a fixed $step label; gh stderr safe to show for gh steps.
 LOW `doc-steps` (2nd return) tv-home-signing.md:17 (`;` chaining), :30 (exact -Rotate command), :9 wording.
 INFO :107 New-Item -LiteralPath.
+
+## Fix2 review (security-engineer, opus/high, fresh, 45784df..f824a04): APPROVE
+Closed: stdin-bom (InputEncoding swap around Process.Start verified against .NET Framework behaviour), opaque-failure, LiteralPath; CI decode check (0x30 first byte, fails closed, prints nothing). doc-steps 3rd return was a stale "check out the branch" sentence: manager removed it in the next commit. INFO: New-Item failure labelled 'generate password' (cosmetic).
+T7 passes review. Brian runs the script only after merge to main, via a hard-stop-free ask (it creates his own key and GitHub secrets; he runs it himself).
