@@ -56,13 +56,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      # Output goes to a file, is scanned, and is printed only if the scan passes.
       - name: :core:test
-        run: |
-          set -o pipefail
-          ./gradlew --no-daemon --console=plain :core:test 2>&1 | tee "$RUNNER_TEMP/core.log"
-      - name: Scan the log for secret patterns
-        if: always()
-        run: scripts/ci/scan-secrets.sh "$RUNNER_TEMP/core.log"
+        run: scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/core.log" :core:test
 
   app:
     name: app (lint, release APK, checks)
@@ -108,14 +104,19 @@ jobs:
       - name: Lint
         if: steps.detect.outputs.present == 'true'
         run: |
-          set -o pipefail
-          ./gradlew --no-daemon --console=plain --dependency-verification="$APP_DEP_VERIFICATION" \
-            :app:lintRelease 2>&1 | tee "$RUNNER_TEMP/lint.log"
+          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/lint.log" \
+            --dependency-verification="$APP_DEP_VERIFICATION" :app:lintRelease
 
-      # Signing happens only on a push to main. Secrets are read in these two steps only, never on pull_request.
+      # Signing happens only on a push to main AND only once dependency verification is strict: with lenient
+      # verification an unverified dependency could run code next to the signing secrets. Until then main builds
+      # unsigned. Secrets are read in these steps only, never on pull_request.
+      - name: Signing disabled until dependency verification is strict
+        if: steps.detect.outputs.present == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && env.APP_DEP_VERIFICATION != 'strict'
+        run: echo "::notice::APP_DEP_VERIFICATION=$APP_DEP_VERIFICATION, so the release APK is built unsigned."
+
       - name: Decode signing keystore
         id: keystore
-        if: steps.detect.outputs.present == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.detect.outputs.present == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' && env.APP_DEP_VERIFICATION == 'strict'
         env:
           KEYSTORE_B64: ${{ secrets.TVHOME_KEYSTORE_B64 }}
         run: |
@@ -129,6 +130,8 @@ jobs:
           echo "signed=true" >> "$GITHUB_OUTPUT"
           echo "TVHOME_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
+      # Note: Gradle's Kotlin compiler daemon is a child process and inherits this step's environment, including the
+      # signing passwords. It dies with the job; --no-daemon does not prevent it. Accepted (security review INFO).
       - name: Build release
         if: steps.detect.outputs.present == 'true'
         env:
@@ -137,9 +140,8 @@ jobs:
           TVHOME_KEY_ALIAS: ${{ steps.keystore.outputs.signed == 'true' && secrets.TVHOME_KEY_ALIAS || '' }}
           TVHOME_KEY_PASSWORD: ${{ steps.keystore.outputs.signed == 'true' && secrets.TVHOME_KEY_PASSWORD || '' }}
         run: |
-          set -o pipefail
-          ./gradlew --no-daemon --console=plain --dependency-verification="$APP_DEP_VERIFICATION" \
-            :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/assemble.log"
+          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/assemble.log" \
+            --dependency-verification="$APP_DEP_VERIFICATION" :app:assembleRelease
 
       - name: Delete signing material
         if: always() && steps.detect.outputs.present == 'true'
