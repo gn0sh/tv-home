@@ -1,7 +1,7 @@
 # tv-home status
 
 Feature: tv-home (custom Google TV home screen). Priority: hip pocket (idle time only; Quick Invoice first).
-Stage: Build M1 (calendar agenda), T2b re-plan in progress. Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
+Stage: Build M1 (calendar agenda). Core parser/state approved (f95bec0); T5 app and T2b.6 CI in progress. Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
 - No Android SDK in the cloud sandbox (dl.google.com blocked). APKs build in GitHub Actions; private-repo minutes reset 2026-11-01 00:00Z.
@@ -16,7 +16,7 @@ Stage: Build M1 (calendar agenda), T2b re-plan in progress. Spec at 7d04d4e cove
 | instance-cap-starves-today | 1 | M1 core code review |
 | floating-recurring-dst | 1 | M1 core code review |
 | one-bad-event-fails-feed | 1 | M1 core code review |
-| rrule-advance-cpu / ics-parse-cpu-memory-dos | 3 | code + security review rounds 1-2; architect re-plan done (ADR 0004); re-plan failure 1 of 2 at T2b.3 (uncharged setup work), fixing; next failure escalates |
+| rrule-advance-cpu / ics-parse-cpu-memory-dos | 3 | code + security review rounds 1-2; architect re-plan done (ADR 0004); re-plan failure 1 of 2 at T2b.3 (uncharged setup work); fixed and approved at f95bec0 (two-pass removals) |
 | instance-cap-removal-order, count-walk-skips-active-series, exdate-uncharged, fetch-redirect-hops-unpinned, p14-perf-flaky, expander-no-differential-test | 1 | T2b.3 reviews (docs/reviews/m1-t2b-reviews.md) |
 | partial-result-replaces-good, cancel-returns-network-error, vtimezone-bare-cr, vcal1-daylight | 1 | round 2 reviews (folded into T2b) |
 | session-ok-never-ages, no-fsync-before-rename, cache-write-throws, emphasis-boundary-60 | 1 | T4 review (fixed) |
@@ -50,4 +50,8 @@ Stage: Build M1 (calendar agenda), T2b re-plan in progress. Spec at 7d04d4e cove
 | 2026-10-31 | backend-engineer | sonnet/high | T2b.2 fetch/source/state/AgendaRefresher | done (310ba73, 144 tests) |
 | 2026-10-31 | code-reviewer | opus/high | T2b.3 fresh review | request changes, 1 must-fix (ics-rule-setup-uncharged) |
 | 2026-10-31 | security-engineer | opus/high | T2b.3 fresh review | request changes, 1 high (instance-cap-removal-order) |
-| 2026-10-31 | backend-engineer | opus/high | Fix T2b findings | running |
+| 2026-10-31 | backend-engineer | opus/high | Fix T2b findings (2 rounds) | done (f9d21dc, f95bec0; 167 + 44 hostile tests) |
+| 2026-10-31 | code-reviewer | opus/high | T2b deltas x2 | approve with nits -> approve |
+| 2026-10-31 | security-engineer | opus/high | T2b deltas x2 | approve with changes -> approve |
+| 2026-10-31 | devops-engineer | sonnet/low | T2b.6 CI hostile + live job | running |
+| 2026-10-31 | frontend-engineer | sonnet/high | T5 :app agenda screen | running |
