@@ -64,6 +64,18 @@ class IcsCalendarSourceTest {
         assertEquals(FetchResult.Failed(SourceError.NETWORK), r)
     }
 
+    @Test fun realParserMapsIcsParseExceptionToParseAndGoodFeedToOk() {
+        val bad = source(storeWithUrl(), { IcsFetchResult.Body("not a calendar ${FakeSecrets.CALENDAR_URL}") }, IcsParse.ics { java.time.ZoneOffset.UTC })
+        val r = runSuspend { bad.fetch(window) }
+        assertEquals(FetchResult.Failed(SourceError.PARSE), r)
+        assertFalse(r.toString().contains(FakeSecrets.CALENDAR_TOKEN))
+        val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:a@t\r\nDTSTAMP:20260101T000000Z\r\n" +
+            "DTSTART:20261031T150000Z\r\nDTEND:20261031T160000Z\r\nSUMMARY:Lunch\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        val good = source(storeWithUrl(), { IcsFetchResult.Body(ics) }, IcsParse.ics { java.time.ZoneOffset.UTC })
+        val ok = runSuspend { good.fetch(window) } as FetchResult.Ok
+        assertEquals(listOf("Lunch"), ok.events.map { it.title })
+    }
+
     @Test fun endToEndOverTls() {
         val server = MockWebServer()
         val host = java.net.InetAddress.getByName("localhost").canonicalHostName

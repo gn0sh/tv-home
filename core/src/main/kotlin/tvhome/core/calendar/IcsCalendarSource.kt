@@ -3,14 +3,21 @@ package tvhome.core.calendar
 import tvhome.core.secrets.SecretKey
 import tvhome.core.secrets.SecretStore
 import java.time.Instant
+import java.time.ZoneId
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
- * Seam to T2's IcsParser: takes the ICS text and the window, returns the expanded instances, throws on malformed
+ * Seam to [IcsParser] (IcsParseException and any other throw become SourceError.PARSE): takes the ICS text and the window, returns the expanded instances, throws on malformed
  * input. T3 wraps any throw as SourceError.PARSE and drops the exception.
  */
 fun interface IcsParse {
     fun parse(ics: String, window: InstantRange): List<EventInstance>
+
+    companion object {
+        /** The real parser. [zone] is read per call so a device time-zone change is picked up. */
+        fun ics(zone: () -> ZoneId = ZoneId::systemDefault): IcsParse =
+            IcsParse { text, window -> IcsParser.parse(text, window, zone()) }
+    }
 }
 
 /**

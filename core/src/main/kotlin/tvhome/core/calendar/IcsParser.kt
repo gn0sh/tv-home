@@ -25,6 +25,9 @@ class IcsParseException : Exception("ICS parse failed")
 object IcsParser {
     const val MAX_ITERATIONS_PER_EVENT = 5_000
 
+    /** Hard cap on instances returned by one parse, across all events (a hostile feed cannot balloon memory). */
+    const val MAX_INSTANCES = 500
+
     /**
      * @param window instances overlapping this range are returned (timed: [start,end) overlap; all-day: date range
      *   overlap with the window's local dates in [zone]).
@@ -40,6 +43,7 @@ object IcsParser {
 
         val out = ArrayList<EventInstance>()
         for (cal in calendars) {
+            if (out.size >= MAX_INSTANCES) break
             try {
                 collect(cal, window, zone, out)
             } catch (e: Exception) {
@@ -54,6 +58,7 @@ object IcsParser {
     private fun collect(cal: ICalendar, window: InstantRange, zone: ZoneId, out: MutableList<EventInstance>) {
         val byUid = cal.events.groupBy { it.uid?.value ?: "" }
         for ((uid, events) in byUid) {
+            if (out.size >= MAX_INSTANCES) return
             val masters = events.filter { it.recurrenceId == null }
             val overrides = events.filter { it.recurrenceId != null }
 
@@ -66,7 +71,8 @@ object IcsParser {
 
             for (m in masters) {
                 if (isCancelled(m)) continue
-                for (inst in expand(cal, m, uid, window, zone)) {
+                for (inst in expand(cal, m, uid, window, zone, MAX_INSTANCES - out.size + replaced.size)) {
+                    if (out.size >= MAX_INSTANCES) return
                     if (keyOf(inst.start) in replaced) continue
                     out += inst
                 }
@@ -74,6 +80,7 @@ object IcsParser {
             for (ov in overrides) {
                 if (isCancelled(ov)) continue
                 val inst = single(cal, ov, uid, zone) ?: continue
+                if (out.size >= MAX_INSTANCES) return
                 if (overlaps(inst, window, zone)) out += inst.toEvent()
             }
         }
@@ -130,7 +137,9 @@ object IcsParser {
         return Raw(uid, title(e), start, endOf(cal, e, start, zone))
     }
 
-    private fun expand(cal: ICalendar, e: VEvent, uid: String, window: InstantRange, zone: ZoneId): List<EventInstance> {
+    private fun expand(
+        cal: ICalendar, e: VEvent, uid: String, window: InstantRange, zone: ZoneId, maxResults: Int,
+    ): List<EventInstance> {
         val base = single(cal, e, uid, zone) ?: return emptyList()
         val ds = e.dateStart
         val tz: TimeZone = when {
@@ -162,7 +171,7 @@ object IcsParser {
         // Skip ahead without counting instances that end before the window; a day of slack covers zone offsets.
         it.advanceTo(Date(window.start.toEpochMilli() - spanMs - 86_400_000L))
         var n = 0
-        while (it.hasNext() && n < MAX_ITERATIONS_PER_EVENT) {
+        while (it.hasNext() && n < MAX_ITERATIONS_PER_EVENT && result.size < maxResults) {
             val d = it.next()
             n++
             val inst: Raw = if (allDay) {

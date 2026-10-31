@@ -142,11 +142,11 @@ class IcsParserTest {
     }
 
     @Test
-    fun iterationCapBoundsRunawayRules() {
+    fun runawayRuleIsBoundedByTheInstanceCap() {
         val ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:run@t\r\nDTSTAMP:20260101T000000Z\r\n" +
             "DTSTART:20260310T000000Z\r\nDTEND:20260310T000001Z\r\nRRULE:FREQ=SECONDLY\r\nSUMMARY:Runaway\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
         val r = IcsParser.parse(ics, agendaWindow(now, ny), ny)
-        assertEquals(IcsParser.MAX_ITERATIONS_PER_EVENT, r.size)
+        assertEquals(IcsParser.MAX_INSTANCES, r.size)
     }
 
     @Test
@@ -157,5 +157,30 @@ class IcsParserTest {
         }
         assertTrue(!e.message!!.contains(secret))
         assertThrows(IcsParseException::class.java) { IcsParser.parse("", agendaWindow(now, ny), ny) }
+    }
+
+    @Test
+    fun manyEventsAreCappedAtMaxInstancesAcrossTheWholeParse() {
+        val sb = StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n")
+        repeat(3_000) { i ->
+            sb.append("BEGIN:VEVENT\r\nUID:e$i@t\r\nDTSTAMP:20260101T000000Z\r\n")
+                .append("DTSTART:20260310T150000Z\r\nDTEND:20260310T160000Z\r\nSUMMARY:Event $i\r\nEND:VEVENT\r\n")
+        }
+        sb.append("END:VCALENDAR\r\n")
+        val r = IcsParser.parse(sb.toString(), agendaWindow(now, ny), ny)
+        assertEquals(IcsParser.MAX_INSTANCES, r.size)
+        assertEquals(500, IcsParser.MAX_INSTANCES)
+    }
+
+    @Test
+    fun manyRecurringEventsTogetherAreCapped() {
+        val sb = StringBuilder("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n")
+        repeat(100) { i ->
+            sb.append("BEGIN:VEVENT\r\nUID:r$i@t\r\nDTSTAMP:20260101T000000Z\r\n")
+                .append("DTSTART:20260310T000000Z\r\nDTEND:20260310T000100Z\r\nRRULE:FREQ=HOURLY\r\nSUMMARY:R $i\r\nEND:VEVENT\r\n")
+        }
+        sb.append("END:VCALENDAR\r\n")
+        val r = IcsParser.parse(sb.toString(), agendaWindow(now, ny), ny)
+        assertEquals(IcsParser.MAX_INSTANCES, r.size)
     }
 }
