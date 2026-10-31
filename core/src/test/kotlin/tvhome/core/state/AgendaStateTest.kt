@@ -44,6 +44,10 @@ class AgendaStateTest {
         assertEquals(AgendaState.Unreadable, state(f = fail(SourceError.TOO_LARGE)))
     }
 
+    @Test fun unreadableCopy() {
+        assertEquals("Calendar data unreadable", AgendaState.Unreadable.TITLE)
+    }
+
     @Test fun goodFetchWinsOverCache() {
         val s = state(c = cache(mins(500)), f = FetchResult.Ok(listOf(ev), mins(0)))
         assertTrue(s is AgendaState.Ok)

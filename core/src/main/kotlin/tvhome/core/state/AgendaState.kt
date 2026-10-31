@@ -32,7 +32,11 @@ sealed interface AgendaState {
     object CantReach : Unavailable { override fun toString() = "CantReach" }
 
     /** No usable cache and the feed arrived but could not be used (PARSE, TOO_LARGE). */
-    object Unreadable : Unavailable { override fun toString() = "Unreadable" }
+    object Unreadable : Unavailable {
+        const val TITLE = "Calendar data unreadable"
+        const val DETAIL = "It will try again soon."
+        override fun toString() = "Unreadable"
+    }
     object Loading : Unavailable { override fun toString() = "Loading" }
 }
 
