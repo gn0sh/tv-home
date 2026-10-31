@@ -12,7 +12,7 @@ No secrets in this file. Covers security findings #1 (secret via agent transcrip
 6. Prints only `done`, the certificate SHA-256 fingerprint and the backup folder.
 
 ## Run it
-This works only once this change is merged to `main`; before that, check out the branch instead of `git pull`. Open your own PowerShell window (Windows PowerShell or PowerShell 7, either works; not an agent or Remote Control session), then run these one at a time:
+Run this only after the team says it is merged to `main` (the ask will tell you). Open your own PowerShell window (Windows PowerShell or PowerShell 7, either works; not an agent or Remote Control session), then run these one at a time:
 ```
 Set-ExecutionPolicy -Scope Process Bypass -Force
 cd $HOME\tv-home
