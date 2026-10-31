@@ -41,7 +41,7 @@ Calendar source: open decision for Brian, needed only when the agenda app is bui
 Technical constraints (for the architect): use maintained libraries (ical4j or similar) and an HTTP client, not a hand-rolled parser; minSdk 31, target 34; `<queries>` with LEANBACK_LAUNCHER, not QUERY_ALL_PACKAGES; allowBackup=false, non-debuggable release builds, secrets scrubbed from exceptions and logs; one stable signing key kept in Actions secrets.
 
 ## Milestones and user stories
-Order: M0 (Brian, no code) then M1 (agenda app). M2 and M3 are conditional.
+Order: M0 (resolved), M1 (agenda app), M1b, M1c, then M2 (full home screen). Only M3 is conditional.
 
 ### M0: Try an existing launcher (no build, no sideload) - RESOLVED 2026-10-31
 As Brian, I want to try a ready-made launcher first, so I only get custom work for what is truly missing.
