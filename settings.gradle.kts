@@ -1,11 +1,17 @@
-// CI uses plain google(). Locally (sandbox) dl.google.com is unreachable (403, and Gradle fails instead of
+// CI uses google() restricted to Google's groups (security finding supply-chain-tofu-google). Locally (sandbox) dl.google.com is unreachable (403, and Gradle fails instead of
 // skipping), so use the maven.google.com mirror restricted to Google groups.
 // (pluginManagement must be the first block, so the repo setup is repeated in both blocks.)
 pluginManagement {
     repositories {
         mavenCentral()
         if (System.getenv("CI") == "true") {
-            google()
+            google {
+                content {
+                    includeGroupByRegex("com\\.android.*")
+                    includeGroupByRegex("com\\.google\\..*")
+                    includeGroupByRegex("androidx.*")
+                }
+            }
         } else {
             maven("https://maven.google.com") {
                 content {
@@ -24,7 +30,13 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         if (System.getenv("CI") == "true") {
-            google()
+            google {
+                content {
+                    includeGroupByRegex("com\\.android.*")
+                    includeGroupByRegex("com\\.google\\..*")
+                    includeGroupByRegex("androidx.*")
+                }
+            }
         } else {
             maven("https://maven.google.com") {
                 content {

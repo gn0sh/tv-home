@@ -1,7 +1,13 @@
 buildscript {
     if (System.getenv("TVHOME_BUILD_APP") == "true") {
         repositories {
-            google()
+            google {
+                content {
+                    includeGroupByRegex("com\\.android.*")
+                    includeGroupByRegex("com\\.google\\..*")
+                    includeGroupByRegex("androidx.*")
+                }
+            }
             mavenCentral()
         }
         dependencies {

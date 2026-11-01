@@ -35,12 +35,8 @@ concurrency:
 
 env:
   CI: "true"
-  # gradle/verification-metadata.xml covers :core only (generated in the sandbox). :app dependencies (AGP, Compose)
-  # cannot resolve there, so the :app job runs lenient until the file is regenerated on CI.
-  # TODO (before the first signed release), on a runner with TVHOME_BUILD_APP=true:
-  #   1. `./gradlew --write-locks :app:dependencies` and commit app/gradle.lockfile (and settings lock changes);
-  #   2. `./gradlew --write-verification-metadata sha256 :app:lintRelease :app:assembleRelease`, review the diff, commit;
-  #   3. set this to "strict".
+  # gradle/verification-metadata.xml covers :core, :app and the root buildscript (regenerated on CI 2026-11-01 and
+  # reviewed). Strict everywhere; signing (push to main only) requires strict.
   APP_DEP_VERIFICATION: strict
 
 jobs:
@@ -301,30 +297,6 @@ jobs:
         with:
           name: tv-home-release-apk
           path: ${{ steps.apk.outputs.path }}
-          retention-days: 7
-          if-no-files-found: error
-
-      # TODO steps 1-2 above, automated: while :app verification is lenient, a pull_request run regenerates the :app
-      # lockfile and verification metadata (CI is the only place AGP resolves) and uploads them for the team to review
-      # and commit. No secrets exist on pull_request. Stops by itself once APP_DEP_VERIFICATION is strict.
-      - name: Regenerate dependency locks and verification metadata
-        if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request' && env.APP_DEP_VERIFICATION != 'strict'
-        run: |
-          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/regen.log" --rerun-tasks --write-locks --write-verification-metadata sha256 \
-            :core:dependencies :core:test :core:hostileTest :app:dependencies :app:lintRelease :app:assembleRelease
-          git status --short
-          git diff --stat
-
-      - name: Upload regenerated dependency files
-        if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request' && env.APP_DEP_VERIFICATION != 'strict'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: tv-home-dependency-files
-          path: |
-            gradle/verification-metadata.xml
-            settings-gradle.lockfile
-            core/gradle.lockfile
-            app/gradle.lockfile
           retention-days: 7
           if-no-files-found: error
 
