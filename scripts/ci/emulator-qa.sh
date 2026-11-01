@@ -347,6 +347,14 @@ fi
 focused_node() {
   local xml node
   xml=$(ui_text)
+  # An empty dump is a failed dump (ui_text retried already), not "nothing has focus": say so, so a flaky uiautomator
+  # is not read as a focus bug (reentry-qa-flaky-dump). Runs in a $(...) subshell, so the error goes to stderr (which
+  # is the log too) and the non-zero exit makes the caller's assignment fail under set -e.
+  if [[ -z $xml ]]; then
+    echo "::error::UI dump failed: uiautomator gave no hierarchy after its retries, so focus cannot be read" >&2
+    exit 1
+  fi
+  printf '%s\n' "$xml" > "$OUT/ui-focus-last.xml"
   node=$(grep -oE '<node [^>]*focused="true"[^>]*>' <<<"$xml" | head -1 || true)
   [[ -n $node ]] || return 0
   printf '%s|%s\n' "$(sed -E 's/.*content-desc="([^"]*)".*/\1/' <<<"$node")" \
@@ -359,6 +367,19 @@ on_screen() { # $1 = focused_node output: the node lies inside the screen horizo
   [[ -n $x1 && -n $x2 && $x1 -ge 0 && $x2 -le ${SCREEN_W:-1920} && $x2 -gt $x1 ]]
 }
 key() { sh_ input keyevent "KEYCODE_$1"; sleep 1.2; }
+# After a key: the focused node, read again once after a pause if nothing held focus (a dump taken mid-change);
+# if still nothing, print what the dump does hold (descriptions and focus flags of focusable nodes) for diagnosis.
+focus_after() { # $1 = label
+  local cur
+  cur=$(focused_node) || exit 1   # a failed dump ends the subshell; set -e is not inherited into $(...)
+  if [[ -z $cur ]]; then sleep 2; cur=$(focused_node) || exit 1; fi
+  if [[ -z $cur ]]; then
+    echo "diagnostic: $1: dump OK but no node has focused=true; focusable nodes:" >&2
+    grep -oE '<node [^>]*focusable="true"[^>]*>' "$OUT/ui-focus-last.xml" \
+      | sed -E 's/.*content-desc="([^"]*)".*focused="([a-z]+)".*bounds="([^"]*)".*/  desc=\1 focused=\2 bounds=\3/' >&2 || true
+  fi
+  printf '%s\n' "$cur"
+}
 
 step "Row re-entry (fix-app-row-scroll): scroll right, leave the row, come back Up, Right still moves the row"
 # Brian's bug after M2d: the row scrolled on first open, but once focus left it (Down to Calendar or the Ask button)
@@ -375,7 +396,7 @@ else
   steps=$(( napps - 1 < 4 ? napps - 1 : 4 ))
   for ((i = 1; i <= steps; i++)); do
     key DPAD_RIGHT
-    cur=$(focused_node)
+    cur=$(focus_after re-entry)
     [[ -n $cur && ${cur%%|*} != "${prev%%|*}" ]] || fail "re-entry: Right $i did not move focus along the row (was '${prev%%|*}', now '${cur%%|*}')"
     on_screen "$cur" || fail "re-entry: Right $i focused '${cur%%|*}' off screen ($cur): the row did not scroll"
     prev=$cur
@@ -384,29 +405,29 @@ else
   pass "re-entry: Right x$steps moved focus to '$far' and kept it on screen"
   (( napps >= 5 )) || warn "re-entry: only $napps apps, so the row may not overflow the screen; scrolling itself NOT VERIFIED here"
   key DPAD_DOWN
-  cur=$(focused_node)
+  cur=$(focus_after re-entry)
   [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Down from '$far' did not reach the Calendar tile (now '${cur%%|*}')"
   key DPAD_UP
-  cur=$(focused_node)
+  cur=$(focus_after re-entry)
   [[ ${cur%%|*} == "$far" ]] || fail "re-entry: Up from Calendar did not return to '$far' (now '${cur%%|*}'; empty means focus went to the row container)"
   on_screen "$cur" || fail "re-entry: '$far' is off screen after Up ($cur)"
   key DPAD_LEFT
-  cur=$(focused_node)
+  cur=$(focus_after re-entry)
   [[ -n $cur && ${cur%%|*} != "$far" ]] || fail "re-entry: Left after coming back did not move focus (now '${cur%%|*}')"
   back=${cur%%|*}
   pass "re-entry: Down, Up returned to '$far', and Left moved on to '$back'"
   # Same through the Ask button: Down, Down, Up (to Calendar), Up (to the row), Right moves.
   key DPAD_DOWN; key DPAD_DOWN
-  cur=$(focused_node)
+  cur=$(focus_after re-entry)
   [[ ${cur%%|*} == "Ask Claude. Talk or type a question." ]] || fail "re-entry: Down, Down did not reach the Ask button (now '${cur%%|*}')"
   key DPAD_UP
-  cur=$(focused_node)
+  cur=$(focus_after re-entry)
   [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach Calendar (now '${cur%%|*}')"
   key DPAD_UP
-  cur=$(focused_node)
+  cur=$(focus_after re-entry)
   [[ ${cur%%|*} == "$back" ]] || fail "re-entry: Up from Calendar (via the Ask button) did not return to '$back' (now '${cur%%|*}')"
   key DPAD_RIGHT
-  cur=$(focused_node)
+  cur=$(focus_after re-entry)
   if [[ -z $cur || ${cur%%|*} == "$back" ]] || ! on_screen "$cur"; then
     fail "re-entry: Right after the Ask-button round trip did not move the row (now '${cur%%|*}')"
   fi
