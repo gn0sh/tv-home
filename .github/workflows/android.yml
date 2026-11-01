@@ -86,6 +86,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) { Write-Host 'new-signing-key.ps1 accepted redirected stdin'; exit 1 }
           if ($out -notmatch 'own PowerShell window') { Write-Host 'new-signing-key.ps1 failed for another reason'; exit 1 }
           Write-Host 'ps1 checks passed'
+          exit 0  # the runner's pwsh wrapper would otherwise exit with the last native $LASTEXITCODE (the expected refusal)
       # Hostile ICS probes (tag hostile) in a 96 MiB JVM; runs after :core:test, never alongside it (p14-perf-flaky).
       - name: :core:hostileTest
         run: scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/hostile.log" :core:hostileTest
