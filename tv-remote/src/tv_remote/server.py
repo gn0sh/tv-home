@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import time
 import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
@@ -63,11 +64,16 @@ REFUSAL = (
 INSTRUCTIONS = (
     "Controls Brian's LG TV and Google TV on the home network. Only the listed tools exist; anything else "
     "(uninstall, settings, factory reset, accounts, raw commands) must be refused. If a tool reports that a "
-    "device is unreachable, tell Brian which one and do nothing else. LG volume is capped at 60."
+    "device is unreachable, tell Brian which one and do nothing else. lg_volume is capped at 60. tv_key VOLUME_UP, "
+    "VOLUME_DOWN, MUTE and POWER reach the LG over HDMI-CEC with no volume level reported, so there is no 60 cap on "
+    "that path: raise volume only when Brian asks, by the amount he asks, and never in a loop. POWER toggles standby."
 )
 
-# Volume over HDMI-CEC reports no level, so the 60 cap cannot be checked; keep each raise small instead.
+# Volume over HDMI-CEC reports no level, so the 60 cap cannot be checked. Instead: at most 3 presses per call and
+# at most 10 per rolling minute across calls (finding cec-volume-unbounded), so a looping caller stays slow.
 CEC_VOLUME_UP_MAX = 3
+CEC_VOLUME_UP_PER_MINUTE = 10
+CEC_WINDOW_SECONDS = 60.0
 
 LinkBuilder = Callable[[str, str | None, str | None], str]
 
@@ -124,8 +130,10 @@ def build_server(
     gtv: GoogleTvBackend | None,
     discovery: Discovery,
     link_builder: LinkBuilder = _link_builder_not_built,
+    clock: Callable[[], float] = time.monotonic,
 ) -> TvRemoteServer:
     server = TvRemoteServer(name="tv-remote", instructions=INSTRUCTIONS)
+    volume_up_times: list[float] = []  # monotonic times of recent CEC VOLUME_UP presses (rate limit)
 
     def need_lg() -> LgBackend:
         if lg is None:
@@ -202,10 +210,19 @@ def build_server(
     @server.tool(annotations=acts)
     async def tv_key(key: Key, repeat: Annotated[int, Field(ge=1, le=10)] = 1) -> str:
         """Press a remote button on the Google TV, 1-10 times. VOLUME_UP/VOLUME_DOWN/MUTE/POWER reach the LG over
-        HDMI-CEC; VOLUME_UP is limited to 3 presses per call and POWER to 1, because no volume level comes back."""
-        if key == "VOLUME_UP" and repeat > CEC_VOLUME_UP_MAX:
-            raise ToolError(f"Refused: VOLUME_UP is limited to {CEC_VOLUME_UP_MAX} presses per call; "
-                            "the TV does not report its volume over HDMI, so it cannot be raised safely in bigger steps.")
+        HDMI-CEC with no volume level reported: VOLUME_UP is limited to 3 presses per call and 10 per minute. POWER
+        toggles standby (once per call); it is not a fixed on or off."""
+        if key == "VOLUME_UP":
+            if repeat > CEC_VOLUME_UP_MAX:
+                raise ToolError(f"Refused: VOLUME_UP is limited to {CEC_VOLUME_UP_MAX} presses per call; the TV does "
+                                "not report its volume over HDMI, so it cannot be raised safely in bigger steps.")
+            now = clock()
+            while volume_up_times and now - volume_up_times[0] >= CEC_WINDOW_SECONDS:
+                volume_up_times.pop(0)
+            if len(volume_up_times) + repeat > CEC_VOLUME_UP_PER_MINUTE:
+                raise ToolError(f"Refused: VOLUME_UP is limited to {CEC_VOLUME_UP_PER_MINUTE} presses per minute "
+                                "over HDMI. Ask Brian before raising it further.")
+            volume_up_times.extend([now] * repeat)
         if key == "POWER" and repeat != 1:
             raise ToolError("Refused: POWER is pressed once per call.")
         g = need_gtv()

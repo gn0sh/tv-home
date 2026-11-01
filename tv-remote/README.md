@@ -6,7 +6,7 @@ Code or the Claude desktop app starts it as a child process. It opens no listeni
 the phone it works through a Remote Control session on the PC, so the PC must be on.
 
 ## Tools (the complete allowlist)
-`tv_status`, `tv_open`, `tv_launch_app`, `tv_key` (includes VOLUME_UP/DOWN, MUTE and POWER, which reach the LG over HDMI-CEC), `lg_power`, `lg_volume` (0-60, capped), `lg_mute`, `lg_input`
+`tv_status`, `tv_open`, `tv_launch_app`, `tv_key` (includes VOLUME_UP/DOWN, MUTE and POWER, which reach the LG over HDMI-CEC; volume keys change the LG only if the Google TV's HDMI-CEC volume control is on, and VOLUME_UP is limited to 3 per call and 10 per minute), `lg_power`, `lg_volume` (0-60, capped), `lg_mute`, `lg_input`
 (HDMI_1..HDMI_4), `tv_pair`, `tv_discover`. Any other request (install or uninstall, settings, factory reset,
 accounts, raw adb or SSAP commands, browser, notifications) is refused with a message that says so. Arguments are
 enums and ranges, checked before anything is sent. If a TV does not answer, the tool says which one and does nothing

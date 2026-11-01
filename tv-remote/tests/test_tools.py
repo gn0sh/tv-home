@@ -231,3 +231,22 @@ def test_real_backend_stubs_report_their_task():
         asyncio.run(server.call_tool("lg_power", {"state": "off"}))
     with pytest.raises(ToolError, match="needs Windows"):
         asyncio.run(server.call_tool("tv_key", {"key": "OK"}))
+
+
+def test_cec_volume_up_is_rate_limited_across_calls():
+    now = [1000.0]
+    gtv = FakeGoogleTv()
+    server = build_server(Config(None, GoogleTvConfig(gtv.host)), None, gtv, FakeDiscovery(), clock=lambda: now[0])
+
+    def press(n):
+        return asyncio.run(server.call_tool("tv_key", {"key": "VOLUME_UP", "repeat": n}))
+
+    press(3); press(3); press(3)
+    with pytest.raises(ToolError, match="per minute"):
+        press(3)
+    press(1)  # 10 in the window is still allowed
+    with pytest.raises(ToolError, match="per minute"):
+        press(1)
+    assert [c for c in gtv.calls if c == ("send_key", "VOLUME_UP")] == [("send_key", "VOLUME_UP")] * 10
+    now[0] += 60.0
+    press(3)  # window has passed
