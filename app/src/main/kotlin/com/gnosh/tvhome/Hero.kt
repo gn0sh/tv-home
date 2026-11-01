@@ -239,9 +239,11 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, modifier: Modifier) 
     var backdrop by remember { mutableStateOf<Backdrop?>(null) }
     val imageAlpha = remember { Animatable(0f) }
     LaunchedEffect(ready, theme.motif) {
-        if (!ready || backdrop?.motif == theme.motif) return@LaunchedEffect
-        imageAlpha.snapTo(0f)
+        if (!ready) return@LaunchedEffect
+        if (backdrop?.motif == theme.motif) { imageAlpha.snapTo(1f); return@LaunchedEffect } // back to the shown image
+        // Decode first, so the current image stays up until the new one is ready (backdrop-alpha-stuck).
         val image = withContext(Dispatchers.IO) { decodeBackdrop(context, theme.motif) } ?: return@LaunchedEffect
+        imageAlpha.snapTo(0f)
         backdrop = Backdrop(theme.motif, image)
         if (frozen) imageAlpha.snapTo(1f) else imageAlpha.animateTo(1f, tween(CROSSFADE_MS))
     }
