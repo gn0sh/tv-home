@@ -220,7 +220,14 @@ pass "M2b: focus was restored to the Calendar tile (OK reopened the full screen)
 sh_ input keyevent KEYCODE_BACK; sleep 2
 in_front || fail "M2b: second Back on the full-screen calendar left the app"
 sh_ input keyevent KEYCODE_BACK; sleep 2
-in_front && fail "M2b: Back on the home row does not leave the app"
+if in_front; then
+  echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-m2b-back-home.xml"
+  if [[ -z $xml ]]; then echo "diagnostic: uiautomator dump failed"
+  elif grep -qF "Calendar full screen" <<<"$xml"; then echo "diagnostic: \"Calendar full screen\" IS showing"
+  else echo "diagnostic: \"Calendar full screen\" is not showing (home row in front)"; fi
+  fail "M2b: one Back on the home row does not leave the app"
+fi
 pass "M2b: Back on the home row leaves the app"
 note "M2b with event rows (focus on the first row, Up/Down through rows, scrolling) is NOT VERIFIED here: the emulator only has the dummy URL, so it never shows rows"
 no_app_crash_yet "M2b calendar"

@@ -5,7 +5,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -90,7 +89,10 @@ fun HomeScreen(apps: AppsState, theme: HomeTheme, onLaunch: (LauncherApp) -> Uni
         Modifier
             .fillMaxSize()
             .background(color(theme.background))
-            .focusable() // somewhere for D-pad presses to land if the first focus request misses
+            // Not focusable, on purpose (home-back-twice): Compose maps Back to FocusDirection.Exit, which moves focus
+            // to the nearest focusable ancestor of the focused tile and consumes the key. A focusable root here made
+            // the first Back land on it and only the second reach the activity. With no focusable ancestor, Exit
+            // fails and Back exits as before. The Calendar tile is always present, so focus always has a tile.
             .padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
     ) {
         TileRow(apps, theme, tile, onOpenCalendar = { calendarOpen = true }, onLaunch)

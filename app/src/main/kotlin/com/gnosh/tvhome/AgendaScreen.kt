@@ -69,7 +69,8 @@ private val RING = color(Tokens.FOCUS_RING)
  * The agenda (M2b: shown full screen when the Calendar tile is opened): draws a [ScreenModel]; every word and row was
  * decided in `:core` (`screenModel`), so this file only lays things out. The caller owns the background, margins and
  * Back. When there is no row to focus (message, or two empty days) the panel itself is focusable with the focus ring,
- * so focus always has somewhere visible to be.
+ * so focus always has somewhere visible to be. Nothing above the panel may be focusable: Back (FocusDirection.Exit)
+ * would move focus there instead of reaching the BackHandler (home-back-twice).
  *
  * [takeFocus]: when the panel appears, focus goes to [ScreenModel.Agenda.initialFocus] (the next upcoming event today,
  * else the first row; design tv-home-m1-agenda.md), or to the panel when there are no rows. A refresh that keeps the
