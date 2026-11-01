@@ -156,6 +156,9 @@ sh_ pm path "$PKG" | grep -q '^package:' || fail "$PKG not installed"
 r=$(sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER "$PKG" | tr -d '\r' | tail -1)
 [[ $r == "$MAIN" || $r == "$PKG/com.gnosh.tvhome.AgendaActivity" ]] || fail "LEANBACK_LAUNCHER does not resolve to AgendaActivity (got: $r)"
 pass "installed; LEANBACK_LAUNCHER resolves to $r"
+# snow-uiautomator-idle: the Christmas hero animates; uiautomator waits for an idle UI. The app stops its animation when
+# the system animator scale is 0, so freeze it for the whole run.
+sh_ settings put global animator_duration_scale 0 >/dev/null 2>&1 || warn "could not set animator_duration_scale 0; uiautomator dumps may time out on an animated hero"
 # M1 is "usable from any launcher" (spec M1); becoming Home is A2/M2. Report, don't fail.
 h=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tr -d '\r' | grep -c "$PKG/" || true)
 note "HOME candidates from $PKG: $h (M1 manifest declares none; expected 0)"
