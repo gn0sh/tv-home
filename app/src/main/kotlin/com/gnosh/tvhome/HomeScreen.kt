@@ -88,8 +88,9 @@ const val CALENDAR_FULL_SCREEN = "Calendar full screen"
  * the activity with one press. Colours and tile size come from [theme].
  *
  * Focus: on launch the first app tile, or the Calendar tile while there are no apps; if apps arrive before the user
- * has pressed a key, focus moves to the first app tile. Down from any app tile goes to the Calendar tile (set
- * explicitly) and Down again to the Ask button; Up from the button goes to the Calendar tile (set explicitly). Up from
+ * has pressed a key, focus moves to the first app tile. Down from an app tile goes to the dock (2D search: the Calendar
+ * tile, or the Ask button from a tile far right; an explicit down from a scrolled lazy item lost focus on Android, see
+ * fix-app-row-scroll); Up from the button goes to the Calendar tile (set explicitly). Up from
  * the dock returns to the app tile that last had focus if it is on screen, else to the tile above (a custom enter on
  * the row, not focusRestorer: see [AppFocus.enterTarget]). The row's scroll position and last-focused tile live above
  * the full-screen switch, so they survive it.
@@ -144,7 +145,7 @@ fun HomeScreen(
             // container above the tiles would take the first Back and only the second would reach the activity.
             .padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
     ) {
-        AppRow(apps, appList, theme, rowState, appFocus, down = calendar, onLaunch)
+        AppRow(apps, appList, theme, rowState, appFocus, onLaunch)
         Dock(theme) {
             CalendarTileView(tile, theme, calendar, onClick = { open = DOCK_CALENDAR })
         }
@@ -224,7 +225,6 @@ private fun AppRow(
     theme: HomeTheme,
     rowState: LazyListState,
     appFocus: AppFocus,
-    down: FocusRequester,
     onLaunch: (LauncherApp) -> Unit,
 ) {
     if (apps.isEmpty()) {
@@ -256,7 +256,7 @@ private fun AppRow(
     ) {
         items(apps, key = { it.app.packageName }) { t ->
             val pkg = t.app.packageName
-            AppTile(t, theme, appFocus.requester(pkg), down, onFocused = { appFocus.lastFocused = pkg }) { onLaunch(t.app) }
+            AppTile(t, theme, appFocus.requester(pkg), onFocused = { appFocus.lastFocused = pkg }) { onLaunch(t.app) }
         }
     }
 }
@@ -397,10 +397,9 @@ private const val ASK_BUTTON_H_DP = 56
 private const val DOCK_CALENDAR = "calendar"
 private const val DOCK_ASK = "ask"
 
-/** [down]: Down always goes to the Calendar tile, also from a tile far right where the 2D search could pick the Ask button. */
 @Composable
-private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, down: FocusRequester, onFocused: () -> Unit, onClick: () -> Unit) {
-    TileFrame(theme, t.app.label, t.app.label, requester, onClick, onFocused, down) {
+private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, onFocused: () -> Unit, onClick: () -> Unit) {
+    TileFrame(theme, t.app.label, t.app.label, requester, onClick, onFocused) {
         val img = t.image
         if (img != null) {
             Image(
