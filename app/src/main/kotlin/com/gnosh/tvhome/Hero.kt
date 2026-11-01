@@ -1,5 +1,7 @@
 package com.gnosh.tvhome
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +17,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.compose.runtime.Composable
@@ -34,6 +38,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.draw.drawWithCache
@@ -45,6 +51,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
@@ -202,12 +210,18 @@ private const val OPAQUE = 0xFF000000.toInt()
 private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alpha)
 
 /**
- * Canvas shapes only: no images, no network. Takes just the theme, so it is skipped when the focus changes.
+ * The backdrop: a pre-rendered image per motif (tools/art/render_backdrops.py, res/drawable-nodpi/hero_*.webp) over the
+ * theme gradient, with the Canvas motif drawing as the fallback until the image is in. No network. Takes just the theme,
+ * so it is skipped when the focus changes. Nothing here is focusable (home-back-twice, app-row-reentry).
  *
  * - Own `graphicsLayer`, so the animation redraws this layer and not the screen (snow-redraw-scope).
  * - `drawWithCache` builds the brushes and the hill and moon paths once per size and theme, not per frame.
  * - First frame stays cheap: only the gradient and the bottom fade are drawn until the first frame has been shown; the
- *   motif and the animation start after that (cold-start budget, AC8).
+ *   motif, the image decode and the animation start after that (cold-start budget, AC8). The decode runs on IO and the
+ *   image crossfades in over the Canvas motif (no crossfade when animations are off).
+ * - The image is drawn with the theme's own gradient over it at [TINT_ALPHA] when the theme is not the one the image was
+ *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, every team shares GAME).
+ * - The rain and snow particles are drawn on top of the image.
  * - Only Christmas animates (slow snowfall), plus the rain or snow overlay while it is falling now. The loop ticks about 15 times a second with a delay, not every vsync, and
  *   does not run at all when the system animator scale is 0 (snow-uiautomator-idle: QA sets that so uiautomator can
  *   reach an idle state; it also honours the user's "remove animations" choice).
@@ -221,6 +235,15 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, modifier: Modifier) 
     LaunchedEffect(Unit) {
         withFrameNanos { } // the first frame has been drawn with the plain gradient
         ready = true
+    }
+    var backdrop by remember { mutableStateOf<Backdrop?>(null) }
+    val imageAlpha = remember { Animatable(0f) }
+    LaunchedEffect(ready, theme.motif) {
+        if (!ready || backdrop?.motif == theme.motif) return@LaunchedEffect
+        imageAlpha.snapTo(0f)
+        val image = withContext(Dispatchers.IO) { decodeBackdrop(context, theme.motif) } ?: return@LaunchedEffect
+        backdrop = Backdrop(theme.motif, image)
+        if (frozen) imageAlpha.snapTo(1f) else imageAlpha.animateTo(1f, tween(CROSSFADE_MS))
     }
     val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || precip != null)
     LaunchedEffect(animate) {
@@ -242,18 +265,30 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, modifier: Modifier) 
                 val fade = Brush.verticalGradient(listOf(Color.Transparent, rgb(Tokens.BACKGROUND)), startY = h * 0.6f, endY = h)
                 val hill = if (theme.motif == HeroMotif.SNOW) hillPath(w, h) else null
                 val moon = if (theme.motif == HeroMotif.STARS) moonPath(w, h) else null
+                val tint = if (theme.backdropTop != renderedTop(theme.motif)) base else null
                 onDrawBehind {
                     drawRect(base)
-                    if (ready) {
+                    // Read in the draw phase only: a decode or a crossfade step redraws this layer, nothing else.
+                    val image = backdrop?.takeIf { it.motif == theme.motif }?.image
+                    val alpha = if (image == null) 0f else imageAlpha.value
+                    if (ready && alpha < 1f) {
                         when (theme.motif) {
                             HeroMotif.MOON_BATS -> drawMoonAndBats(theme)
-                            HeroMotif.SNOW -> { drawSnow(tick.longValue); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
+                            HeroMotif.SNOW -> { if (image == null) drawSnow(tick.longValue); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
                             HeroMotif.DAWN -> drawSun(theme, 0.74f, 0.98f, 0.11f, 0.30f)
                             HeroMotif.DAY -> { drawSun(theme, 0.80f, 0.34f, 0.07f, 0.22f); drawClouds(0.22f) }
                             HeroMotif.SUNSET -> drawSun(theme, 0.74f, 0.88f, 0.14f, 0.34f)
                             HeroMotif.STARS -> drawStars(theme, moon)
                             HeroMotif.GAME -> drawSun(theme, 0.80f, 0.36f, 0.08f, 0.22f)
                         }
+                    }
+                    if (image != null && alpha > 0f) {
+                        drawBackdrop(image, alpha)
+                        tint?.let { drawRect(it, alpha = TINT_ALPHA * alpha) }
+                        // Christmas snowfall keeps falling over the rendered scene.
+                        if (theme.motif == HeroMotif.SNOW) drawSnow(tick.longValue)
+                    }
+                    if (ready) {
                         // Weather motif overlay (never a theme change): particles only when it is falling now.
                         when (precip) {
                             Precip.SNOW -> if (theme.motif != HeroMotif.SNOW) drawSnow(tick.longValue)
@@ -264,6 +299,64 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, modifier: Modifier) 
                     drawRect(fade)
                 }
             },
+    )
+}
+
+private class Backdrop(val motif: HeroMotif, val image: ImageBitmap)
+
+private const val CROSSFADE_MS = 700
+
+/** How much of the theme's gradient goes over an image rendered for another theme's palette. */
+private const val TINT_ALPHA = 0.38f
+
+private fun backdropRes(motif: HeroMotif): Int = when (motif) {
+    HeroMotif.DAWN -> R.drawable.hero_dawn
+    HeroMotif.DAY -> R.drawable.hero_day
+    HeroMotif.SUNSET -> R.drawable.hero_sunset
+    HeroMotif.STARS -> R.drawable.hero_stars
+    HeroMotif.MOON_BATS -> R.drawable.hero_moon_bats
+    HeroMotif.SNOW -> R.drawable.hero_snow
+    HeroMotif.GAME -> R.drawable.hero_game
+}
+
+/** The backdropTop of the theme each image was rendered for (MOTIFS in tools/art/render_backdrops.py); GAME has none. */
+private fun renderedTop(motif: HeroMotif): Int? = when (motif) {
+    HeroMotif.DAWN -> 0x1F3B66
+    HeroMotif.DAY -> 0x1B4A86
+    HeroMotif.SUNSET -> 0x2E2250
+    HeroMotif.STARS -> 0x04060B
+    HeroMotif.MOON_BATS -> 0x120A1E
+    HeroMotif.SNOW -> 0x0A2418
+    HeroMotif.GAME -> null
+}
+
+/**
+ * Decodes the motif's 1920x600 WebP. Call off the main thread. ARGB_8888, not RGB_565: 565 bands the dim night and dawn
+ * skies visibly, and the 4.6 MB bitmap is one at a time. prepareToDraw uploads it to the GPU here, not on the first draw.
+ * Null if the decode fails; the Canvas motif stays.
+ */
+private fun decodeBackdrop(context: Context, motif: HeroMotif): ImageBitmap? = runCatching {
+    val opts = BitmapFactory.Options().apply {
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+        inScaled = false
+    }
+    BitmapFactory.decodeResource(context.resources, backdropRes(motif), opts)?.also { it.prepareToDraw() }?.asImageBitmap()
+}.getOrNull()
+
+/** Cover the backdrop area: scale to fill, centred horizontally, top aligned (the bottom fades out anyway). */
+private fun DrawScope.drawBackdrop(image: ImageBitmap, alpha: Float) {
+    val dw = size.width
+    val dh = size.height
+    if (dw <= 0f || dh <= 0f) return
+    val scale = maxOf(dw / image.width, dh / image.height)
+    val sw = (dw / scale).toInt().coerceIn(1, image.width)
+    val sh = (dh / scale).toInt().coerceIn(1, image.height)
+    drawImage(
+        image,
+        srcOffset = IntOffset((image.width - sw) / 2, 0),
+        srcSize = IntSize(sw, sh),
+        dstSize = IntSize(dw.toInt(), dh.toInt()),
+        alpha = alpha,
     )
 }
 
