@@ -114,7 +114,8 @@ try {
     # One password for the store and the key: PKCS12 keystores ignore a separate key password.
     $step = 'generate password'
     $pw = New-RandomPassword
-    New-Item -ItemType Directory -LiteralPath $dir | Out-Null
+    # -Path, not -LiteralPath: Windows PowerShell 5.1 New-Item has no -LiteralPath. $dir is a fixed path with no wildcards.
+    New-Item -ItemType Directory -Path $dir | Out-Null
 
     $step = 'keytool'
     $env:TVHOME_GEN_PASS = $pw
