@@ -14,10 +14,12 @@ class SchedulesTest {
 
     private fun nhl(vararg g: String) = """{"previousStartDate":"2026-10-25","games":[${g.joinToString(",")}]}"""
     private val nsh = Teams.PREDATORS
+    private val pinned = Instant.parse("2026-11-01T12:00:00Z")
+    private fun parse(t: TeamConfig, raw: String, now: Instant = pinned) = Schedules.parse(t, raw, now)
     private val osu = Teams.OHIO_STATE
 
     @Test fun nhlUpcomingHome() {
-        val g = Schedules.parse(nsh, nhl(nhlGame("FUT")))!!.single()
+        val g = parse(nsh, nhl(nhlGame("FUT")))!!.single()
         assertEquals(GamePhase.UPCOMING, g.phase)
         assertEquals("Blues", g.opponent); assertTrue(g.home)
         assertEquals(Instant.parse("2026-11-02T01:00:00Z"), g.start)
@@ -25,14 +27,14 @@ class SchedulesTest {
     }
 
     @Test fun nhlLiveAway() {
-        val g = Schedules.parse(nsh, nhl(nhlGame("LIVE", home = "STL", away = "NSH", hs = "\"score\":1,", ays = "\"score\":2,",
+        val g = parse(nsh, nhl(nhlGame("LIVE", home = "STL", away = "NSH", hs = "\"score\":1,", ays = "\"score\":2,",
             period = ""","periodDescriptor":{"number":2,"periodType":"REG"}""")))!!.single()
         assertEquals(GamePhase.LIVE, g.phase); assertFalse(g.home)
         assertEquals(2, g.ownScore); assertEquals(1, g.oppScore); assertEquals("2nd", g.period)
     }
 
     @Test fun nhlFinalOvertime() {
-        val g = Schedules.parse(nsh, nhl(nhlGame("OFF", hs = "\"score\":4,", ays = "\"score\":3,",
+        val g = parse(nsh, nhl(nhlGame("OFF", hs = "\"score\":4,", ays = "\"score\":3,",
             period = ""","periodDescriptor":{"number":4,"periodType":"OT"}""")))!!.single()
         assertEquals(GamePhase.FINAL, g.phase); assertEquals("OT", g.period); assertEquals(4, g.ownScore)
     }
@@ -42,13 +44,13 @@ class SchedulesTest {
             nhlGame("FUT", start = "tomorrow"), nhlGame("WEIRD"), nhlGame("FUT", home = "ANA", away = "STL"),
             """{"gameState":"FUT"}""", "7",
         )
-        val out = Schedules.parse(nsh, nhl(*bad.toTypedArray(), nhlGame("FUT")))!!
+        val out = parse(nsh, nhl(*bad.toTypedArray(), nhlGame("FUT")))!!
         assertEquals(1, out.size)
     }
 
     @Test fun malformedDocumentsAreNull() {
         for (t in listOf(nsh, osu)) for (bad in listOf("", "x", "[]", "{}", """{"games":5}""", """{"events":"x"}"""))
-            if (!(t === nsh && bad == "{}") ) assertNull(Schedules.parse(t, bad), "${t.key}: $bad")
+            if (!(t === nsh && bad == "{}") ) assertNull(parse(t, bad), "${t.key}: $bad")
     }
 
     private fun espn(state: String, status: String = "", period: Int = 0, clock: String = "0:00", name: String = "STATUS_SCHEDULED",
@@ -59,38 +61,56 @@ class SchedulesTest {
         "status":{"displayClock":"$clock","period":$period,"type":{"name":"$name","state":"$state"}}}]}]}"""
 
     @Test fun espnUpcomingWithSecondlessDate() {
-        val g = Schedules.parse(osu, espn("pre"))!!.single()
+        val g = parse(osu, espn("pre"))!!.single()
         assertEquals(Instant.parse("2026-11-01T17:00:00Z"), g.start)
         assertEquals("Michigan", g.opponent); assertTrue(g.home); assertEquals(GamePhase.UPCOMING, g.phase)
     }
 
     @Test fun espnLiveScoreboardStringScores() {
-        val g = Schedules.parse(osu, espn("in", period = 3, clock = "8:12", name = "STATUS_IN_PROGRESS",
+        val g = parse(osu, espn("in", period = 3, clock = "8:12", name = "STATUS_IN_PROGRESS",
             ownScore = ""","score":"21"""", oppScore = ""","score":"14""""))!!.single()
         assertEquals(GamePhase.LIVE, g.phase); assertEquals(21, g.ownScore); assertEquals(14, g.oppScore); assertEquals("Q3 8:12", g.period)
     }
 
     @Test fun espnFinalScheduleObjectScoresAndOvertime() {
-        val g = Schedules.parse(osu, espn("post", period = 5, name = "STATUS_FINAL", ownHome = false,
+        val g = parse(osu, espn("post", period = 5, name = "STATUS_FINAL", ownHome = false,
             ownScore = ""","score":{"value":24.0,"displayValue":"24"}""", oppScore = ""","score":{"value":27.0,"displayValue":"27"}"""))!!.single()
         assertEquals(GamePhase.FINAL, g.phase); assertFalse(g.home); assertEquals(24, g.ownScore); assertEquals(27, g.oppScore); assertEquals("OT", g.period)
     }
 
     @Test fun espnHalftimeAndHostileClock() {
-        assertEquals("Half", Schedules.parse(osu, espn("in", period = 2, name = "STATUS_HALFTIME"))!!.single().period)
-        assertEquals("Q1", Schedules.parse(osu, espn("in", period = 1, clock = "<script>"))!!.single().period)
+        assertEquals("Half", parse(osu, espn("in", period = 2, name = "STATUS_HALFTIME"))!!.single().period)
+        assertEquals("Q1", parse(osu, espn("in", period = 1, clock = "<script>"))!!.single().period)
     }
 
     @Test fun espnOtherTeamsGameAndBadFieldsAreSkipped() {
-        assertEquals(0, Schedules.parse(Teams.OHIO_STATE.copy(feedId = "99"), espn("pre"))!!.size)
-        assertEquals(0, Schedules.parse(osu, espn("pre", date = "soon"))!!.size)
-        assertEquals(0, Schedules.parse(osu, espn("weird"))!!.size)
+        assertEquals(0, parse(Teams.OHIO_STATE.copy(feedId = "99"), espn("pre"))!!.size)
+        assertEquals(0, parse(osu, espn("pre", date = "soon"))!!.size)
+        assertEquals(0, parse(osu, espn("weird"))!!.size)
+    }
+
+    @Test fun hostileStartTimesAreSkippedAndNeverThrowDownstream() {
+        val now = Instant.parse("2026-11-01T12:00:00Z")
+        for (d in listOf("-1000000000-01-01T00:00:00Z", "+999999999-12-31T23:59:59Z", "2031-01-01T00:00:00Z", "2020-01-01T00:00:00Z")) {
+            assertEquals(0, parse(nsh, nhl(nhlGame("FUT", start = d)), now)!!.size, d)
+        }
+        assertEquals(0, parse(osu, espn("pre", date = "+999999999-12-31T23:59Z"), now)!!.size)
+        assertEquals(1, parse(nsh, nhl(nhlGame("FUT")), now)!!.size)
+        // Even a game that got through (built by hand) cannot crash selection or text.
+        val wild = TeamGame(nsh, GameInfo(Instant.MIN, "Blues", true, GamePhase.UPCOMING, null, null, null))
+        assertNull(GameDay.select(listOf(wild), now, java.time.ZoneId.of("UTC")))
+        assertNotNull(GameDay.line(wild, now, java.time.ZoneId.of("UTC")))
+    }
+
+    @Test fun nhlScoresOutOfRangeAreDropped() {
+        val g = parse(nsh, nhl(nhlGame("OFF", hs = "\"score\":5000000,", ays = "\"score\":-2,")), Instant.parse("2026-11-02T03:00:00Z"))!!.single()
+        assertNull(g.ownScore); assertNull(g.oppScore)
     }
 
     @Test fun opponentNamesAreCappedAndStripped() {
         val long = "A".repeat(100)
         val raw = nhlGame("FUT").replace("Blues", "\u0007$long")
-        val g = Schedules.parse(nsh, nhl(raw))!!.single()
+        val g = parse(nsh, nhl(raw), Instant.parse("2026-11-01T12:00:00Z"))!!.single()
         assertEquals(Feeds.LABEL_CAP, g.opponent.length)
         assertFalse(g.opponent.any { it.isISOControl() })
     }

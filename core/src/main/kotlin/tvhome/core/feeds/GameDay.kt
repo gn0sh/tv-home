@@ -17,9 +17,13 @@ import java.util.Locale
 object GameDay {
     private val TIME = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
     private val STALE_UPCOMING = Duration.ofHours(4)
-    private val STALE_LIVE = Duration.ofHours(6)
+    internal val STALE_LIVE: Duration = Duration.ofHours(6)
 
-    fun select(games: List<TeamGame>, now: Instant, zone: ZoneId): TeamGame? {
+    /** Never throws: any failure on odd feed data is "no game" (feed-date-range). */
+    fun select(games: List<TeamGame>, now: Instant, zone: ZoneId): TeamGame? =
+        runCatching { selectUnsafe(games, now, zone) }.getOrNull()
+
+    private fun selectUnsafe(games: List<TeamGame>, now: Instant, zone: ZoneId): TeamGame? {
         val today = now.atZone(zone).toLocalDate()
         val candidates = games.filter { (_, g) ->
             when (g.phase) {
@@ -37,7 +41,10 @@ object GameDay {
     fun badge(g: TeamGame): String = if (g.game.phase == GamePhase.LIVE) "LIVE" else "GAME DAY"
 
     /** One line for the top bar, e.g. "Predators vs Blues, 7:00 PM, in 2h 15m". */
-    fun line(tg: TeamGame, now: Instant, zone: ZoneId): String {
+    fun line(tg: TeamGame, now: Instant, zone: ZoneId): String =
+        runCatching { lineUnsafe(tg, now, zone) }.getOrDefault(tg.team.name)
+
+    private fun lineUnsafe(tg: TeamGame, now: Instant, zone: ZoneId): String {
         val (team, g) = tg
         val vs = if (g.home) "vs" else "at"
         return when (g.phase) {

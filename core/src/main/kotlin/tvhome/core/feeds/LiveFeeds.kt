@@ -6,6 +6,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Duration
@@ -33,7 +34,7 @@ object FeedTiming {
     /** 60 s while a game is live or about to start (within 10 minutes, or just past its start); otherwise 60 min. */
     fun scheduleBase(games: List<TeamGame>, now: Instant): Long {
         val hot = games.any { (_, g) ->
-            g.phase == GamePhase.LIVE ||
+            (g.phase == GamePhase.LIVE && Duration.between(g.start, now) < GameDay.STALE_LIVE) ||
                 (g.phase == GamePhase.UPCOMING && Duration.between(now, g.start) < Duration.ofMinutes(10) &&
                     Duration.between(g.start, now) < Duration.ofHours(1))
         }
@@ -63,7 +64,7 @@ class LiveFeeds(
     suspend fun refreshWeather(): Boolean {
         val loc = withContext(io) { runCatching(location).getOrNull() }
         if (loc == null) {
-            state.value = state.value.copy(weather = null)
+            state.update { it.copy(weather = null) }
             weatherOkAt = null
             return true
         }
@@ -71,9 +72,9 @@ class LiveFeeds(
         val now = clock()
         if (w != null) {
             weatherOkAt = now
-            state.value = state.value.copy(weather = w)
+            state.update { it.copy(weather = w) }
         } else if (weatherOkAt?.let { Duration.between(it, now) > STALE_WEATHER } != false) {
-            state.value = state.value.copy(weather = null)
+            state.update { it.copy(weather = null) }
         }
         return w != null
     }
@@ -82,10 +83,11 @@ class LiveFeeds(
     suspend fun refreshSchedules(): Boolean {
         var allOk = true
         for (team in teams) {
-            val games = fetcher.fetch(team.scheduleUrl())?.let { raw -> withContext(io) { Schedules.parse(team, raw) } }
+            val games = fetcher.fetch(team.scheduleUrl())?.let { raw -> withContext(io) { Schedules.parse(team, raw, clock()) } }
             if (games != null) perTeam[team.key] = games else allOk = false
         }
-        state.value = state.value.copy(games = teams.flatMap { t -> perTeam[t.key].orEmpty().map { TeamGame(t, it) } })
+        val all = teams.flatMap { t -> perTeam[t.key].orEmpty().map { TeamGame(t, it) } }
+        state.update { it.copy(games = all) }
         return allOk
     }
 

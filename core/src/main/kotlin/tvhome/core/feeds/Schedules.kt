@@ -16,25 +16,30 @@ import java.time.OffsetDateTime
 object Schedules {
     private val json = Json { ignoreUnknownKeys = true }
     private const val MAX_GAMES = 64
+    private val MAX_SKEW = java.time.Duration.ofDays(366)
 
-    fun parse(team: TeamConfig, raw: String): List<GameInfo>? = runCatching {
+    private fun plausible(start: Instant, now: Instant): Boolean =
+        java.time.Duration.between(now, start).abs() <= MAX_SKEW
+
+    /** [now] bounds plausible start times to within [MAX_SKEW] (feed-date-range: hostile dates are skipped). */
+    fun parse(team: TeamConfig, raw: String, now: Instant = Instant.now()): List<GameInfo>? = runCatching {
         val root = json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching null
         when (team.league) {
-            League.NHL -> nhl(team, root)
-            League.ESPN_FOOTBALL -> espn(team, root)
+            League.NHL -> nhl(team, root, now)
+            League.ESPN_FOOTBALL -> espn(team, root, now)
         }
     }.getOrNull()
 
     // --- NHL: api-web.nhle.com/v1/club-schedule/{abbrev}/week/now -> {"games":[{...}]} -----------------------------
 
-    private fun nhl(team: TeamConfig, root: JsonObject): List<GameInfo>? {
+    private fun nhl(team: TeamConfig, root: JsonObject, now: Instant): List<GameInfo>? {
         val games = root["games"] as? JsonArray ?: return null
-        return games.take(MAX_GAMES).mapNotNull { runCatching { nhlGame(team, it as? JsonObject) }.getOrNull() }
+        return games.take(MAX_GAMES).mapNotNull { runCatching { nhlGame(team, it as? JsonObject, now) }.getOrNull() }
     }
 
-    private fun nhlGame(team: TeamConfig, g: JsonObject?): GameInfo? {
+    private fun nhlGame(team: TeamConfig, g: JsonObject?, now: Instant): GameInfo? {
         g ?: return null
-        val start = Instant.parse(g["startTimeUTC"].str() ?: return null)
+        val start = Instant.parse(g["startTimeUTC"].str() ?: return null).takeIf { plausible(it, now) } ?: return null
         val home = g["homeTeam"] as? JsonObject ?: return null
         val away = g["awayTeam"] as? JsonObject ?: return null
         val isHome = when (team.feedId) {
@@ -64,7 +69,7 @@ object Schedules {
             GamePhase.FINAL -> when (type) { "OT" -> "OT"; "SO" -> "SO"; else -> null }
         }
         val scored = phase != GamePhase.UPCOMING
-        return GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int() else null, if (scored) opp["score"].int() else null, period)
+        return GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period)
     }
 
     private fun name(e: JsonElement?): String? = (e as? JsonObject)?.get("default").str()
@@ -73,16 +78,16 @@ object Schedules {
 
     // --- ESPN: .../college-football/teams/{id}/schedule (or the scoreboard) -> {"events":[{...}]} ------------------
 
-    private fun espn(team: TeamConfig, root: JsonObject): List<GameInfo>? {
+    private fun espn(team: TeamConfig, root: JsonObject, now: Instant): List<GameInfo>? {
         val events = root["events"] as? JsonArray ?: return null
-        return events.take(MAX_GAMES).mapNotNull { runCatching { espnGame(team, it as? JsonObject) }.getOrNull() }
+        return events.take(MAX_GAMES).mapNotNull { runCatching { espnGame(team, it as? JsonObject, now) }.getOrNull() }
     }
 
-    private fun espnGame(team: TeamConfig, e: JsonObject?): GameInfo? {
+    private fun espnGame(team: TeamConfig, e: JsonObject?, now: Instant): GameInfo? {
         e ?: return null
         val comp = (e["competitions"] as? JsonArray)?.firstOrNull() as? JsonObject ?: return null
         // ESPN dates have no seconds ("2026-11-01T17:00Z"); OffsetDateTime accepts that, Instant.parse may not.
-        val start = OffsetDateTime.parse((comp["date"].str() ?: e["date"].str()) ?: return null).toInstant()
+        val start = OffsetDateTime.parse((comp["date"].str() ?: e["date"].str()) ?: return null).toInstant().takeIf { plausible(it, now) } ?: return null
         val competitors = (comp["competitors"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: return null
         val own = competitors.firstOrNull { teamId(it) == team.feedId } ?: return null
         val opp = competitors.firstOrNull { it !== own } ?: return null

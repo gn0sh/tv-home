@@ -131,8 +131,30 @@ object Feeds {
     const val LABEL_CAP = 40
 
     /** Printable, trimmed, at most [LABEL_CAP] characters; null if nothing is left. */
-    fun clean(s: String?): String? =
-        s?.filter { !it.isISOControl() }?.trim()?.take(LABEL_CAP)?.trim()?.takeIf { it.isNotEmpty() }
+    fun clean(s: String?): String? {
+        s ?: return null
+        val out = StringBuilder()
+        var count = 0
+        var marks = 0
+        var i = 0
+        while (i < s.length && count < LABEL_CAP) {
+            val cp = s.codePointAt(i)
+            i += Character.charCount(cp)
+            val type = Character.getType(cp)
+            when (type.toByte()) {
+                Character.CONTROL, Character.FORMAT, Character.SURROGATE, Character.UNASSIGNED, Character.PRIVATE_USE,
+                Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR -> continue // bidi controls, zero-width, lone surrogates
+                Character.NON_SPACING_MARK, Character.ENCLOSING_MARK, Character.COMBINING_SPACING_MARK ->
+                    if (++marks > MAX_MARKS) continue
+                else -> marks = 0
+            }
+            out.appendCodePoint(cp)
+            count++
+        }
+        return out.toString().trim().takeIf { it.isNotEmpty() }
+    }
+
+    private const val MAX_MARKS = 2
 }
 
 internal fun JsonElement?.str(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
