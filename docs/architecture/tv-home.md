@@ -511,7 +511,7 @@ Tools (complete allowlist; anything else is not exposed):
 | `tv_status` | none | reachability, LG power/volume/input/foreground app, Google TV current app |
 | `tv_open` | `service`, `content_id?`, `search_query?` | builds the link from the shared `services.json`, sends it as an app link |
 | `tv_launch_app` | `service` (enum) | |
-| `tv_key` | `key` enum (UP, DOWN, LEFT, RIGHT, OK, BACK, HOME, PLAY_PAUSE, REWIND, FAST_FORWARD, VOLUME_UP, VOLUME_DOWN, MUTE, POWER), `repeat` 1-10 | VOLUME_UP/DOWN, MUTE and POWER reach the LG over HDMI-CEC (2026-10-31: Brian's LG BX on webOS 5 refuses wss 3001, so the `lg_*` tools stay unconfigured). No level comes back over CEC, so there is no 60 cap on this path: VOLUME_UP is capped at 3 presses per call and 10 per rolling minute, and POWER (a standby toggle) at 1. |
+| `tv_key` | `key` enum (UP, DOWN, LEFT, RIGHT, OK, BACK, HOME, PLAY_PAUSE, REWIND, FAST_FORWARD, VOLUME_UP, VOLUME_DOWN, MUTE, POWER), `repeat` 1-10 | VOLUME_UP/DOWN, MUTE and POWER reach the LG over HDMI-CEC (2026-10-31: Brian's LG BX on webOS 5 refuses wss 3001, so the `lg_*` tools stay unconfigured). No level comes back over CEC, so there is no 60 cap on this path: VOLUME_UP is capped at 3 presses per call and 10 per rolling minute, and POWER (a standby toggle) at 1. Tested 2026-11-01 on Brian's LG BX: POWER puts both TVs to sleep and the Google TV remote wakes both; the BX ignores CEC volume/mute (even from the physical remote), so LG volume needs another route. |
 | `lg_power` | `on` / `off` | on = Wake-on-LAN to the stored MAC; off = `ssap://system/turnOff` |
 | `lg_volume` | `level` 0-60, or `up` / `down` | capped at 60 |
 | `lg_mute` | bool | |
