@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import tvhome.core.apps.LauncherApp
+import tvhome.core.assistant.AskCopy
 import tvhome.core.ui.CALENDAR_TILE_LABEL
 import tvhome.core.ui.CalendarTile
 import tvhome.core.ui.HomeTheme
@@ -80,10 +81,10 @@ const val CALENDAR_FULL_SCREEN = "Calendar full screen"
 
 /**
  * M2c home screen: two rows. On top the app carousel ([apps]: tiles, or a message while loading / failed / empty);
- * below it the dock, a left-aligned row of dashboard tiles that today holds only the Calendar tile ([tile]). The dock
- * never waits on, or fails with, the package manager. OK on the Calendar tile switches this screen to the full-screen
- * agenda ([agenda]); Back there returns here with focus on the Calendar tile. Back here is not handled, so it exits
- * the activity with one press. Colours and tile size come from [theme].
+ * below it the dock, a left-aligned row of dashboard tiles: the Calendar tile ([tile]), then Ask Claude (M1b). The dock
+ * never waits on the package manager or on Claude. OK on a dock tile switches this screen to that tile's full screen
+ * (the agenda, or the Ask view through [ask]); Back there returns here with focus on the same tile. Back here is not
+ * handled, so it exits the activity with one press. Colours and tile size come from [theme].
  *
  * Focus: on launch the first app tile, or the Calendar tile while there are no apps; if apps arrive before the user
  * has pressed a key, focus moves to the first app tile. Down from the app row reaches the dock (2D focus search); Up
@@ -91,28 +92,38 @@ const val CALENDAR_FULL_SCREEN = "Calendar full screen"
  * first). The row's scroll position and last-focused tile live above the full-screen switch, so they survive it.
  */
 @Composable
-fun HomeScreen(apps: AppsState, theme: HomeTheme, onLaunch: (LauncherApp) -> Unit, tile: CalendarTile, agenda: ScreenModel) {
-    var calendarOpen by rememberSaveable { mutableStateOf(false) }
-    var returningFromCalendar by rememberSaveable { mutableStateOf(false) }
-    // Kept while the full-screen calendar is showing (declared before the switch), so Up after Back still restores.
+fun HomeScreen(
+    apps: AppsState,
+    theme: HomeTheme,
+    onLaunch: (LauncherApp) -> Unit,
+    tile: CalendarTile,
+    agenda: ScreenModel,
+    ask: AskHost,
+) {
+    // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
+    var open by rememberSaveable { mutableStateOf<String?>(null) }
+    var returningTo by rememberSaveable { mutableStateOf<String?>(null) }
+    // Kept while a full screen is showing (declared before the switch), so Up after Back still restores.
     val rowState = rememberLazyListState()
     val appFocus = remember { AppFocus() }
-    if (calendarOpen) {
-        CalendarFullScreen(agenda, theme, onClose = { calendarOpen = false; returningFromCalendar = true })
-        return
+    fun close() { returningTo = open; open = null }
+    when (open) {
+        DOCK_CALENDAR -> { CalendarFullScreen(agenda, theme, onClose = ::close); return }
+        DOCK_ASK -> { AskFullScreen(ask, theme, onClose = ::close); return }
     }
     val appList = (apps as? AppsState.Loaded)?.apps.orEmpty()
     val hasApps = appList.isNotEmpty()
     val firstApp = appList.firstOrNull()?.let { appFocus.requester(it.app.packageName) }
     val calendar = remember { FocusRequester() }
-    // Initial focus is settled once it reached the first app, the user pressed a key, or we came back from the
-    // full-screen calendar (focus belongs on the Calendar tile then). Until then it may move from the Calendar tile
-    // (placed there while apps load) to the first app tile.
-    var settled by remember { mutableStateOf(returningFromCalendar) }
+    val askTile = remember { FocusRequester() }
+    // Initial focus is settled once it reached the first app, the user pressed a key, or we came back from a full
+    // screen (focus belongs on that dock tile then). Until then it may move from the Calendar tile (placed there while
+    // apps load) to the first app tile.
+    var settled by remember { mutableStateOf(returningTo != null) }
     LaunchedEffect(Unit) {
-        if (!returningFromCalendar) return@LaunchedEffect
-        returningFromCalendar = false
-        focusSoon(calendar)
+        val back = returningTo ?: return@LaunchedEffect
+        returningTo = null
+        focusSoon(if (back == DOCK_ASK) askTile else calendar)
     }
     LaunchedEffect(hasApps) {
         if (settled) return@LaunchedEffect
@@ -132,7 +143,8 @@ fun HomeScreen(apps: AppsState, theme: HomeTheme, onLaunch: (LauncherApp) -> Uni
     ) {
         AppRow(apps, appList, theme, rowState, appFocus, onLaunch)
         Dock(theme) {
-            CalendarTileView(tile, theme, calendar, onClick = { calendarOpen = true })
+            CalendarTileView(tile, theme, calendar, onClick = { open = DOCK_CALENDAR })
+            AskTileView(theme, askTile, onClick = { open = DOCK_ASK })
         }
     }
 }
@@ -327,6 +339,22 @@ private fun CalendarTileView(tile: CalendarTile, theme: HomeTheme, requester: Fo
         }
     }
 }
+
+/** The Ask Claude tile: its name large and a one-line hint. It shows no state, so it never waits on Claude. */
+@Composable
+private fun AskTileView(theme: HomeTheme, requester: FocusRequester, onClick: () -> Unit) {
+    TileFrame(theme, AskCopy.TILE_LABEL, "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}.", requester, onClick) {
+        val k = theme.tileHeightDp / 135f
+        Column(Modifier.fillMaxSize().clearAndSetSemantics { }.padding(horizontal = (14 * k).dp, vertical = (10 * k).dp)) {
+            Text(AskCopy.TILE_LABEL, color = color(theme.text), fontSize = (28 * k).sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height((6 * k).dp))
+            Text(AskCopy.TILE_HINT, color = color(theme.secondaryText), fontSize = (18 * k).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+private const val DOCK_CALENDAR = "calendar"
+private const val DOCK_ASK = "ask"
 
 @Composable
 private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, onFocused: () -> Unit, onClick: () -> Unit) {
