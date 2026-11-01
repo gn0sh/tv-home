@@ -1,10 +1,14 @@
 package com.gnosh.tvhome
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.os.Bundle
+import android.speech.RecognizerIntent
 import android.text.format.DateFormat
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -19,6 +23,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import tvhome.core.assistant.AskEngine
+import tvhome.core.assistant.OpenTarget
+import tvhome.core.assistant.askAppsOf
 import tvhome.core.ui.HomeTheme
 import tvhome.core.ui.calendarTile
 import tvhome.core.ui.screenModel
@@ -39,6 +46,42 @@ class AgendaActivity : ComponentActivity() {
     private var apps by mutableStateOf<AppsState>(AppsState.Loading)
     private var theme by mutableStateOf(HomeTheme.DEFAULT)
     private val installed = InstalledApps()
+
+    /**
+     * Speech for Ask Claude: the system recognizer dialog (RecognizerIntent), so the app needs no RECORD_AUDIO
+     * permission. The transcript goes only to [speechCallback]; it is never logged or stored.
+     */
+    private var speechCallback: ((String?) -> Unit)? = null
+    private val speech = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val text = if (r.resultCode == RESULT_OK) {
+            runCatching { r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() }.getOrNull()
+        } else {
+            null
+        }
+        speechCallback?.invoke(text)
+        speechCallback = null
+    }
+
+    private val askHost = object : AskHost {
+        override fun newEngine(): AskEngine = (application as TvHomeApp).graph.newAskEngine {
+            askAppsOf((apps as? AppsState.Loaded)?.apps.orEmpty().map { it.app })
+        }
+
+        override fun listen(onResult: (String?) -> Unit): Boolean = try {
+            speechCallback = onResult
+            speech.launch(
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(RecognizerIntent.EXTRA_PROMPT, "Ask Claude"),
+            )
+            true
+        } catch (e: ActivityNotFoundException) {
+            speechCallback = null
+            false
+        }
+
+        override fun planOpen(target: OpenTarget): OpenPlan = InstalledApps.planOpen(this@AgendaActivity, target)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +129,7 @@ class AgendaActivity : ComponentActivity() {
                 },
                 tile = tile,
                 agenda = model,
+                ask = askHost,
             )
         }
     }

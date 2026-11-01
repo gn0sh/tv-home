@@ -1,14 +1,17 @@
 package com.gnosh.tvhome
 
+import android.app.SearchManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
+import android.net.Uri
 import androidx.compose.ui.graphics.asImageBitmap
 import tvhome.core.apps.AppOrder
 import tvhome.core.apps.LauncherApp
+import tvhome.core.assistant.OpenTarget
 import tvhome.core.ui.HomeTheme
 import java.io.File
 
@@ -74,6 +77,43 @@ class InstalledApps {
             false
         } catch (e: SecurityException) {
             false
+        }
+
+        /**
+         * How Open launches an Ask Claude pick (spec AC5), decided up front so the screen can say which fallback is used:
+         * the deep link as a VIEW intent restricted to the chosen package, else the app's own search for the title, else
+         * the app's TV home. Each is resolved against the package manager first (the app is visible through the
+         * `<queries>` LEANBACK_LAUNCHER entry, which makes its whole package visible). Nothing is logged.
+         */
+        fun planOpen(context: Context, target: OpenTarget): OpenPlan {
+            val pm = context.packageManager
+            val pkg = target.app.packageName
+            val label = target.app.label
+            fun resolves(i: Intent) = runCatching {
+                @Suppress("DEPRECATION")
+                pm.resolveActivity(i, 0) != null
+            }.getOrDefault(false)
+            fun plan(description: String, intent: Intent) = OpenPlan(description) {
+                try {
+                    context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    true
+                } catch (e: ActivityNotFoundException) {
+                    false
+                } catch (e: SecurityException) {
+                    false
+                }
+            }
+            target.deepLink?.let { link ->
+                val view = Intent(Intent.ACTION_VIEW, Uri.parse(link)).setPackage(pkg)
+                // The link's host is shown, so Brian sees where a link points before pressing Open.
+                val host = runCatching { Uri.parse(link).host }.getOrNull()?.removePrefix("www.").orEmpty()
+                if (resolves(view)) return plan("Opens \u201C${target.title}\u201D directly in $label ($host).", view)
+            }
+            val search = Intent(Intent.ACTION_SEARCH).setPackage(pkg).putExtra(SearchManager.QUERY, target.title)
+            if (resolves(search)) return plan("Opens $label's search for \u201C${target.title}\u201D.", search)
+            val home = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
+            if (home != null) return plan("Opens $label's home. Look for \u201C${target.title}\u201D there.", home)
+            return OpenPlan("$label can't be opened.") { false }
         }
 
         /** The home theme from app-private storage (`files/home-theme.json`); defaults if missing, too big or invalid. */
