@@ -423,7 +423,16 @@ else
   # 2D search picks the dock target nearest below: the Calendar tile, or the Ask button from a tile far right.
   case ${cur%%|*} in
     Calendar,*) ;;
-    "${ASK_DESC_PREFIX}"*) pass "re-entry: Down from '$far' reached the Ask button"; key DPAD_UP; cur=$(focus_after re-entry)
+    "${ASK_DESC_PREFIX}"*|"")
+      # The Ask button clears its semantics, so uiautomator shows no focused node while it has focus: confirm it with
+      # OK (the Ask view opens) and Back (focus returns to the button, checked in M1b), then go Up to the Calendar tile.
+      if [[ -z ${cur%%|*} ]]; then
+        key DPAD_CENTER; sleep 1
+        expect_text "re-entry-ask" "Ask Claude full screen"
+        key BACK; sleep 1
+        in_front || fail "re-entry: Back from the Ask view left the app"
+      fi
+      pass "re-entry: Down from '$far' reached the Ask button"; key DPAD_UP; cur=$(focus_after re-entry)
       [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach the Calendar tile (now '$cur')" ;;
     *) fail "re-entry: Down from '$far' did not reach the dock (focused node: '$cur')" ;;
   esac
