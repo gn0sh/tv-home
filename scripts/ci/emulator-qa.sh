@@ -195,7 +195,9 @@ step "M2b Calendar tile: OK opens the full-screen calendar, Back returns to the 
 sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
 in_front || fail "M2b: home screen not in front before OK"
 expect_text "m2b-home" "Calendar, "            # the tile's description: "Calendar, <weekday date>. <status>."
-xml=$(ui_text); grep -qF "Calendar full screen" <<<"$xml" && fail "M2b: full-screen calendar is showing before OK"
+xml=$(ui_text)
+[[ -n $xml ]] || fail "M2b: uiautomator dump failed before OK; cannot confirm the full screen is closed"
+grep -qF "Calendar full screen" <<<"$xml" && fail "M2b: full-screen calendar is showing before OK"
 sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
 in_front || fail "M2b: OK on the Calendar tile left the app"
 expect_text "m2b-full" "Calendar full screen"

@@ -80,6 +80,16 @@ class CalendarTileTest {
         assertEquals("Run club", t.text)
     }
 
+    @Test fun cacheWithoutTodayNeverSaysNoMoreEvents() {
+        val monday = Instant.parse("2026-11-02T15:00:00Z") // Mon 10:00 local; cache holds Sat and Sun only
+        val t = tile(ok(), monday)
+        assertEquals("Mon 2 Nov", t.date)
+        assertNull(t.time)
+        assertEquals(NO_EVENTS_CACHED, t.text)
+        assertNotEquals(NO_MORE_TODAY, t.text)
+        assertEquals("Calendar, Monday 2 November. No events cached for today.", t.description)
+    }
+
     @Test fun dayThatIsNotTodayHasNoNextEvent() {
         assertNull(nextEvent(tomorrow, now, zone))
     }

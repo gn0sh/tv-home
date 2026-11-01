@@ -30,6 +30,9 @@ data class CalendarTile(
 const val CALENDAR_TILE_LABEL = "Calendar"
 const val NO_MORE_TODAY = "No more events today"
 
+/** Shown when the cached agenda has no entry for today (old cache, before the next refresh replaces it). */
+const val NO_EVENTS_CACHED = "No events cached for today"
+
 /**
  * The next event today: the first item that starts at or after [now] (to the minute shown on screen, so a 9:00
  * event is "next" until 9:01). All-day and continuing items are not "next"; they show in the full-screen agenda.
@@ -55,7 +58,9 @@ fun calendarTile(state: AgendaState, now: Instant, zone: ZoneId, is24h: Boolean)
     fun events(day: AgendaDay, tomorrow: AgendaDay, note: String?): CalendarTile {
         // The cached "today" is today in practice (reduce() checks the window); after midnight, before the next
         // refresh, the cached "tomorrow" is today.
-        val d = if (day.date == today) day else tomorrow
+        // If neither cached day is today the cache says nothing about today: never claim "No more events today".
+        val d = listOf(day, tomorrow).firstOrNull { it.date == today }
+            ?: return CalendarTile(date, null, NO_EVENTS_CACHED, false, note, "$spoken. $NO_EVENTS_CACHED.${note?.let { " $it." }.orEmpty()}")
         val next = nextEvent(d, now, zone)
         val noteSpoken = note?.let { " $it." }.orEmpty()
         if (next == null) return CalendarTile(date, null, NO_MORE_TODAY, false, note, "$spoken. $NO_MORE_TODAY.$noteSpoken")

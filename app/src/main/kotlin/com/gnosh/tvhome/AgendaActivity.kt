@@ -65,14 +65,15 @@ class AgendaActivity : ComponentActivity() {
         setContent {
             val state by session.state.collectAsStateWithLifecycle()
             val is24h = DateFormat.is24HourFormat(LocalContext.current)
-            val model = remember(state, is24h) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h) }
-            // The tile's "next event" and date follow the clock, not only the 15-minute refresh: re-pick once a minute.
+            // The tile's "next event", the date and the agenda's Today/Tomorrow follow the clock, not only the 15-minute
+            // refresh: re-pick once a minute, so the tile and the full screen agree after midnight.
             val minute by produceState(Instant.now().epochSecond / 60) {
                 while (true) {
                     delay(60_000 - System.currentTimeMillis() % 60_000)
                     value = Instant.now().epochSecond / 60
                 }
             }
+            val model = remember(state, is24h, minute) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h) }
             val tile = remember(state, is24h, minute) { calendarTile(state, Instant.now(), ZoneId.systemDefault(), is24h) }
             HomeScreen(
                 apps = apps,
