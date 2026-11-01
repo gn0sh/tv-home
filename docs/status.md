@@ -1,7 +1,8 @@
 # tv-home status
 
 Feature: tv-home (custom Google TV home screen). Priority: Brian 2026-10-31 23:47Z: install the dashboard ASAP within usage (first claim on this thread).
-Stage (2026-11-01 14:40Z): M1 built, reviewed, CI green (core, app, emulator T9, live feed). PR #1 ready for Brian to merge. M1c tv-remote on Brian's PC: Google TV keys work; CEC POWER sleeps/wakes both TVs; LG BX ignores CEC volume/mute (remote back on IR). LG volume options: docs/architecture/lg-volume-options.md (rec: LG firmware update + retry wss 3001 first). Kodi (M5) parked. Next: T11 install.
+Stage (2026-11-01 20:05Z): M2 tiles (PR #3), M2b calendar tile + full screen (PR #4), M2c dock row (PR #5) and M1b lean Ask Claude (PR #6) all INSTALLED on Brian's Google TV. Brian provisioned a dedicated spend-limited API key; first live question worked (it recommended The Office). LG BX found at 192.168.68.80 (MAC 58:FD:B1:C2:7B:EE), PAIRED over wss 3001, volume tested 7->8->7; ws 3000 not needed. Unverified on device: full-screen event-row navigation, Up-restore to a scrolled app tile, Open on 2 services (M1b AC5), AC8-offline. Next (when Brian asks): M1b-2 ask during playback, M6 voice reskin, web search for Ask Claude.
+Earlier stage (2026-11-01 15:25Z): M1 INSTALLED on Brian's Google TV (T11, his typed OK 15:04Z) and provisioned by Brian; agenda shows his calendar. Signed APK from run 41318532029, cert SHA-256 18:E2:7C:A1:DF:5A:EA:B8:4C:E4:65:8E:0E:A3:94:02:67:77:1F:71:DE:9C:4B:49:07:96:F2:7C:2C:4B:64:2A. adb (platform-tools) at %LOCALAPPDATA%\tv-home-tools on his PC. PS 5.1 signing fix merged (PR #2). Next (when usage allows): M2 launcher (Home button), AC8-offline check on the real TV, LG volume per card.
 Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). T8 provisioning and T7 signing scripts approved (2dd6d92). Remaining M1: first CI run + T9 emulator QA after the Nov 1 minutes reset (reminder set for 01:00Z), PR to main, then Brian runs the signing script and T11 install (hard stop). M1c: Brian (21:38Z) said push ahead cheaply on Opus. C1 server, C4 Google TV, C3 LG built and approved (4eb785d, 200 tests). C2 waits on M1b B1 (services.json). C5 (Brian typed OK 22:56Z): installed on his PC (uv 0.11.32, 200 tests, MCP registered user scope). Google TV 192.168.68.71 paired; status/open/keys/idle-20s verified on screen by Brian. LG 192.168.68.68 (MAC 58:DB:09:A4:36:B8, unconfirmed) refuses wss 3001, only ws 3000 open: LG is OLED65BXPUA (2020), webOS 5.6.2-21; 3001 refused with screen on, 3000 open; not paired, no code changed. Turn on via Wi-Fi now on. Decision card to Brian 23:18Z: update LG firmware (rec) / allow unencrypted LG-only exception (needs security review) / skip LG. Deco reservations pending (Google TV uses a private MAC). M4 PC game streaming added to spec (later). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
@@ -9,9 +10,7 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 - No Android SDK in the cloud sandbox (dl.google.com blocked). APKs build in GitHub Actions; private-repo minutes reset 2026-11-01 00:00Z.
 
 ## Waiting on the CEO
-- Merge PR #1, then run new-signing-key.ps1 in his own window (reply done) | https://github.com/gn0sh/tv-home/pull/1, docs/release/tv-home-signing.md | tap Merge, paste 3 PowerShell lines | asked 2026-11-01 05:00Z, reposted 14:40Z in thread "Build Google TV dashboard" | default: wait (signing key is a secret only he creates)
-- Not yet asked: typed OK to install on the TV (T11, hard stop), then provision.ps1; AC8-offline check on the real TV; LG firmware update for volume.
-(Projectivy ask answered 2026-10-31: "More than that", so M2 our own launcher is unconditional.)
+- (none open)
 
 ## Problem-key ledger
 | Key | Returns | Source |
@@ -19,6 +18,10 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | android-repo-filter, app-silent-skip, wrapper-no-sha (open until CI), root-plugins-incomplete | 1 | T1 code review (fixed 03d34f5, approved) |
 | instance-cap-starves-today | 1 | M1 core code review |
 | floating-recurring-dst | 1 | M1 core code review |
+| agenda-initial-focus, fullscreen-model-clock, agenda-focus-lost-on-refresh, tile-old-cache, qa-vacuous-negative | 1 | M2b code review (fixed 9531fa9) |
+| home-back-twice | 1 | M2b CI emulator (fixed 0a17393; guarded in M2c and M1b QA) |
+| qa-back-once-app-row, qa-m2c-checks, dock-preview-steal, dock-up-restore | 1 | M2c code review (fixed 60993d8) |
+| ask-http-status-copy, ask-keystore-main-thread, ask-deeplink-browser, ask-max-tokens-spend | 1 | M1b security review (fixed e1268c2) |
 | one-bad-event-fails-feed | 1 | M1 core code review |
 | rrule-advance-cpu / ics-parse-cpu-memory-dos | 3 | code + security review rounds 1-2; architect re-plan done (ADR 0004); re-plan failure 1 of 2 at T2b.3 (uncharged setup work); fixed and approved at f95bec0 (two-pass removals) |
 | provision-fallback-argv, provision-stale-success | 1 | T8 security review (fixed) |
@@ -79,3 +82,12 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | 2026-11-01 | qa-engineer | opus | T9 emulator job + fixes | done (e241e86..3054ab3), CI green |
 | 2026-11-01 | security-engineer + code-reviewer | opus | T9 emulator diff review | request changes (1 medium) -> delta approve |
 | 2026-11-01 | software-architect | opus | LG volume options writeup | done (4e756c9) |
+| 2026-11-01 | security-engineer | opus | PS 5.1 signing fix delta | approve |
+| 2026-11-01 | manager + RC on Brian's PC | - | T11 install (adb), cert verified | installed, provisioned by Brian |
+| 2026-11-01 | frontend-engineer | opus | M2b calendar tile + full screen | done; review request changes (agenda-initial-focus) -> delta approve; CI caught home-back-twice, fixed |
+| 2026-11-01 | code-reviewer | opus | M2b review + delta | request changes -> approve |
+| 2026-11-01 | frontend-engineer | opus | M2c dock row | done; 4 nits fixed |
+| 2026-11-01 | code-reviewer | opus | M2c review + delta | approve with nits -> approve |
+| 2026-11-01 | frontend-engineer | opus | M1b lean Ask Claude | done; 4 fixes after review |
+| 2026-11-01 | security-engineer + code-reviewer | opus | M1b review + delta | approve (1 medium fixed) -> approve |
+| 2026-11-01 | manager + RC on Brian's PC | - | M2/M2b/M2c installs, LG pairing | installed; M1b adb install blocked by PC classifier, Brian ran it; LG paired |

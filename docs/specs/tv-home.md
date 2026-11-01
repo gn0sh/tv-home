@@ -157,3 +157,11 @@ Past installs got bogged down by bloat; that comes from third-party "builds" and
   media source, show or hide home-menu items, switch skin among installed ones. No add-on installs without Brian's OK.
 - Brian chose both (2026-10-31 23:25Z): library tools first (sources, search, play, next episode), then our own free-legal-sources add-on (Pluto, Tubi, PBS, Internet Archive). No unlicensed-stream add-ons.
 Acceptance: Brian says "play the next episode of <show>" and "hide Music from the menu" and both happen on screen.
+
+### M6 (future, requested by Brian 2026-11-01 15:41Z): change the dashboard by talking to Claude
+1. Reskin: "make it dark green", "use a retro theme". The app reads a theme (palette, fonts, tile size) from a stored config; Claude changes it through the TV remote tools, and no app update is needed. Natural first step once M2 ships.
+2. "Add <feature> to my dashboard": Claude builds it. Realistic path: the Claude in the dashboard (API) writes the change to the repo, CI builds and checks it, and the signed update installs only after Brian's OK. Lighter variant first: a panel catalog (weather, sports scores, to-dos, etc.) that Claude can switch on and arrange by voice without new code.
+3. Security note for later: an assistant that can change installed code is a high-risk path; it needs its own threat model before building.
+
+### Public release idea (Brian 2026-11-01 15:43-15:45Z; not committed, his call later)
+Free Play Store app; each user links their own AI provider (Claude, OpenAI, Gemini, local). Design M1b with a swappable provider interface. Public version needs phone/QR setup for keys and no personal data in repo or history. Advice given: finish for Brian first, use ~2 weeks, then a cheap test (public GitHub, bring-your-own key) before the Play Store.
