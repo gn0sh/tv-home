@@ -1,12 +1,11 @@
 package com.gnosh.tvhome
 
 import androidx.activity.compose.BackHandler
+import android.view.ViewConfiguration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -420,7 +420,6 @@ private const val TILE_LABEL_DP = 44
 
 /** The tile box both kinds of tile share: size, focus scale, fill and ring, and OK/Enter to click. */
 @Composable
-@OptIn(ExperimentalFoundationApi::class)
 private fun TileFrame(
     theme: HomeTheme,
     label: String,
@@ -433,6 +432,12 @@ private fun TileFrame(
     content: @Composable BoxScope.(focused: Boolean) -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // Holding OK (M2g tile menu). combinedClickable's long click did not fire for a held DPAD_CENTER on the emulator (the
+    // tile launched instead), so OK is handled here: a press shorter than the long-press timeout clicks, a longer one
+    // (a repeat flagged long-press, or held past the timeout) opens the menu once; the release after it does nothing.
+    val longTimeout = remember { ViewConfiguration.getLongPressTimeout().toLong() }
+    val downAt = remember { mutableLongStateOf(-1L) }
+    val longFired = remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(10.dp)
     Column(Modifier.width(theme.tileWidthDp.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -452,14 +457,36 @@ private fun TileFrame(
                     if (it.isFocused) onFocused()
                 }
                 .semantics { contentDescription = description }
-                // Focusable on TV; OK/Enter/D-pad centre clicks, and holding OK sends a long click (M2g tile menu).
                 .then(
-                    if (onLongClick != null) {
-                        Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                    } else {
-                        Modifier.clickable(onClick = onClick)
+                    if (onLongClick == null) Modifier else Modifier.onPreviewKeyEvent { e ->
+                        if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) {
+                            return@onPreviewKeyEvent false
+                        }
+                        val n = e.nativeKeyEvent
+                        when (e.type) {
+                            KeyEventType.KeyDown -> {
+                                if (n.repeatCount == 0) {
+                                    downAt.longValue = n.eventTime; longFired.value = false
+                                } else if (!longFired.value && downAt.longValue >= 0 &&
+                                    (n.isLongPress || n.eventTime - downAt.longValue >= longTimeout)
+                                ) {
+                                    longFired.value = true; onLongClick()
+                                }
+                                true
+                            }
+                            KeyEventType.KeyUp -> {
+                                if (downAt.longValue >= 0 && !longFired.value) {
+                                    if (n.eventTime - downAt.longValue >= longTimeout) onLongClick() else onClick()
+                                }
+                                downAt.longValue = -1L; longFired.value = false
+                                true
+                            }
+                            else -> false
+                        }
                     },
-                ),
+                )
+                // Focusable on TV; OK/Enter/D-pad centre clicks (tiles with a menu handle OK above).
+                .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) { content(focused) }
         Spacer(Modifier.height(12.dp))
