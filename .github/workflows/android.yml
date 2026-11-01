@@ -384,3 +384,38 @@ jobs:
             adb devices
             adb shell getprop ro.build.version.sdk
             echo "TODO(T9): install the release APK and run the QA checks in docs/tasks/tv-home-m1.md"
+
+  # Temporary (until APP_DEP_VERIFICATION is strict): CI is the only place AGP resolves and the team's sandbox cannot
+  # download artifacts, so this commits the files the app job regenerated back to the PR branch for review in the
+  # PR diff. It runs no build code: it only copies the four uploaded files and pushes. Same-repo PRs only (a fork's
+  # token cannot write). The push uses GITHUB_TOKEN, so it starts no new workflow run.
+  commit-dependency-files:
+    name: commit regenerated dependency files
+    needs: app
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: tv-home-dependency-files
+          path: ${{ runner.temp }}/deps
+      - name: Copy only the expected files, then commit if they changed
+        env:
+          SRC: ${{ runner.temp }}/deps
+        run: |
+          set -euo pipefail
+          for f in gradle/verification-metadata.xml settings-gradle.lockfile core/gradle.lockfile app/gradle.lockfile; do
+            if [ -f "$SRC/$f" ]; then cp -- "$SRC/$f" "$f"; fi
+          done
+          git add -- gradle/verification-metadata.xml settings-gradle.lockfile core/gradle.lockfile app/gradle.lockfile 2>/dev/null || true
+          if git diff --cached --quiet; then echo "No dependency file changes."; exit 0; fi
+          git diff --cached --stat
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "ci: regenerated :app/:core dependency locks and verification metadata (from run ${{ github.run_id }})"
+          git push origin "HEAD:${{ github.head_ref }}"
