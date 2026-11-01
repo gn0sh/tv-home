@@ -47,6 +47,9 @@ The script now denies only the app's uid: `cmd connectivity set-chain3-enabled t
 - If the commands exist but the deny is not confirmed, the job fails.
 - If the image lacks the commands, the checks still run but log `AC8-offline NOT VERIFIED`; the result then counts as
   NOT VERIFIED here, not PASS.
+- Follow-up (`offline-followup-untracked`): this image lacks the commands, so AC8-offline is checked on the real
+  Google TV after T11: unplug the router's internet (or the TV's network), cold-start tv-home, and expect the
+  unavailable screen within 2 s with no crash. Recorded in `docs/status.md` as a T11 step.
 - The deny blocks the app's sockets. Whether `ConnectivityManager` also reports no network to the app (the fast OFFLINE
   path) or the fetch fails as NETWORK is not distinguished; both show the unavailable screen with no cache.
 

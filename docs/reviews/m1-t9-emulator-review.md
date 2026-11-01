@@ -9,3 +9,10 @@
 - `supply-chain-tofu-google` (low, open from prior review): new google() content filters are correct and don't weaken strict verification; sample hash check vs Google still open.
 
 Checked and holds: contents: read only, no secrets in the emulator job, no pull_request_target; real keystore step only on push to main + strict; throwaway key is 1-day, umask 077, password via env, deleted, signed APK not uploaded; all actions SHA-pinned, persist-credentials false; only the PNG is uploaded; quoting OK; disk cleanup on fixed paths.
+
+## Delta re-review on 3054ab3: APPROVE
+- `offline-not-really-off` closed: no false PASS; the image lacks the per-package commands, so the job logs "AC8-offline: NOT VERIFIED"; when the commands exist, an unconfirmed deny fails the job.
+- `qa-silent-degrade` closed: a failed uiautomator dump now fails (emulator-qa.sh:54).
+- `offline-followup-untracked` (low): fixed in the QA doc (checked on the real TV after T11).
+- `offline-visibility` (low, optional, deferred): write NOT VERIFIED to the step summary.
+- `network-on-unverified` (info): network-on doesn't confirm the restore; harmless (check 10 tests only for no crash).
