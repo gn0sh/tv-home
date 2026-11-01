@@ -205,7 +205,24 @@ expect_text "m2b-home" "Calendar, "            # the tile's description: "Calend
 xml=$(ui_text)
 [[ -n $xml ]] || fail "M2b: uiautomator dump failed before OK; cannot confirm the full screen is closed"
 grep -qF "Calendar full screen" <<<"$xml" && fail "M2b: full-screen calendar is showing before OK"
-[[ -n $others ]] || warn "M2c: no other TV apps on this image, so focus starts on the Calendar tile and DPAD_DOWN from the app row is NOT VERIFIED"
+if [[ -z $others ]]; then
+  warn "M2c: no other TV apps on this image, so focus starts on the Calendar tile and DPAD_DOWN from the app row is NOT VERIFIED"
+else
+  # Make sure the app row has tiles (initial focus on the first app) before Down; otherwise focus would already be on
+  # the Calendar tile and this step would pass without testing Down. The row shows a message instead of tiles while
+  # apps load, fail, or none are found.
+  rowmsg=""
+  for _ in 1 2 3; do
+    xml=$(ui_text)
+    [[ -n $xml ]] || fail "M2c: uiautomator dump failed; cannot confirm the app row has tiles"
+    rowmsg=$(grep -oE 'Loading apps|Couldn.{1,6}t list apps|No TV apps found' <<<"$xml" | head -1 || true)
+    [[ -z $rowmsg ]] && break
+    sleep 2
+  done
+  printf '%s\n' "$xml" > "$OUT/ui-m2c-app-row.xml"
+  [[ -z $rowmsg ]] || fail "M2c: the app row still shows \"$rowmsg\" although this image has other TV apps"
+  pass "M2c: the app row shows tiles (no loading/failed/empty message), so initial focus is on an app tile"
+fi
 sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
 sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
 in_front || fail "M2b: OK after DPAD_DOWN left the app (focus did not reach the Calendar tile; an app opened?)"
@@ -269,7 +286,7 @@ expect_app_opened() { # $1 = label; sets LAUNCHED (not a $(...) capture, so fail
 
 step "M2 app row: OK on the initial focus (first app tile) opens it; Down then Up returns to the app row"
 if [[ -z $others ]]; then
-  warn "M2 launch and M2c Up NOT VERIFIED: this image has no other LEANBACK_LAUNCHER app, so the app row is empty"
+  warn "M2 launch, M2c Up and single Back from an app tile NOT VERIFIED: this image has no other LEANBACK_LAUNCHER app, so the app row is empty"
 else
   sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
   in_front || fail "M2: home screen not in front before OK"
@@ -284,6 +301,10 @@ else
   expect_app_opened "M2c"
   pass "M2c: Down then Up returned focus to the app row (OK opened $LAUNCHED)"
   return_home "M2c" "$LAUNCHED"
+  # Focus is now on an app tile inside the carousel: one Back must leave the app (home-back-twice).
+  sh_ input keyevent KEYCODE_BACK; sleep 2
+  in_front && fail "M2c: one Back with focus on an app tile does not leave the app (now: $(resumed | head -1 | sed 's/^ *//'))"
+  pass "M2c: one Back with focus on an app tile leaves the app"
   no_app_crash_yet "M2 launch"
 fi
 
