@@ -138,6 +138,8 @@ fun HomeScreen(
     // What the hero shows: the focused tile's label. Written from the tiles' onFocused; read only inside the hero's title.
     val heroLabel = remember { mutableStateOf(HERO_IDLE_TITLE) }
     val heroTitle = remember { { heroLabel.value } }
+    var heroReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { withFrameNanos { }; heroReady = true }
     Box(
         Modifier
             .fillMaxSize()
@@ -149,7 +151,9 @@ fun HomeScreen(
         // purpose. Compose maps Back to FocusDirection.Exit, which moves focus to the nearest focusable ancestor of the
         // focused tile and consumes the key. A focusable container above the tiles would take the first Back and only
         // the second would reach the activity.
-        HeroLayer(heroTitle)
+        // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
+        // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
+        if (heroReady) HeroLayer(heroTitle)
         Column(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
         ) {
