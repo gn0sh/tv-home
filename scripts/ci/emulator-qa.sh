@@ -347,6 +347,13 @@ fi
 focused_node() {
   local xml node
   xml=$(ui_text)
+  # An empty dump is a failed dump (ui_text retried already), not "nothing has focus": say so, so a flaky uiautomator
+  # is not read as a focus bug (reentry-qa-flaky-dump). Runs in a $(...) subshell, so the error goes to stderr (which
+  # is the log too) and the non-zero exit makes the caller's assignment fail under set -e.
+  if [[ -z $xml ]]; then
+    echo "::error::UI dump failed: uiautomator gave no hierarchy after its retries, so focus cannot be read" >&2
+    exit 1
+  fi
   node=$(grep -oE '<node [^>]*focused="true"[^>]*>' <<<"$xml" | head -1 || true)
   [[ -n $node ]] || return 0
   printf '%s|%s\n' "$(sed -E 's/.*content-desc="([^"]*)".*/\1/' <<<"$node")" \
@@ -415,6 +422,31 @@ else
   in_front && fail "re-entry: one Back on an app tile after re-entry does not leave the app (home-back-twice)"
   pass "re-entry: one Back leaves the app"
   no_app_crash_yet "row re-entry"
+fi
+
+step "Hero (M2e): the hero title matches the focused tile after Right x2"
+# The hero title carries the content description "Hero title: <label>"; the focused app tile's description is its label.
+hero_title() {
+  local xml; xml=$(ui_text)
+  if [[ -z $xml ]]; then echo "::error::UI dump failed: uiautomator gave no hierarchy after its retries, so the hero title cannot be read" >&2; exit 1; fi
+  grep -oE 'content-desc="Hero title: [^"]*"' <<<"$xml" | head -1 | sed -E 's/^content-desc="Hero title: (.*)"$/\1/' || true
+}
+if (( napps < 3 )); then
+  warn "Hero title check NOT VERIFIED: $napps other TV app(s) on this image, Right x2 has nowhere to go"
+else
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  in_front || fail "hero: home screen not in front"
+  key DPAD_RIGHT; key DPAD_RIGHT
+  cur=$(focused_node); want=${cur%%|*}
+  [[ -n $want ]] || fail "hero: no focused tile after Right x2"
+  got=$(hero_title)
+  [[ -n $got ]] || fail "hero: no node with a 'Hero title: ...' description in the UI dump"
+  [[ $got == "$want" ]] || fail "hero: title is '$got' but the focused tile is '$want'"
+  pass "hero: after Right x2 the title '$got' matches the focused tile"
+  sh_ input keyevent KEYCODE_BACK; sleep 2
+  in_front && fail "hero: one Back with the hero showing does not leave the app (home-back-twice)"
+  pass "hero: one Back leaves the app"
+  no_app_crash_yet "hero"
 fi
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"
