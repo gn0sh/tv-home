@@ -384,6 +384,7 @@ focus_after() { # $1 = label
   printf '%s\n' "$cur"
 }
 
+ASK_DESC_PREFIX="Ask Claude"
 step "Row re-entry (fix-app-row-scroll): scroll right, leave the row, come back Up, Right still moves the row"
 # Brian's bug after M2d: the row scrolled on first open, but once focus left it (Down to Calendar or the Ask button)
 # Up put focus on the row's invisible scroll container, and Right did nothing. Checked on the focused node of the UI
@@ -409,7 +410,13 @@ else
   (( napps >= 5 )) || warn "re-entry: only $napps apps, so the row may not overflow the screen; scrolling itself NOT VERIFIED here"
   key DPAD_DOWN
   cur=$(focus_after re-entry)
-  [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Down from '$far' did not reach the Calendar tile (now '${cur%%|*}')"
+  # 2D search picks the dock target nearest below: the Calendar tile, or the Ask button from a tile far right.
+  case ${cur%%|*} in
+    Calendar,*) ;;
+    "${ASK_DESC_PREFIX}"*) pass "re-entry: Down from '$far' reached the Ask button"; key DPAD_UP; cur=$(focus_after re-entry)
+      [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach the Calendar tile (now '$cur')" ;;
+    *) fail "re-entry: Down from '$far' did not reach the dock (focused node: '$cur')" ;;
+  esac
   key DPAD_UP
   cur=$(focus_after re-entry)
   [[ ${cur%%|*} == "$far" ]] || fail "re-entry: Up from Calendar did not return to '$far' (now '${cur%%|*}'; empty means focus went to the row container)"
