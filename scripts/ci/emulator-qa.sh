@@ -174,18 +174,172 @@ no_app_crash_yet "cold start"
 
 step "AC5 D-pad/Back walk (no focus trap, no crash)"
 before=$(pid_of)
-for k in DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_UP DPAD_UP DPAD_RIGHT DPAD_LEFT DPAD_CENTER DPAD_DOWN DPAD_CENTER DPAD_UP DPAD_LEFT; do
+# No DPAD_CENTER here: on the home screen OK opens the full-screen calendar or launches an app (checked below).
+WALK="DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_UP DPAD_UP DPAD_RIGHT DPAD_RIGHT DPAD_LEFT DPAD_DOWN DPAD_UP DPAD_LEFT DPAD_LEFT"
+for k in $WALK; do
   sh_ input keyevent "KEYCODE_$k"; sleep 0.4
 done
 sleep 1
 [[ -n $before && $(pid_of) == "$before" ]] || fail "process changed or died during the D-pad walk"
 in_front || fail "AgendaActivity left the foreground during the D-pad walk"
-pass "12 D-pad keys: still in front, same process"
+pass "$(wc -w <<<"$WALK") D-pad keys: still in front, same process"
 sh_ input keyevent KEYCODE_BACK; sleep 2
 if in_front; then sh_ input keyevent KEYCODE_BACK; sleep 2; fi
 in_front && fail "Back does not leave the app (focus/Back trap)"
 pass "Back leaves the app (now: $(resumed | head -1 | sed 's/^ *//'))"
 no_app_crash_yet "D-pad walk"
+
+# Other TV launcher apps on this image: the app row's tiles. Which is first depends on the image, so it is only reported.
+others=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER \
+  | tr -d '\r' | sed 's/^[[:space:]]*//' | grep '/' | grep -v "^$PKG/" || true)
+echo "other TV launcher entries:"; printf '%s\n' "$others" | sed 's/^/  /'
+
+step "M2c dock: DPAD_DOWN reaches the Calendar tile, OK opens the full screen, Back returns to it"
+# Home is two rows: the app carousel, and below it the dock with the Calendar tile. Initial focus is the first app tile
+# (or the Calendar tile when the row has no apps), so DPAD_DOWN reaches the Calendar tile either way. The dock does not
+# depend on other apps being installed. Still "not set up" here (no URL yet), so the full screen shows that message
+# and the panel itself holds focus.
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+in_front || fail "M2b: home screen not in front before OK"
+expect_text "m2b-home" "Calendar, "            # the tile's description: "Calendar, <weekday date>. <status>."
+xml=$(ui_text)
+[[ -n $xml ]] || fail "M2b: uiautomator dump failed before OK; cannot confirm the full screen is closed"
+grep -qF "Calendar full screen" <<<"$xml" && fail "M2b: full-screen calendar is showing before OK"
+if [[ -z $others ]]; then
+  warn "M2c: no other TV apps on this image, so focus starts on the Calendar tile and DPAD_DOWN from the app row is NOT VERIFIED"
+else
+  # Make sure the app row has tiles (initial focus on the first app) before Down; otherwise focus would already be on
+  # the Calendar tile and this step would pass without testing Down. The row shows a message instead of tiles while
+  # apps load, fail, or none are found.
+  rowmsg=""
+  for _ in 1 2 3; do
+    xml=$(ui_text)
+    [[ -n $xml ]] || fail "M2c: uiautomator dump failed; cannot confirm the app row has tiles"
+    rowmsg=$(grep -oE 'Loading apps|Couldn.{1,6}t list apps|No TV apps found' <<<"$xml" | head -1 || true)
+    [[ -z $rowmsg ]] && break
+    sleep 2
+  done
+  printf '%s\n' "$xml" > "$OUT/ui-m2c-app-row.xml"
+  [[ -z $rowmsg ]] || fail "M2c: the app row still shows \"$rowmsg\" although this image has other TV apps"
+  pass "M2c: the app row shows tiles (no loading/failed/empty message), so initial focus is on an app tile"
+fi
+sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
+sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
+in_front || fail "M2b: OK after DPAD_DOWN left the app (focus did not reach the Calendar tile; an app opened?)"
+expect_text "m2b-full" "Calendar full screen"
+expect_text "m2b-full-message" "Calendar not set up"
+before=$(pid_of)
+for k in DPAD_DOWN DPAD_DOWN DPAD_UP DPAD_LEFT DPAD_RIGHT; do sh_ input keyevent "KEYCODE_$k"; sleep 0.4; done
+[[ -n $before && $(pid_of) == "$before" ]] || fail "M2b: process changed or died during D-pad on the full-screen calendar"
+in_front || fail "M2b: D-pad on the full-screen calendar left the app"
+expect_text "m2b-full-after-dpad" "Calendar full screen"
+sh_ input keyevent KEYCODE_BACK; sleep 2
+in_front || fail "M2b: Back on the full-screen calendar left the app (it should return to the row)"
+xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-m2b-back.xml"
+[[ -n $xml ]] || fail "M2b: uiautomator dump failed after Back"
+grep -qF "Calendar full screen" <<<"$xml" && fail "M2b: Back did not close the full-screen calendar"
+pass "M2b: Back closed the full-screen calendar and the app stayed in front"
+# Focus is back on the Calendar tile if OK opens the full screen again (uiautomator's focused flag is not relied on).
+# With apps present this also shows focus did not go to the first app tile (OK there would open that app).
+sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
+in_front || fail "M2b: OK after Back left the app: focus went back to an app tile, not the Calendar tile"
+expect_text "m2b-refocus" "Calendar full screen"
+pass "M2b: focus was restored to the Calendar tile (OK reopened the full screen)"
+sh_ input keyevent KEYCODE_BACK; sleep 2
+in_front || fail "M2b: second Back on the full-screen calendar left the app"
+sh_ input keyevent KEYCODE_BACK; sleep 2
+if in_front; then
+  echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-m2b-back-home.xml"
+  if [[ -z $xml ]]; then echo "diagnostic: uiautomator dump failed"
+  elif grep -qF "Calendar full screen" <<<"$xml"; then echo "diagnostic: \"Calendar full screen\" IS showing"
+  else echo "diagnostic: \"Calendar full screen\" is not showing (home row in front)"; fi
+  fail "M2b: one Back on the home row does not leave the app"
+fi
+pass "M2b: Back on the home row leaves the app"
+note "M2b with event rows (focus on the first row, Up/Down through rows, scrolling) is NOT VERIFIED here: the emulator only has the dummy URL, so it never shows rows"
+no_app_crash_yet "M2b calendar"
+
+step "M1b Ask Claude tile: opens the Ask view, shows not set up, Back returns to the tile, one Back exits"
+# The dock is Calendar, then Ask Claude: DPAD_DOWN reaches the dock (Calendar), DPAD_RIGHT the Ask tile. No API key
+# is ever put on the emulator, so the view must say it isn't set up and send nothing.
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+in_front || fail "M1b: home screen not in front"
+expect_text "m1b-home" "Ask Claude. Talk or type a question."
+sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
+sh_ input keyevent KEYCODE_DPAD_RIGHT; sleep 1
+sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
+in_front || fail "M1b: OK on the Ask Claude tile left the app"
+expect_text "m1b-ask" "Ask Claude full screen"
+expect_text "m1b-not-set-up" "set up yet"           # "Ask Claude isn't set up yet" (the apostrophe is escaped in the dump)
+sh_ input keyevent KEYCODE_BACK; sleep 2
+in_front || fail "M1b: Back on the Ask view left the app (it should return to the dock)"
+xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-m1b-back.xml"
+[[ -n $xml ]] || fail "M1b: uiautomator dump failed after Back"
+grep -qF "Ask Claude full screen" <<<"$xml" && fail "M1b: Back did not close the Ask view"
+# Focus went back to the Ask tile if OK opens the Ask view again (not the calendar, not an app).
+sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
+in_front || fail "M1b: OK after Back left the app: focus was not on the Ask tile"
+expect_text "m1b-refocus" "Ask Claude full screen"
+pass "M1b: Back returned focus to the Ask Claude tile (OK reopened the Ask view)"
+sh_ input keyevent KEYCODE_BACK; sleep 2
+in_front || fail "M1b: second Back on the Ask view left the app"
+sh_ input keyevent KEYCODE_BACK; sleep 2
+if in_front; then
+  echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"
+  fail "M1b: one Back with focus on the Ask tile does not leave the app"
+fi
+pass "M1b: one Back with focus on the Ask tile leaves the app"
+note "M1b speech input, the Claude API call, answers, Open and the follow-up are NOT VERIFIED here: no API key or recognizer on the emulator (JVM tests in :core cover the logic; the device check is Brian's)"
+no_app_crash_yet "M1b ask"
+
+# Return to our home screen from an app we opened. Third-party apps may consume Back (YouTube TV shows an exit
+# dialog), so Back is tried first and then the app is force-stopped; either way our task must be underneath and resume.
+return_home() { # $1 = label, $2 = launched package
+  local how="" _
+  for _ in 1 2; do sh_ input keyevent KEYCODE_BACK; sleep 3; if in_front; then how="Back"; break; fi; done
+  if [[ -z $how ]]; then
+    note "$1: $2 kept Back; force-stopping it to check our task is underneath"
+    sh_ am force-stop "$2"; sleep 3
+    in_front && how="force-stop of $2"
+  fi
+  [[ -n $how ]] || fail "$1: home screen did not return after Back or force-stop of $2 (now: $(resumed | head -1 | sed 's/^ *//'))"
+  pass "$1: home screen resumed after $how"
+}
+LAUNCHED=""
+expect_app_opened() { # $1 = label; sets LAUNCHED (not a $(...) capture, so fail's ::error:: line is printed)
+  local top launched
+  top=$(resumed | head -1 | sed 's/^ *//')
+  in_front && fail "$1: OK did not open another app (still in front: $top)"
+  launched=$(grep -oE '[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+' <<<"$top" | head -1 | cut -d/ -f1)
+  [[ -n $launched ]] || fail "$1: cannot tell which app is in front ($top)"
+  cut -d/ -f1 <<<"$others" | grep -qxF "$launched" || fail "$1: front app $launched is not one of the TV launcher apps"
+  LAUNCHED=$launched
+}
+
+step "M2 app row: OK on the initial focus (first app tile) opens it; Down then Up returns to the app row"
+if [[ -z $others ]]; then
+  warn "M2 launch, M2c Up and single Back from an app tile NOT VERIFIED: this image has no other LEANBACK_LAUNCHER app, so the app row is empty"
+else
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  in_front || fail "M2: home screen not in front before OK"
+  sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 5
+  expect_app_opened "M2"
+  pass "M2: OK on the first app tile (initial focus) opened $LAUNCHED"
+  return_home "M2" "$LAUNCHED"
+  # Down to the dock, Up back to the app row: OK must open an app again, not the full-screen calendar.
+  sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
+  sh_ input keyevent KEYCODE_DPAD_UP; sleep 1
+  sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 5
+  expect_app_opened "M2c"
+  pass "M2c: Down then Up returned focus to the app row (OK opened $LAUNCHED)"
+  return_home "M2c" "$LAUNCHED"
+  # Focus is now on an app tile inside the carousel: one Back must leave the app (home-back-twice).
+  sh_ input keyevent KEYCODE_BACK; sleep 2
+  in_front && fail "M2c: one Back with focus on an app tile does not leave the app (now: $(resumed | head -1 | sed 's/^ *//'))"
+  pass "M2c: one Back with focus on an app tile leaves the app"
+  no_app_crash_yet "M2 launch"
+fi
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"
 network on

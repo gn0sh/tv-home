@@ -42,7 +42,21 @@ class AppManifestTest {
     @Test fun onlyTheTwoNetworkPermissions() {
         val perms = manifest.kids("uses-permission").map { it.attr("name") }.toSet()
         assertEquals(setOf("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"), perms)
-        assertTrue(manifest.kids("queries").isEmpty())
+    }
+
+    /** M2: package visibility is only "apps with a TV launcher entry"; no <package> or <provider> entries. */
+    @Test fun queriesOnlyLeanbackLauncherIntent() {
+        val q = manifest.kids("queries").single()
+        assertTrue(q.kids("package").isEmpty() && q.kids("provider").isEmpty())
+        val intent = q.kids("intent").single()
+        assertEquals(listOf("android.intent.action.MAIN"), intent.kids("action").map { it.attr("name") })
+        assertEquals(listOf("android.intent.category.LEANBACK_LAUNCHER"), intent.kids("category").map { it.attr("name") })
+        assertTrue(intent.kids("data").isEmpty())
+    }
+
+    /** Becoming the default home is M3 (a hard stop): no HOME category anywhere yet. */
+    @Test fun noHomeCategory() {
+        assertFalse(File(app, "src/main/AndroidManifest.xml").readText().contains("android.intent.category.HOME"))
     }
 
     @Test fun agendaIsAOnlyLeanbackLauncherEntry() {

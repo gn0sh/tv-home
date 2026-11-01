@@ -55,6 +55,19 @@ On the TV: Settings > System > Developer options > turn **Network debugging** (o
 ```
 You should see `configured=0` and `Removed.`
 
+## Ask Claude: put an API key on the TV (optional)
+The Ask Claude tile needs an Anthropic API key. Use a **dedicated** key in a workspace with a monthly spend limit set
+first: anyone with adb access to the TV could read it. The app also stops at 20 questions a day.
+1. Connect from the PC (steps 1 and 2).
+2. In the same PowerShell window, from the tv-home folder:
+   ```
+   .\scripts\provision.ps1 -Key anthropic_api_key
+   ```
+3. Paste the key at the prompt (asterisks only), press Enter. You should see `configured=1 last=SAVED_API_KEY` and `Saved on the TV.`
+4. Clear your clipboard history (Win+V, **Clear all**), then turn debugging off (step 5).
+
+To remove it: `.\scripts\provision.ps1 -Key anthropic_api_key -Clear`.
+
 ## If something goes wrong
 - `Not valid ... nothing was sent`: the link was cut short or is not the **secret iCal** address. Copy it again.
 - `No device connected`: repeat step 2.

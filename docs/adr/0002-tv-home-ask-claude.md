@@ -42,6 +42,45 @@ calendar URL. Prefer no new accounts.
    dedicated key in a dedicated workspace with a monthly spend limit; the app enforces a daily question cap
    (default 20).
 
+## M1b lean (2026-11-01, built on branch `m1b-ask-claude`)
+Brian chose "start now (lean)": a general assistant he can talk to from the dock, which can also open shows. What was
+built, and where it differs from the decisions above:
+- **Tile and view:** an Ask Claude tile in the dock after Calendar; OK opens a full-screen Ask view (BackHandler, one
+  Back to leave, conversation dropped on leaving). Speech via the system `RecognizerIntent` dialog (no RECORD_AUDIO);
+  if there is none, a text field. The transcript is shown with Send / Edit / Cancel before anything is sent.
+- **Call:** raw HTTPS to `/v1/messages` with OkHttp in `:core` (`AnthropicClient`), the fallback named under
+  Alternatives, instead of the SDK and a new `:assistant-claude` module: smaller APK, no R8 rules. Non-streaming,
+  20 s call timeout, no redirects, host pinned to `api.anthropic.com`, no automatic retries. Model `claude-opus-5-5`,
+  effort `low`, thinking left adaptive (Opus 5.5 cannot disable it), `max_tokens` 4096, `fallbacks: "default"` for
+  server-side refusal fallback. **No web search** in this slice (decision 2 deferred): Claude answers from its own
+  knowledge, so availability on a service can be wrong; the answer and Open screen make the pick visible first.
+- **Reply:** structured output (`output_config.format` JSON schema) `{answer, open: {app_package, title, deep_link} |
+  null}`, `app_package` an enum of installed packages. Parsed strictly in `:core` (`AskReply.parse`): no valid
+  `answer` gives "Couldn't work that out"; an `open` naming an app that is not installed, or malformed, is dropped.
+  Instead of decision 3's `services.json` id regexes, a deep link is used only if it is a plain https URL, launched as
+  a VIEW intent restricted to the chosen package; else the app's search for the title; else its home. The screen says
+  which one Open will use. Nothing launches without Open.
+- **Limits:** one follow-up (spec AC6), then Start over. Daily cap 20 (decision 7), counted per API call including
+  Retry, stored as a date and a count only (`no_backup/ask-count.txt`); a call refused with 400/401/403 is given
+  back. Errors: no key "Ask Claude isn't set up yet"; 401/403 "Claude rejected the key"; 400 "Claude rejected the
+  request"; 429/529 "Claude is busy" with Retry; offline / 5xx / timeout "Can't reach Claude" with Retry; refusal or
+  bad reply "Couldn't work that out".
+- **Data:** only the question (and the follow-up with the earlier answer) and installed app names + package ids.
+  Never calendar data. Nothing logged; every result type's toString hides text; errors are enums.
+- **Key:** unchanged path (ADR 0001): `provision.ps1 -Key anthropic_api_key` / `provision.sh -k anthropic_api_key`,
+  stdin and content write only. Already supported; no key exists anywhere yet. Putting one on the TV is Brian's call.
+- **Not in this slice:** the overlay (decision 6), web search, streaming progress, the B0 "try the built-in assistant
+  first" check.
+
+**Cost per question (spec AC9, estimate, not measured):** input about 700-1,000 tokens (instructions ~250, app list
+~10 tokens per app, reply schema ~150, question ~20; a follow-up adds ~200) = $0.003-0.004 at $4/MTok. Output about
+200-1,200 tokens (answer ~150, JSON ~40, low-effort thinking 0-1,000) = $0.004-0.024 at $20/MTok. **Typical ~$0.015,
+range $0.01-0.03** per question; without web search this is well under the ~$0.10 above. `max_tokens` 4096 caps
+one question at about $0.09 (4,096 x $20/MTok plus input), which only a runaway reply would reach. The daily cap
+bounds a typical day at about $0.60 (~$18 a month if used to the cap every day) and a worst case at about $1.80 a
+day; at 5 questions a day, about $2-3 a month. Sonnet 5.5 ($2/$10)
+would halve it (one constant, `AskConfig.MODEL`).
+
 ## Alternatives considered
 - **Don't build it: the built-in Google TV assistant (Gemini / Google Assistant on the remote's mic button)**
   already handles "play Stranger Things on Netflix" on many devices, at no cost, with no sideload. Strongest case
