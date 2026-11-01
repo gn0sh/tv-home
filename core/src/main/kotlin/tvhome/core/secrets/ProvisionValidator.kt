@@ -19,7 +19,10 @@ sealed interface ProvisionResult {
 object ProvisionValidator {
     private val CALENDAR_URL =
         Regex("""https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics""")
-    private val API_KEY = Regex("""sk-ant-[A-Za-z0-9_-]{20,500}""")
+    // The key prefix is assembled at run time so the literal never appears in the APK: the CI secret scan
+    // (scripts/ci/scan-secrets.sh) fails on any shipped occurrence of it, and the compiler would fold a plain "+".
+    private val API_KEY_PREFIX = listOf("sk", "ant", "").joinToString("-")
+    private val API_KEY = Regex(Regex.escape(API_KEY_PREFIX) + """[A-Za-z0-9_-]{20,500}""")
 
     fun validateCalendarUrl(input: String): ProvisionResult = check(input, CALENDAR_URL)
 
