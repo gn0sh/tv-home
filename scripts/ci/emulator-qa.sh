@@ -260,36 +260,38 @@ pass "M2b: Back on the home row leaves the app"
 note "M2b with event rows (focus on the first row, Up/Down through rows, scrolling) is NOT VERIFIED here: the emulator only has the dummy URL, so it never shows rows"
 no_app_crash_yet "M2b calendar"
 
-step "M1b Ask Claude tile: opens the Ask view, shows not set up, Back returns to the tile, one Back exits"
-# The dock is Calendar, then Ask Claude: DPAD_DOWN reaches the dock (Calendar), DPAD_RIGHT the Ask tile. No API key
+step "M1b/M2d Ask Claude button: opens the Ask view, shows not set up, Back returns to the button, one Back exits"
+# M2d: the Ask Claude pill sits bottom centre, below the dock (Calendar only): DPAD_DOWN from the app row reaches
+# Calendar, DPAD_DOWN again the button (with no apps installed focus starts on Calendar and the second Down is a
+# no-op on the button). No API key
 # is ever put on the emulator, so the view must say it isn't set up and send nothing.
 sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
 in_front || fail "M1b: home screen not in front"
 expect_text "m1b-home" "Ask Claude. Talk or type a question."
 sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
-sh_ input keyevent KEYCODE_DPAD_RIGHT; sleep 1
+sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
 sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
-in_front || fail "M1b: OK on the Ask Claude tile left the app"
+in_front || fail "M1b: OK on the Ask Claude button left the app"
 expect_text "m1b-ask" "Ask Claude full screen"
 expect_text "m1b-not-set-up" "set up yet"           # "Ask Claude isn't set up yet" (the apostrophe is escaped in the dump)
 sh_ input keyevent KEYCODE_BACK; sleep 2
-in_front || fail "M1b: Back on the Ask view left the app (it should return to the dock)"
+in_front || fail "M1b: Back on the Ask view left the app (it should return to the home screen)"
 xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-m1b-back.xml"
 [[ -n $xml ]] || fail "M1b: uiautomator dump failed after Back"
 grep -qF "Ask Claude full screen" <<<"$xml" && fail "M1b: Back did not close the Ask view"
-# Focus went back to the Ask tile if OK opens the Ask view again (not the calendar, not an app).
+# Focus went back to the Ask button if OK opens the Ask view again (not the calendar, not an app).
 sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
-in_front || fail "M1b: OK after Back left the app: focus was not on the Ask tile"
+in_front || fail "M1b: OK after Back left the app: focus was not on the Ask button"
 expect_text "m1b-refocus" "Ask Claude full screen"
-pass "M1b: Back returned focus to the Ask Claude tile (OK reopened the Ask view)"
+pass "M1b: Back returned focus to the Ask Claude button (OK reopened the Ask view)"
 sh_ input keyevent KEYCODE_BACK; sleep 2
 in_front || fail "M1b: second Back on the Ask view left the app"
 sh_ input keyevent KEYCODE_BACK; sleep 2
 if in_front; then
   echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"
-  fail "M1b: one Back with focus on the Ask tile does not leave the app"
+  fail "M1b: one Back with focus on the Ask button does not leave the app"
 fi
-pass "M1b: one Back with focus on the Ask tile leaves the app"
+pass "M1b: one Back with focus on the Ask button leaves the app"
 note "M1b speech input, the Claude API call, answers, Open and the follow-up are NOT VERIFIED here: no API key or recognizer on the emulator (JVM tests in :core cover the logic; the device check is Brian's)"
 no_app_crash_yet "M1b ask"
 

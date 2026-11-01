@@ -37,6 +37,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -80,14 +81,16 @@ private const val FOCUS_SCALE = 1.1f
 const val CALENDAR_FULL_SCREEN = "Calendar full screen"
 
 /**
- * M2c home screen: two rows. On top the app carousel ([apps]: tiles, or a message while loading / failed / empty);
- * below it the dock, a left-aligned row of dashboard tiles: the Calendar tile ([tile]), then Ask Claude (M1b). The dock
- * never waits on the package manager or on Claude. OK on a dock tile switches this screen to that tile's full screen
- * (the agenda, or the Ask view through [ask]); Back there returns here with focus on the same tile. Back here is not
- * handled, so it exits the activity with one press. Colours and tile size come from [theme].
+ * M2d home screen: two rows and a button. On top the app carousel ([apps]: tiles, or a message while loading / failed /
+ * empty); below it the dock, a left-aligned row of dashboard tiles holding the Calendar tile ([tile]); at the bottom
+ * centre a small "Ask Claude" pill button (M2d, replacing the M1b Ask tile). Neither waits on the package manager or on
+ * Claude. OK on the Calendar tile or the button switches this screen to its full screen (the agenda, or the Ask view
+ * through [ask]); Back there returns here with focus on the same tile or button. Back here is not handled, so it exits
+ * the activity with one press. Colours and tile size come from [theme].
  *
  * Focus: on launch the first app tile, or the Calendar tile while there are no apps; if apps arrive before the user
- * has pressed a key, focus moves to the first app tile. Down from the app row reaches the dock (2D focus search); Up
+ * has pressed a key, focus moves to the first app tile. Down from the app row reaches the dock and Down again the Ask
+ * button (2D focus search; Up from the button goes to the Calendar tile, set explicitly); Up from the dock
  * returns to the app tile that last had focus (focusRestorer on the row, falling back to the remembered tile, then the
  * first). The row's scroll position and last-focused tile live above the full-screen switch, so they survive it.
  */
@@ -144,7 +147,11 @@ fun HomeScreen(
         AppRow(apps, appList, theme, rowState, appFocus, onLaunch)
         Dock(theme) {
             CalendarTileView(tile, theme, calendar, onClick = { open = DOCK_CALENDAR })
-            AskTileView(theme, askTile, onClick = { open = DOCK_ASK })
+        }
+        Spacer(Modifier.weight(1f))
+        // Bottom centre, inside the safe-area margins; the vertical padding is room for the focus scale.
+        Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+            AskButton(theme, askTile, up = calendar, onClick = { open = DOCK_ASK })
         }
     }
 }
@@ -340,18 +347,41 @@ private fun CalendarTileView(tile: CalendarTile, theme: HomeTheme, requester: Fo
     }
 }
 
-/** The Ask Claude tile: its name large and a one-line hint. It shows no state, so it never waits on Claude. */
+/**
+ * The Ask Claude pill: small (about 250 x 56 dp), "✦ Ask Claude", the tiles' focus treatment (scale, fill, ring) in the
+ * theme's colours. Up goes to the Calendar tile (explicit, so it never jumps to an app tile). It shows no state, so it
+ * never waits on Claude. A single focus target with no focusable parent (home-back-twice).
+ */
 @Composable
-private fun AskTileView(theme: HomeTheme, requester: FocusRequester, onClick: () -> Unit) {
-    TileFrame(theme, AskCopy.TILE_LABEL, "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}.", requester, onClick) {
-        val k = theme.tileHeightDp / 135f
-        Column(Modifier.fillMaxSize().clearAndSetSemantics { }.padding(horizontal = (14 * k).dp, vertical = (10 * k).dp)) {
-            Text(AskCopy.TILE_LABEL, color = color(theme.text), fontSize = (28 * k).sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height((6 * k).dp))
-            Text(AskCopy.TILE_HINT, color = color(theme.secondaryText), fontSize = (18 * k).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
+private fun AskButton(theme: HomeTheme, requester: FocusRequester, up: FocusRequester, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(50)
+    Row(
+        Modifier
+            .size(ASK_BUTTON_W_DP.dp, ASK_BUTTON_H_DP.dp)
+            .graphicsLayer {
+                val s = if (focused) FOCUS_SCALE else 1f
+                scaleX = s; scaleY = s
+            }
+            .clip(shape)
+            .background(color(if (focused) theme.focusFill else theme.tile), shape)
+            .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
+            .focusRequester(requester)
+            .focusProperties { this.up = up }
+            .onFocusChanged { focused = it.isFocused }
+            .clearAndSetSemantics { contentDescription = "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}." }
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("\u2726", color = color(theme.focusRing), fontSize = 22.sp)
+        Spacer(Modifier.width(10.dp))
+        Text(AskCopy.TILE_LABEL, color = color(theme.text), fontSize = Tokens.SECONDARY_SP.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
+
+private const val ASK_BUTTON_W_DP = 250
+private const val ASK_BUTTON_H_DP = 56
 
 private const val DOCK_CALENDAR = "calendar"
 private const val DOCK_ASK = "ask"
