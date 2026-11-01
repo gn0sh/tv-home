@@ -189,11 +189,11 @@ in_front && fail "Back does not leave the app (focus/Back trap)"
 pass "Back leaves the app (now: $(resumed | head -1 | sed 's/^ *//'))"
 no_app_crash_yet "D-pad walk"
 
-step "M2 tile row: OK opens the first app, Back returns"
+step "M2 tile row: OK opens the first app, then the home screen comes back"
 # The tile row lists other apps with a LEANBACK_LAUNCHER entry; initial focus is the first tile. The emulator image
 # has few apps, and which one is first depends on the image, so the app itself is only reported.
 others=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER \
-  | tr -d '\r' | grep '/' | grep -v "^$PKG/" || true)
+  | tr -d '\r' | sed 's/^[[:space:]]*//' | grep '/' | grep -v "^$PKG/" || true)
 echo "other TV launcher entries:"; printf '%s\n' "$others" | sed 's/^/  /'
 if [[ -z $others ]]; then
   warn "M2 launch NOT VERIFIED: this image has no other LEANBACK_LAUNCHER app, so the row is empty"
@@ -203,10 +203,21 @@ else
   sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 5
   top=$(resumed | head -1 | sed 's/^ *//')
   in_front && fail "M2: OK on the first tile did not open another app (still in front: $top)"
-  pass "M2: OK on the first tile opened another app ($top)"
-  for _ in 1 2 3; do sh_ input keyevent KEYCODE_BACK; sleep 3; in_front && break; done
-  in_front || fail "M2: Back from the launched app did not return to the home screen (now: $(resumed | head -1 | sed 's/^ *//'))"
-  pass "M2: Back returns to the home screen"
+  launched=$(grep -oE '[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+' <<<"$top" | head -1 | cut -d/ -f1)
+  [[ -n $launched ]] || fail "M2: cannot tell which app is in front ($top)"
+  cut -d/ -f1 <<<"$others" | grep -qxF "$launched" || fail "M2: front app $launched is not one of the TV launcher apps"
+  pass "M2: OK on the first tile opened $launched"
+  # Third-party apps may consume Back (YouTube TV shows an exit dialog), so Back is tried first and then the app is
+  # force-stopped; either way our home screen must be the task underneath and resume.
+  how=""
+  for _ in 1 2; do sh_ input keyevent KEYCODE_BACK; sleep 3; if in_front; then how="Back"; break; fi; done
+  if [[ -z $how ]]; then
+    note "M2: $launched kept Back; force-stopping it to check our task is underneath"
+    sh_ am force-stop "$launched"; sleep 3
+    in_front && how="force-stop of $launched"
+  fi
+  [[ -n $how ]] || fail "M2: home screen did not return after Back or force-stop of $launched (now: $(resumed | head -1 | sed 's/^ *//'))"
+  pass "M2: home screen resumed after $how"
   no_app_crash_yet "M2 launch"
 fi
 
