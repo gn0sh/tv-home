@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import tvhome.core.apps.AppLayout
 import tvhome.core.assistant.AskEngine
 import tvhome.core.assistant.OpenTarget
 import tvhome.core.assistant.askAppsOf
@@ -46,6 +47,8 @@ class AgendaActivity : ComponentActivity() {
     private var apps by mutableStateOf<AppsState>(AppsState.Loading)
     private var theme by mutableStateOf(HomeTheme.DEFAULT)
     private val installed = InstalledApps()
+    private var layout by mutableStateOf(SavedLayout())
+    private val layoutStore by lazy { AppLayoutStore(applicationContext) }
 
     /**
      * Speech for Ask Claude: the system recognizer dialog (RecognizerIntent), so the app needs no RECORD_AUDIO
@@ -89,6 +92,7 @@ class AgendaActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             theme = withContext(Dispatchers.IO) { InstalledApps.loadTheme(applicationContext) }
+            layout = withContext(Dispatchers.IO) { runCatching { layoutStore.load() }.getOrNull() } ?: SavedLayout()
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     val density = resources.displayMetrics.density
@@ -130,6 +134,14 @@ class AgendaActivity : ComponentActivity() {
                 tile = tile,
                 agenda = model,
                 ask = askHost,
+                layout = layout,
+                onLayoutChange = { next ->
+                    // Drop hidden entries for apps that are gone, so the stored set stays true to what is installed.
+                    val now = (apps as? AppsState.Loaded)?.apps?.map { it.app.packageName }
+                    val saved = if (now == null) next else next.copy(hidden = AppLayout.prune(next.hidden, now))
+                    layout = saved
+                    lifecycleScope.launch(Dispatchers.IO) { runCatching { layoutStore.save(saved) } }
+                },
             )
         }
     }
