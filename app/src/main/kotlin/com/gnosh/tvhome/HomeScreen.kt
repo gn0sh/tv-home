@@ -82,7 +82,8 @@ const val CALENDAR_FULL_SCREEN = "Calendar full screen"
 /**
  * M2d home screen: two rows and a button. On top the app carousel ([apps]: tiles, or a message while loading / failed /
  * empty); below it the dock, a left-aligned row of dashboard tiles holding the Calendar tile ([tile]); at the bottom
- * centre a small "Ask Claude" pill button (M2d, replacing the M1b Ask tile). Neither waits on the package manager or on
+ * centre, in the same band as the dock, a small "Ask Claude" pill button (M2d, replacing the M1b Ask tile). Behind it all
+ * the M2e hero ([HeroLayer]) shows the focused tile's label. Neither waits on the package manager or on
  * Claude. OK on the Calendar tile or the button switches this screen to its full screen (the agenda, or the Ask view
  * through [ask]); Back there returns here with focus on the same tile or button. Back here is not handled, so it exits
  * the activity with one press. Colours and tile size come from [theme].
@@ -133,28 +134,47 @@ fun HomeScreen(
         // Re-check after the frame: a key press in that frame settles focus, and must not be overridden (dock-preview-steal).
         if (firstApp != null) { if (focusSoon(firstApp) { !settled }) settled = true } else focusSoon(calendar) { !settled }
     }
-    Column(
+    // What the hero shows: the focused tile's label. Written from the tiles' onFocused; read only inside the hero's title.
+    val heroLabel = remember { mutableStateOf(HERO_IDLE_TITLE) }
+    val heroTitle = remember { { heroLabel.value } }
+    Box(
         Modifier
             .fillMaxSize()
             .background(color(theme.background))
             // Key handlers are not focus targets, so this does not reintroduce home-back-twice.
-            .onPreviewKeyEvent { settled = true; false }
-            // Nothing here is focusable, on purpose (home-back-twice): Compose maps Back to FocusDirection.Exit, which
-            // moves focus to the nearest focusable ancestor of the focused tile and consumes the key. A focusable
-            // container above the tiles would take the first Back and only the second would reach the activity.
-            .padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
+            .onPreviewKeyEvent { settled = true; false },
     ) {
-        AppRow(apps, appList, theme, rowState, appFocus, down = calendar, onLaunch)
-        Dock(theme) {
-            CalendarTileView(tile, theme, calendar, onClick = { open = DOCK_CALENDAR })
+        // The hero is drawn behind the tiles and has no focus target (home-back-twice): nothing here is focusable, on
+        // purpose. Compose maps Back to FocusDirection.Exit, which moves focus to the nearest focusable ancestor of the
+        // focused tile and consumes the key. A focusable container above the tiles would take the first Back and only
+        // the second would reach the activity.
+        HeroLayer(heroTitle)
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
+        ) {
+            Spacer(Modifier.weight(1f))
+            AppRow(apps, appList, theme, rowState, appFocus, down = calendar, onLaunch) { heroLabel.value = it }
+            Dock(theme) {
+                CalendarTileView(tile, theme, calendar, down = askTile, onFocused = { heroLabel.value = CALENDAR_TILE_LABEL }, onClick = { open = DOCK_CALENDAR })
+            }
         }
-        Spacer(Modifier.weight(1f))
-        // Bottom centre, inside the safe-area margins; the vertical padding is room for the focus scale.
-        Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-            AskButton(theme, askTile, up = calendar, onClick = { open = DOCK_ASK })
+        // Bottom centre, in the dock's band (beside the Calendar tile) so the hero gets the room: the pill is centred on
+        // the tile's box, inside the safe-area margins.
+        Box(
+            Modifier.fillMaxSize().padding(bottom = (Tokens.MARGIN_V_DP + dockPillInset(theme)).dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            AskButton(theme, askTile, up = calendar, onFocused = { heroLabel.value = AskCopy.TILE_LABEL }, onClick = { open = DOCK_ASK })
         }
     }
 }
+
+/** Title shown before any tile has focus. */
+private const val HERO_IDLE_TITLE = "Home"
+
+/** Distance from the dock band's bottom to the bottom of a pill that is centred on the Calendar tile's box. */
+private fun dockPillInset(theme: HomeTheme): Int =
+    rowPadding(theme).calculateBottomPadding().value.toInt() + TILE_LABEL_DP + (theme.tileHeightDp - ASK_BUTTON_H_DP) / 2
 
 /**
  * Requests focus after the next frame (the target may not be composed yet), retrying once. True when the request was
@@ -226,6 +246,7 @@ private fun AppRow(
     appFocus: AppFocus,
     down: FocusRequester,
     onLaunch: (LauncherApp) -> Unit,
+    onHeroLabel: (String) -> Unit,
 ) {
     if (apps.isEmpty()) {
         // The message takes the row's place, at the row's height, so the dock does not jump when apps arrive.
@@ -256,7 +277,7 @@ private fun AppRow(
     ) {
         items(apps, key = { it.app.packageName }) { t ->
             val pkg = t.app.packageName
-            AppTile(t, theme, appFocus.requester(pkg), down, onFocused = { appFocus.lastFocused = pkg }) { onLaunch(t.app) }
+            AppTile(t, theme, appFocus.requester(pkg), down, onFocused = { appFocus.lastFocused = pkg; onHeroLabel(t.app.label) }) { onLaunch(t.app) }
         }
     }
 }
@@ -331,8 +352,15 @@ private fun TileFrame(
  * the theme's tile height (designed at 135 dp). Calendar titles are plain text from outside: ellipsis, no markup.
  */
 @Composable
-private fun CalendarTileView(tile: CalendarTile, theme: HomeTheme, requester: FocusRequester, onClick: () -> Unit) {
-    TileFrame(theme, CALENDAR_TILE_LABEL, tile.description, requester, onClick) {
+private fun CalendarTileView(
+    tile: CalendarTile,
+    theme: HomeTheme,
+    requester: FocusRequester,
+    down: FocusRequester,
+    onFocused: () -> Unit,
+    onClick: () -> Unit,
+) {
+    TileFrame(theme, CALENDAR_TILE_LABEL, tile.description, requester, onClick, onFocused, down) {
         val k = theme.tileHeightDp / 135f
         val amber = color(Tokens.AMBER)
         // Read once, as the tile description; the texts are not read separately.
@@ -364,7 +392,7 @@ private fun CalendarTileView(tile: CalendarTile, theme: HomeTheme, requester: Fo
  * never waits on Claude. A single focus target with no focusable parent (home-back-twice).
  */
 @Composable
-private fun AskButton(theme: HomeTheme, requester: FocusRequester, up: FocusRequester, onClick: () -> Unit) {
+private fun AskButton(theme: HomeTheme, requester: FocusRequester, up: FocusRequester, onFocused: () -> Unit, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(50)
     Row(
@@ -379,7 +407,7 @@ private fun AskButton(theme: HomeTheme, requester: FocusRequester, up: FocusRequ
             .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
             .focusRequester(requester)
             .focusProperties { this.up = up }
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
             .clearAndSetSemantics { contentDescription = "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}." }
             .clickable(onClick = onClick),
         horizontalArrangement = Arrangement.Center,
