@@ -373,6 +373,15 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      # The first run died with "FATAL | Not enough space to create userdata partition. Available: 3659.73 MB ...
+      # need 7372.80 MB". Free unused preinstalled toolchains (a few seconds) and shrink
+      # the AVD data partition with disk-size below.
+      - name: Free disk space for the AVD
+        run: |
+          df -h "$HOME" | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/lib/node_modules \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
+          df -h "$HOME" | tail -1
       # No AVD snapshot cache: it needs a second warm-up run per cache miss and our boot uses -no-snapshot.
       # The runner executes each script line as its own shell command, so the script is one line.
       - name: Emulator QA checks
@@ -383,7 +392,9 @@ jobs:
           arch: x86
           profile: tv_1080p
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disk-size: 2048M
+          emulator-boot-timeout: 480
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
           disable-animations: true
           script: scripts/ci/emulator-qa.sh "$RUNNER_TEMP/qa-signed.apk" "$RUNNER_TEMP/qa-out" "$RUNNER_TEMP/qa-shot"
       - name: Upload home-screen screenshot
