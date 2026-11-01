@@ -41,7 +41,7 @@ env:
   #   1. `./gradlew --write-locks :app:dependencies` and commit app/gradle.lockfile (and settings lock changes);
   #   2. `./gradlew --write-verification-metadata sha256 :app:lintRelease :app:assembleRelease`, review the diff, commit;
   #   3. set this to "strict".
-  APP_DEP_VERIFICATION: lenient
+  APP_DEP_VERIFICATION: strict
 
 jobs:
   core:
