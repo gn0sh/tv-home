@@ -1,0 +1,325 @@
+package tvhome.core.calendar
+
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
+import okhttp3.tls.HandshakeCertificates
+import okhttp3.tls.HeldCertificate
+import okio.Buffer
+import okio.GzipSink
+import okio.buffer
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import tvhome.core.FakeSecrets
+import tvhome.core.fetchNow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
+import java.io.IOException
+import java.time.Duration
+import java.util.concurrent.TimeUnit
+
+class IcsFetcherTest {
+    private lateinit var server: MockWebServer
+    private lateinit var plain: MockWebServer
+    private lateinit var trust: OkHttpClient.Builder.() -> Unit
+    private val path = "/ical/x/${FakeSecrets.CALENDAR_TOKEN}/basic.ics"
+
+    @BeforeEach fun setUp() {
+        server = MockWebServer()
+        plain = MockWebServer()
+        val localhost = java.net.InetAddress.getByName("localhost").canonicalHostName
+        val held = HeldCertificate.Builder().addSubjectAlternativeName(localhost).build()
+        val serverCerts = HandshakeCertificates.Builder().heldCertificate(held).build()
+        val clientCerts = HandshakeCertificates.Builder().addTrustedCertificate(held.certificate).build()
+        server.protocols = listOf(okhttp3.Protocol.HTTP_1_1) // MockWebServer's chunked bodies are not framed over h2
+        server.useHttps(serverCerts.sslSocketFactory(), false)
+        server.start()
+        plain.start()
+        trust = { sslSocketFactory(clientCerts.sslSocketFactory(), clientCerts.trustManager) }
+    }
+
+    @AfterEach fun tearDown() {
+        runCatching { server.shutdown() }
+        runCatching { plain.shutdown() }
+    }
+
+    /** Test servers are on localhost, so the host pin is replaced by "any https URL"; the real pin is tested below. */
+    private fun fetcher(
+        timeouts: FetchTimeouts = FetchTimeouts(),
+        max: Long = IcsFetcher.MAX_BYTES,
+        allowed: (okhttp3.HttpUrl) -> Boolean = { true },
+        extra: OkHttpClient.Builder.() -> Unit = {},
+    ) = IcsFetcher(timeouts, max, allowed) { trust(); extra() }
+
+    private fun text(r: IcsFetchResult) = String((r as IcsFetchResult.Body).bytes, Charsets.UTF_8)
+
+    private fun url(p: String = path) = server.url(p).toString()
+
+    private fun assertError(e: SourceError, r: IcsFetchResult) {
+        assertEquals(IcsFetchResult.Error(e), r)
+        assertFalse(r.toString().contains(FakeSecrets.CALENDAR_TOKEN))
+    }
+
+    @Test fun okBodyIsReturned() {
+        server.enqueue(MockResponse().setBody("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"))
+        val r = fetcher().fetchNow(url())
+        assertTrue(r is IcsFetchResult.Body)
+        assertEquals("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", text(r))
+        assertFalse(r.toString().contains("VCALENDAR"))
+        assertEquals("Body(32 bytes)", r.toString())
+        assertEquals(path, server.takeRequest().path)
+    }
+
+    @Test fun httpUrlRejectedBeforeAnyIo() {
+        val r = fetcher().fetchNow(plain.url("/x.ics").toString())
+        assertError(SourceError.INSECURE_URL, r)
+        assertEquals(0, plain.requestCount)
+        assertError(SourceError.INSECURE_URL, fetcher().fetchNow("HTTP://example.test/x.ics"))
+        assertError(SourceError.INSECURE_URL, fetcher().fetchNow("ftp://example.test/x.ics"))
+        assertError(SourceError.INSECURE_URL, fetcher().fetchNow("file:///etc/passwd"))
+        assertError(SourceError.INSECURE_URL, fetcher().fetchNow("webcal://example.test/x.ics"))
+    }
+
+    @Test fun blankAndGarbageUrlsAreNotConfigured() {
+        assertError(SourceError.NOT_CONFIGURED, fetcher().fetchNow(""))
+        assertError(SourceError.NOT_CONFIGURED, fetcher().fetchNow("   "))
+        assertError(SourceError.NOT_CONFIGURED, fetcher().fetchNow("not a url"))
+        assertError(SourceError.NOT_CONFIGURED, fetcher().fetchNow("https://"))
+    }
+
+    @Test fun non2xxIsHttpStatus() {
+        for (code in listOf(401, 403, 404, 500, 503)) {
+            server.enqueue(MockResponse().setResponseCode(code).setBody("denied ${FakeSecrets.CALENDAR_TOKEN}"))
+            assertError(SourceError.HTTP_STATUS, fetcher().fetchNow(url()))
+        }
+    }
+
+    @Test fun httpsToHttpRedirectIsRefusedAndNotFollowed() {
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", plain.url(path).toString()))
+        plain.enqueue(MockResponse().setBody("BEGIN:VCALENDAR"))
+        assertError(SourceError.HTTP_STATUS, fetcher().fetchNow(url()))
+        assertEquals(0, plain.requestCount)
+    }
+
+    @Test fun httpsToHttpsRedirectOnSameServerIsFollowed() {
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/moved.ics")))
+        server.enqueue(MockResponse().setBody("OK"))
+        val r = fetcher().fetchNow(url())
+        assertEquals("OK", text(r))
+    }
+
+    @Test fun bodyAtCapIsAcceptedAndOverCapIsTooLarge() {
+        val cap = 1000L
+        server.enqueue(MockResponse().setBody("a".repeat(1000)))
+        assertTrue(fetcher(max = cap).fetchNow(url()) is IcsFetchResult.Body)
+        server.enqueue(MockResponse().setBody("a".repeat(1001)))
+        assertError(SourceError.TOO_LARGE, fetcher(max = cap).fetchNow(url()))
+    }
+
+    private fun mib10(extra: Int = 0) = Buffer().write(ByteArray(10 * 1024 * 1024 + extra) { 'a'.code.toByte() })
+
+    @Test fun tenMegabyteCapOverWithContentLength() {
+        server.enqueue(MockResponse().setBody(mib10(1)))
+        assertError(SourceError.TOO_LARGE, fetcher().fetchNow(url()))
+    }
+
+    @Test fun tenMegabyteCapOverWithoutContentLength() {
+        server.enqueue(MockResponse().setChunkedBody(mib10(1), 8192))
+        assertError(SourceError.TOO_LARGE, fetcher().fetchNow(url()))
+    }
+
+    @Test fun exactlyTenMegabytesIsAccepted() {
+        server.enqueue(MockResponse().setChunkedBody(mib10(), 8192))
+        val r = fetcher().fetchNow(url())
+        assertTrue(r is IcsFetchResult.Body, r.toString())
+        server.enqueue(MockResponse().setBody(mib10()))
+        val r2 = fetcher().fetchNow(url())
+        assertTrue(r2 is IcsFetchResult.Body, r2.toString())
+    }
+
+    @Test fun gzipBombIsCappedAfterDecompression() {
+        val raw = Buffer().write(ByteArray(20 * 1024 * 1024))
+        val gz = Buffer()
+        GzipSink(gz).buffer().use { it.writeAll(raw) }
+        assertTrue(gz.size < 100_000)
+        server.enqueue(MockResponse().addHeader("Content-Encoding", "gzip").setBody(gz))
+        assertError(SourceError.TOO_LARGE, fetcher().fetchNow(url()))
+    }
+
+    @Test fun readTimeoutIsNetwork() {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val t = FetchTimeouts(connectMs = 500, readMs = 300, callMs = 2_000)
+        assertError(SourceError.NETWORK, fetcher(t).fetchNow(url()))
+    }
+
+    @Test fun connectionRefusedIsNetwork() {
+        val u = url()
+        server.shutdown()
+        assertError(SourceError.NETWORK, fetcher().fetchNow(u))
+    }
+
+    @Test fun untrustedCertificateIsNetwork() {
+        server.enqueue(MockResponse().setBody("x"))
+        // default trust store does not know our test CA (same client as the public constructor; only the pin is open)
+        assertError(SourceError.NETWORK, IcsFetcher(FetchTimeouts(), IcsFetcher.MAX_BYTES, { true }, {}).fetchNow(url()))
+    }
+
+    /** fetcher-customize-loosens-tls: the only public constructors take no client hook, and both verify TLS. */
+    @Test fun publicConstructorsCannotLoosenTls() {
+        server.enqueue(MockResponse().setBody("x"))
+        assertError(SourceError.NOT_CONFIGURED, IcsFetcher(FetchTimeouts(), 1_000).fetchNow(url())) // localhost is not pinned
+        assertEquals(0, server.requestCount)
+        // `internal` is enforced by the compiler across modules (the JVM sees it as public), so guard the source.
+        val src = java.io.File("src/main/kotlin/tvhome/core/calendar/IcsFetcher.kt").readText()
+        assertTrue(src.contains("class IcsFetcher internal constructor("), "the customize constructor must stay internal")
+    }
+
+    /** blocking-in-suspend: the call runs off the caller's thread, and cancelling the caller cancels the call. */
+    @Test fun fetchIsMainSafeAndCancellable() {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val f = fetcher(FetchTimeouts(connectMs = 5_000, readMs = 30_000, callMs = 60_000))
+        assertTimeoutPreemptively(Duration.ofSeconds(10)) {
+            runBlocking { // one thread: if fetch blocked it, nothing below could run until the 30 s read timeout
+                val job = async { f.fetch(url()) }
+                val req = withContext(Dispatchers.IO) { server.takeRequest(5, TimeUnit.SECONDS) }
+                assertNotNull(req, "request reached the server while the caller's thread stayed free")
+                val t0 = System.nanoTime()
+                job.cancel()
+                val r = runCatching { job.await() }
+                assertTrue(r.exceptionOrNull() is CancellationException, r.toString())
+                assertTrue(System.nanoTime() - t0 < 3_000_000_000L, "cancel took too long: the HTTP call was not cancelled")
+            }
+        }
+    }
+
+    @Test fun unknownHostIsOffline() {
+        assertError(SourceError.OFFLINE, IcsFetcher(FetchTimeouts(), IcsFetcher.MAX_BYTES, { true }, customize = { proxy(java.net.Proxy.NO_PROXY); dns(object : okhttp3.Dns { override fun lookup(hostname: String): List<java.net.InetAddress> = throw java.net.UnknownHostException(hostname) }) })
+            .fetchNow("https://calendar.example.test/${FakeSecrets.CALENDAR_TOKEN}/basic.ics"))
+    }
+
+    @Test fun exceptionTextWithUrlOrHeaderValueNeverEscapes() {
+        // OkHttp-style messages: the URL in an IOException, a header value in an IllegalArgumentException (Headers.checkValue).
+        val throwers = listOf<Throwable>(
+            IOException("failed to connect to ${url()}"),
+            IllegalArgumentException("Unexpected char 0x0a at 3 in X-Key value: ${FakeSecrets.API_KEY}"),
+            RuntimeException("boom ${FakeSecrets.CALENDAR_TOKEN}", IOException(FakeSecrets.CALENDAR_URL)),
+            IllegalStateException(FakeSecrets.CALENDAR_TOKEN).also { it.addSuppressed(IOException(FakeSecrets.CALENDAR_URL)) },
+            AssertionError(FakeSecrets.CALENDAR_TOKEN),      // a Throwable that is not an Exception
+        )
+        for (t in throwers) {
+            val f = fetcher(extra = { addInterceptor { throw t } })
+            val r = f.fetchNow(url())
+            assertError(SourceError.NETWORK, r)
+            assertFalse(r.toString().contains(FakeSecrets.API_KEY))
+        }
+    }
+
+    // ---- T2b.2 ----
+
+    /** H11: the real pin accepts https on calendar.google.com and *.google.com only. */
+    @Test fun hostPinPredicate() {
+        fun ok(u: String) = IcsFetcher.isPinnedUrl(u.toHttpUrl())
+        assertTrue(ok("https://calendar.google.com/calendar/ical/a/b/basic.ics"))
+        assertTrue(ok("https://www.google.com/x"))
+        assertTrue(ok("https://CALENDAR.GOOGLE.COM/x"))
+        assertFalse(ok("http://calendar.google.com/x"))
+        assertFalse(ok("https://google.com/x"))
+        assertFalse(ok("https://evilgoogle.com/x"))
+        assertFalse(ok("https://calendar.google.com.evil.test/x"))
+        assertFalse(ok("https://evil.test/calendar.google.com"))
+        assertFalse(ok("https://calendar.google.com@evil.test/x"))
+    }
+
+    /** H11: a request URL off the pin makes no request; a final response off the pin is HTTP_STATUS. */
+    @Test fun requestAndFinalHostAreChecked() {
+        val onlyIcal: (okhttp3.HttpUrl) -> Boolean = { it.encodedPath.startsWith("/ical/") }
+        assertError(SourceError.NOT_CONFIGURED, fetcher(allowed = onlyIcal).fetchNow(url("/other/x.ics")))
+        assertEquals(0, server.requestCount)
+        // redirect from an allowed URL to a disallowed one: refused before that hop's request is sent
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/elsewhere/x.ics")))
+        assertError(SourceError.HTTP_STATUS, fetcher(allowed = onlyIcal).fetchNow(url()))
+        assertEquals(1, server.requestCount)
+        // and the allowed redirect still works
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/ical/moved.ics")))
+        server.enqueue(MockResponse().setBody("OK"))
+        assertEquals("OK", text(fetcher(allowed = onlyIcal).fetchNow(url())))
+        assertEquals(3, server.requestCount)
+        // fetch-redirect-hops-unpinned: a disallowed hop between two allowed ones is refused too (it used to be
+        // followed, because only the final URL was checked), and its request never reaches the server
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/elsewhere/hop.ics")))
+        server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", url("/ical/final.ics")))
+        server.enqueue(MockResponse().setBody("BEGIN:VCALENDAR"))
+        assertError(SourceError.HTTP_STATUS, fetcher(allowed = onlyIcal).fetchNow(url()))
+        assertEquals(4, server.requestCount)
+        val paths = (1..4).map { server.takeRequest().path }
+        assertEquals(listOf(path, path, "/ical/moved.ics", path), paths)
+    }
+
+    /** H10: bytes come back untouched (non-UTF-8 and NUL included), with and without a known length, and via gzip. */
+    @Test fun bodyIsReturnedAsExactBytes() {
+        val raw = ByteArray(5000) { (it * 31).toByte() }
+        server.enqueue(MockResponse().setBody(Buffer().write(raw)))                       // Content-Length known
+        assertArrayEquals(raw, (fetcher().fetchNow(url()) as IcsFetchResult.Body).bytes)
+        server.enqueue(MockResponse().setChunkedBody(Buffer().write(raw), 777))           // unknown length
+        assertArrayEquals(raw, (fetcher().fetchNow(url()) as IcsFetchResult.Body).bytes)
+        val gz = Buffer()
+        GzipSink(gz).buffer().use { it.write(raw) }
+        server.enqueue(MockResponse().addHeader("Content-Encoding", "gzip").setBody(gz))  // inflated, length unknown
+        assertArrayEquals(raw, (fetcher().fetchNow(url()) as IcsFetchResult.Body).bytes)
+        server.enqueue(MockResponse().setBody(Buffer()))                                  // empty body
+        assertEquals(0, (fetcher().fetchNow(url()) as IcsFetchResult.Body).bytes.size)
+    }
+
+    /** Runs [f.fetch] in a child, returns what `fetch` itself produced (a value or a Throwable), not the job's state. */
+    private fun fetchOutcome(f: IcsFetcher, afterCancel: () -> Unit = {}, whileRunning: suspend () -> Unit): Result<IcsFetchResult> = runBlocking {
+        val out = kotlinx.coroutines.CompletableDeferred<Result<IcsFetchResult>>()
+        val job = launch(Dispatchers.Default) { out.complete(runCatching { f.fetch(url()) }) }
+        whileRunning()
+        job.cancel()
+        afterCancel()
+        withTimeout(10_000) { out.await() }
+    }
+
+    /** cancel-returns-network-error (C1): cancel mid-body; fetch's OWN result is CancellationException. */
+    @Test fun cancelMidBodyThrowsFromFetchItself() {
+        server.enqueue(MockResponse().setBody(Buffer().write(ByteArray(200_000) { 'a'.code.toByte() })).throttleBody(1_000, 100, TimeUnit.MILLISECONDS))
+        val f = fetcher(FetchTimeouts(connectMs = 5_000, readMs = 30_000, callMs = 60_000))
+        assertTimeoutPreemptively(Duration.ofSeconds(15)) {
+            val r = fetchOutcome(f) {
+                withContext(Dispatchers.IO) { assertNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+                kotlinx.coroutines.delay(400) // headers are out and the body is trickling: we are in the read loop
+            }
+            assertTrue(r.exceptionOrNull() is CancellationException, "fetch returned: $r")
+        }
+    }
+
+    /** C1, second half: cancel while connecting (here: blocked in name lookup, the phase before the socket). */
+    @Test fun cancelDuringConnectThrowsFromFetchItself() {
+        val inLookup = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val slowDns = object : okhttp3.Dns {
+            override fun lookup(hostname: String): List<java.net.InetAddress> {
+                inLookup.countDown()
+                release.await(10, TimeUnit.SECONDS)
+                return okhttp3.Dns.SYSTEM.lookup(hostname)
+            }
+        }
+        val f = fetcher(extra = { dns(slowDns) })
+        assertTimeoutPreemptively(Duration.ofSeconds(15)) {
+            val r = fetchOutcome(f, afterCancel = { release.countDown() }) {
+                withContext(Dispatchers.IO) { assertTrue(inLookup.await(5, TimeUnit.SECONDS)) }
+            }
+            assertTrue(r.exceptionOrNull() is CancellationException, "fetch returned: $r")
+        }
+    }
+}

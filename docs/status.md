@@ -1,14 +1,17 @@
 # tv-home status
 
-Feature: tv-home (custom Google TV home screen). Priority: hip pocket (idle time only; Quick Invoice first).
-Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). T8 provisioning and T7 signing scripts approved (2dd6d92). Remaining M1: first CI run + T9 emulator QA after the Nov 1 minutes reset (reminder set for 01:00Z), PR to main, then Brian runs the signing script and T11 install (hard stop). M1c: Brian (21:38Z) said push ahead cheaply on Opus. C1 server, C4 Google TV, C3 LG built and approved (4eb785d, 200 tests). C2 waits on M1b B1 (services.json). C5 (Brian typed OK 22:56Z): installed on his PC (uv 0.11.32, 200 tests, MCP registered user scope). Google TV 192.168.68.71 paired; status/open/keys/idle-20s verified on screen by Brian. LG 192.168.68.68 (MAC 58:DB:09:A4:36:B8, unconfirmed) refuses wss 3001, only ws 3000 open: LG is OLED65BXPUA (2020), webOS 5.6.2-21; 3001 refused with screen on, 3000 open; not paired, no code changed. Turn on via Wi-Fi now on. Decision card to Brian 23:18Z: update LG firmware (rec) / allow unencrypted LG-only exception (needs security review) / skip LG. Deco reservations pending (Google TV uses a private MAC). M4 PC game streaming added to spec (later). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
+Feature: tv-home (custom Google TV home screen). Priority: Brian 2026-10-31 23:47Z: install the dashboard ASAP within usage (first claim on this thread).
+Stage (2026-11-01 14:40Z): M1 built, reviewed, CI green (core, app, emulator T9, live feed). PR #1 ready for Brian to merge. M1c tv-remote on Brian's PC: Google TV keys work; CEC POWER sleeps/wakes both TVs; LG BX ignores CEC volume/mute (remote back on IR). LG volume options: docs/architecture/lg-volume-options.md (rec: LG firmware update + retry wss 3001 first). Kodi (M5) parked. Next: T11 install.
+Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). T8 provisioning and T7 signing scripts approved (2dd6d92). Remaining M1: first CI run + T9 emulator QA after the Nov 1 minutes reset (reminder set for 01:00Z), PR to main, then Brian runs the signing script and T11 install (hard stop). M1c: Brian (21:38Z) said push ahead cheaply on Opus. C1 server, C4 Google TV, C3 LG built and approved (4eb785d, 200 tests). C2 waits on M1b B1 (services.json). C5 (Brian typed OK 22:56Z): installed on his PC (uv 0.11.32, 200 tests, MCP registered user scope). Google TV 192.168.68.71 paired; status/open/keys/idle-20s verified on screen by Brian. LG 192.168.68.68 (MAC 58:DB:09:A4:36:B8, unconfirmed) refuses wss 3001, only ws 3000 open: LG is OLED65BXPUA (2020), webOS 5.6.2-21; 3001 refused with screen on, 3000 open; not paired, no code changed. Turn on via Wi-Fi now on. Decision card to Brian 23:18Z: update LG firmware (rec) / allow unencrypted LG-only exception (needs security review) / skip LG. Deco reservations pending (Google TV uses a private MAC). M4 PC game streaming added to spec (later). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
-- Usage pacing (coordinator, 2026-10-31 15:25Z): weekly limit at 79%. After the two running T5 reviews, run one subagent at a time and no optional panels until Brian answers the pacing card.
+- Usage pacing: NORMAL as of 2026-11-01 12:24Z (83%, under pace).
 - No Android SDK in the cloud sandbox (dl.google.com blocked). APKs build in GitHub Actions; private-repo minutes reset 2026-11-01 00:00Z.
 
 ## Waiting on the CEO
-- None open. (Projectivy ask answered 2026-10-31: "More than that", so M2 our own launcher is unconditional.)
+- Merge PR #1, then run new-signing-key.ps1 in his own window (reply done) | https://github.com/gn0sh/tv-home/pull/1, docs/release/tv-home-signing.md | tap Merge, paste 3 PowerShell lines | asked 2026-11-01 05:00Z, reposted 14:40Z in thread "Build Google TV dashboard" | default: wait (signing key is a secret only he creates)
+- Not yet asked: typed OK to install on the TV (T11, hard stop), then provision.ps1; AC8-offline check on the real TV; LG firmware update for volume.
+(Projectivy ask answered 2026-10-31: "More than that", so M2 our own launcher is unconditional.)
 
 ## Problem-key ledger
 | Key | Returns | Source |
@@ -27,6 +30,7 @@ Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on cla
 | session-ok-never-ages, no-fsync-before-rename, cache-write-throws, emphasis-boundary-60 | 1 | T4 review (fixed) |
 | lenient-verification-with-signing, scan-misses-nested, logs-before-scan | 1 | T6 review (fixed) |
 | old-dtstart-recurrence-missing | 1 | security review |
+| offline-not-really-off, qa-silent-degrade | 1 | T9 review (fixed 3054ab3; AC8-offline NOT VERIFIED on emulator) |
 | blocking-in-suspend, fetcher-customize-loosens-tls, redactor-over-redacts, pii-in-data-class-tostring | 1 | M1 core reviews |
 
 ## Run ledger
@@ -71,3 +75,7 @@ Stage: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on cla
 | 2026-10-31 | backend-engineer | opus/medium | M1c C1, C4, C3 + fix rounds | done (4eb785d, 200 tests) |
 | 2026-10-31 | code+security reviewer | opus/high | M1c C1, C4, C3 reviews + fix reviews | C1 request changes -> approve w/ nits; C4 request changes (atv-stale-connection) -> approve w/ nits; C3 approve w/ nits -> approve |
 | 2026-10-31 | security-engineer | opus/high | T7 review + 2 fresh re-reviews | request changes (p12-keypass-ignored) -> approve with changes (stdin-bom) -> approve |
+| 2026-11-01 | devops/backend | opus | Strict dep verification, AGP classloader, CEC keys | done, CI green |
+| 2026-11-01 | qa-engineer | opus | T9 emulator job + fixes | done (e241e86..3054ab3), CI green |
+| 2026-11-01 | security-engineer + code-reviewer | opus | T9 emulator diff review | request changes (1 medium) -> delta approve |
+| 2026-11-01 | software-architect | opus | LG volume options writeup | done (4e756c9) |

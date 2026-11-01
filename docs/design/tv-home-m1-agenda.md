@@ -56,11 +56,16 @@ Header right side shows the age line in every state that has data.
 |---|---|---|
 | ok (cache or fetch under 60 min old) | The list | "Updated 4 min ago" (grey); "Updated just now" under 1 min |
 | ok, still fetching | The list | unchanged; no spinner (cache is instant) |
-| stale (fetch failed, cache 60 min or older) | The list | "Updated 3 hours ago" in amber, bold, with a 22 sp warning triangle; plus footer line "Can't reach calendar. Showing the last copy." |
-| unavailable (no cache, fetch failed) | Centered: "Can't reach calendar" and below it "Check the TV's Wi-Fi. It will try again soon." | none |
+| stale (fetch failed, cause CANT_REACH, cache 60 min or older) | The list | "Updated 3 hours ago" in amber, bold, with a 22 sp warning triangle; plus footer line "Can't reach calendar. Showing the last copy." |
+| unavailable (no cache, fetch failed: `CantReach`) | Centered: "Can't reach calendar" and below it "Check the TV's Wi-Fi. It will try again soon." | none |
+| stale, cause UNREADABLE (feed arrived but unusable, or over parse limits; cache kept) | The list | Same age line as stale; footer "Calendar data unreadable. Showing the last copy." (T2b.4, default copy) |
+| stale, cause OVERDUE (no fetch has failed, but the copy is 60 min or older: usually the launch fetch has not finished yet) | The list | Same amber age line as stale; no footer (nothing is known to be wrong yet). An offline launch is not OVERDUE: the app treats it as a failed OFFLINE fetch, so it is "stale (fetch failed)" above with the "Can't reach" footer |
+| unreadable (no cache, feed arrived but unusable) | Centered: "Calendar data unreadable" and below it "It will try again soon." | none |
+| loading (no cache, first fetch in flight, at most 15 s) | Centered: "Loading calendar", no detail line (added by T5, not in the original table) | none |
 | not set up (no calendar link on device) | Centered: "Calendar not set up" and below it "Set it up from your PC: see the setup steps in the README." | none |
 | nothing scheduled (ok, both days empty) | Both headings kept, each with "Nothing scheduled" | age line as ok |
-- Age wording: under 1 min "just now"; 1-59 "N min ago"; 1-23 hours "N hours ago" ("1 hour ago"); then "N days ago". Amber/bold applies from 60 min up (matches AC 4). Age is computed from the last successful fetch, not app launch.
+| stale and both days empty | Same body as nothing scheduled (the type carries `nothingScheduled = true`) | stale age line; footer too when emphasised |
+- Age wording: under 1 min "just now"; 1-59 "N min ago"; 1-23 hours "N hours ago" ("1 hour ago"); then "N days ago". Amber/bold applies from exactly 60:00 old (60 min or older, measured in seconds; matches AC 4). Age is computed from the last successful fetch, not app launch.
 - A fetch failure with a cache younger than 60 min shows plain ok (no alarm); retry is silent every 15 min.
 - The calendar link is never typed or shown on the TV (AC 6), including in error text. "Not set up" gives a pointer, not the link. Setup happens from Brian's PC (adb push or the README steps the architect defines); the design needs one fixed pointer, so the engineer should use the README title the technical-writer sets.
 - Calendar event text comes from outside: render as plain text only, no markup, one line, ellipsis. Empty title shows "(No title)".

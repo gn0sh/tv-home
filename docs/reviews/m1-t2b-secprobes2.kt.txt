@@ -1,0 +1,98 @@
+package tvhome.core.calendar
+
+import org.junit.jupiter.api.Tag
+import org.junit.jupiter.api.Test
+import tvhome.core.agenda.agendaFocus
+import tvhome.core.agenda.agendaWindow
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
+import kotlin.random.Random
+
+@Tag("hostile")
+class SecProbe2Test {
+    private val ny = ZoneId.of("America/New_York")
+    private val now = Instant.parse("2026-03-10T14:00:00Z")
+    private val window = agendaWindow(now, ny)
+    private val HEAD = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n"
+    private val TAIL = "END:VCALENDAR\r\n"
+    private val REAL = "BEGIN:VEVENT\r\nUID:real\r\nDTSTART:20260310T190000Z\r\nDTEND:20260310T200000Z\r\nSUMMARY:REAL\r\nEND:VEVENT\r\n"
+
+    private fun run(name: String, body: ByteArray): ParseOutcome {
+        val t0 = System.nanoTime()
+        val r = IcsParser.parse(body, window, ny, agendaFocus(window, ny)) { 0L }
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        val extra = if (r is ParseOutcome.Complete) " titles=" + r.events.map { it.title }.groupingBy { it }.eachCount() else ""
+        println("PROBE $name: ${body.size} B, $ms ms, $r$extra")
+        return r
+    }
+    private fun spam(uid: String, mins: String, hours: String = (0..23).joinToString(","), until: String = "20260312T035959Z") =
+        "BEGIN:VEVENT\r\nUID:$uid\r\nDTSTART;TZID=America/New_York:20260310T000000\r\nDTEND;TZID=America/New_York:20260310T000100\r\n" +
+        "RRULE:FREQ=DAILY;UNTIL=$until;BYHOUR=$hours;BYMINUTE=$mins\r\nSUMMARY:$uid\r\nEND:VEVENT\r\n"
+
+    // E: ONE invite (dense master + one moved instance) -> whole feed Exhausted(INSTANCES)?
+    @Test fun eOneInviteKillsFeed() {
+        val moved = "BEGIN:VEVENT\r\nUID:s\r\nRECURRENCE-ID;TZID=America/New_York:20260310T010000\r\nDTSTART;TZID=America/New_York:20300310T010000\r\nSUMMARY:s\r\nEND:VEVENT\r\n"
+        run("E-dense+moved", (HEAD + REAL + spam("s", "0,20,40") + moved + TAIL).toByteArray())
+        run("E-dense-only", (HEAD + REAL + spam("s", "0,20,40") + TAIL).toByteArray())
+        // legit-ish: every-30-min series (48/day, at cap) plus one moved instance
+        val moved30 = moved.replace("T010000\r\nDTSTART", "T013000\r\nDTSTART")
+        run("E-at-cap+moved", (HEAD + REAL + spam("s", "0,30") + moved30 + TAIL).toByteArray())
+    }
+
+    // F: many UIDs, each under the per-UID cap, all before 15:00 today
+    @Test fun fManyUidsEvict() {
+        val sb = StringBuilder(HEAD).append(REAL)
+        val hours = (0..13).joinToString(",")
+        for (u in 0 until 8) sb.append(spam("u$u", "0,10,20,30,40,50", hours, "20260310T235959Z")) // 84 per uid today
+        run("F-8uids", sb.append(TAIL).toString().toByteArray())
+    }
+
+    // H: CPU at the new 5M global budget, frozen clock
+    @Test fun hFiveMillionSteps() {
+        val sb = StringBuilder(HEAD).append(REAL)
+        val mins = (0..24).joinToString(",")
+        for (u in 0 until 400) sb.append(spam("h$u", mins, until = "20260313T035959Z"))
+        run("H-5M", sb.append(TAIL).toString().toByteArray())
+        val sb2 = StringBuilder(HEAD).append(REAL)
+        for (u in 0 until 400) sb2.append("BEGIN:VEVENT\r\nUID:y$u\r\nDTSTART:00010101T000000Z\r\nRRULE:FREQ=WEEKLY;BYMONTH=1,3,5;COUNT=1000000000\r\nEND:VEVENT\r\n")
+        run("H-walk", sb2.append(TAIL).toString().toByteArray())
+    }
+
+    // G: cycle COUNT paths vs brute-force reference, old DTSTARTs, COUNT set near the window boundary
+    @Test fun gCycleCountDifferential() {
+        val rnd = Random(7)
+        val days = DayOfWeek.values().toList()
+        var cmp = 0; var bad = 0; var nullR = 0
+        repeat(1500) { iter ->
+            val freq = listOf(Freq.MONTHLY, Freq.YEARLY, Freq.DAILY)[rnd.nextInt(3)]
+            val ords = listOf(1, 2, 3, 4, 5, -1, -2, -5, 10, -20, 53)
+            val byDay = if (rnd.nextInt(3) != 0) days.shuffled(rnd).take(rnd.nextInt(1, 4)).map { WeekdayNum(if (freq != Freq.DAILY && rnd.nextBoolean()) ords[rnd.nextInt(ords.size)] else 0, it) } else emptyList()
+            val byMd = if (freq != Freq.DAILY && rnd.nextInt(3) == 0) (1..rnd.nextInt(1, 3)).map { listOf(1, 29, 30, 31, -1, -2, 15)[rnd.nextInt(7)] } else emptyList()
+            val byMonth = if (freq == Freq.YEARLY && rnd.nextBoolean()) (1..rnd.nextInt(1, 3)).map { rnd.nextInt(1, 13) } else emptyList()
+            val bySetPos = if (rnd.nextInt(3) == 0) (1..rnd.nextInt(1, 3)).map { listOf(1, -1, 2, -2, 3, 5, -5)[rnd.nextInt(7)] } else emptyList()
+            val interval = if (rnd.nextBoolean()) rnd.nextInt(2, 8) else 1
+            val startYear = if (freq == Freq.DAILY) rnd.nextInt(1900, 2020) else rnd.nextInt(1100, 1700)
+            val dtStart = LocalDate.of(startYear, rnd.nextInt(1, 13), rnd.nextInt(1, 29)).atTime(9, 0)
+            val from = LocalDate.of(2026, 3, 8); val to = LocalDate.of(2026, 3, 14)
+            val base = Rule(freq, interval, null, null, byMonth, byMd, byDay, bySetPos)
+            val all = RfcReference.expand(base, dtStart, false, to) ?: return@repeat
+            if (all.isEmpty()) return@repeat
+            val before = all.count { it.toLocalDate().isBefore(from) }.toLong()
+            for (count in listOf(before, before + 1, before + 2, before + 5)) {
+                if (count < 1) continue
+                val rule = Rule(freq, interval, count, null, byMonth, byMd, byDay, bySetPos)
+                val ex = RecurrenceExpander(rule, dtStart, false)
+                if (!ex.supported) continue
+                val ref = all.take(count.toInt()).filter { !it.toLocalDate().isBefore(from) }
+                val prod = Budget(5_000_000, 20_000, Long.MAX_VALUE) { 0L }
+                val got = ex.between(from, to, prod)
+                cmp++
+                if (got == null) nullR++ else if (got != ref) { bad++; if (bad <= 5) println("G MISMATCH it=$iter $freq int=$interval dt=$dtStart count=$count md=$byMd bd=$byDay bm=$byMonth sp=$bySetPos ref=$ref got=$got") }
+            }
+        }
+        println("PROBE G: compared $cmp, mismatches $bad, skipped(null) $nullR")
+    }
+}

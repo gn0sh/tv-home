@@ -38,7 +38,7 @@ Calendar source: open decision for Brian, needed only when the agenda app is bui
 - OAuth device flow, calendar.readonly: real-time. Cost: Brian creates a Google Cloud OAuth client and consents (credential step, hard stop 5).
 - URL/credentials are never typed on the TV: entry via adb push or a QR/phone step.
 
-Technical constraints (for the architect): use maintained libraries (ical4j or similar) and an HTTP client, not a hand-rolled parser; minSdk 31, target 34; `<queries>` with LEANBACK_LAUNCHER, not QUERY_ALL_PACKAGES; allowBackup=false, non-debuggable release builds, secrets scrubbed from exceptions and logs; one stable signing key kept in Actions secrets.
+Technical constraints (for the architect): use a maintained HTTP client; read ICS with our own strict reader for the subset Google Calendar emits, with biweekly kept only as a test oracle (ADR 0004, after the bounded-parse re-plan); minSdk 31, target 34; `<queries>` with LEANBACK_LAUNCHER, not QUERY_ALL_PACKAGES; allowBackup=false, non-debuggable release builds, secrets scrubbed from exceptions and logs; one stable signing key kept in Actions secrets.
 
 ## Milestones and user stories
 Order: M0 (resolved), M1 (agenda app), M1b, M1c, then M2 (full home screen). Only M3 is conditional.
@@ -56,7 +56,7 @@ Acceptance criteria
 1. Given fixture ICS files (via `CalendarSource`), the agenda shows today's and tomorrow's events with local start time and title; all-day events labelled "All day"; sorted by start. JVM unit tests.
 2. Fixtures cover weekly RRULE, EXDATE/cancelled instance, a UTC event and an event in another timezone, all at the correct local time.
 3. Fetch at launch, then at most every 15 min while visible; last good result cached on device and shown immediately.
-4. Three states only: ok; stale (fetch failed, cache shown with "Updated N min ago"; stale when older than 60 min, emphasised); unavailable (no cache: "Can't reach calendar", or "Calendar not set up" with a one-line how-to). Empty day shows "Nothing scheduled".
+4. Three states only: ok; stale (fetch failed, cache shown with "Updated N min ago"; stale when 60 minutes or older, emphasised); unavailable (no cache: "Can't reach calendar", or "Calendar not set up" with a one-line how-to). Empty day shows "Nothing scheduled".
 5. Readable at 10 feet and fully D-pad/Back navigable (no focus trap), checked on a TV emulator.
 6. The secret (URL or token) is stored only in private on-device storage; grep of repo, CI output and a captured log finds none of it. Never entered by typing on the TV.
 7. HTTPS only; allowBackup=false; release APK non-debuggable, built by GitHub Actions and signed with the stable key.
@@ -120,6 +120,12 @@ Only after M2 and only if the launcher in use does not already do it. A spike, n
 5. Brian chooses after reading side effects; nothing changes on the TV without his OK (hard stop).
 Optional weather: free keyless source, "Weather unavailable" on failure; cut if it needs an account or key.
 
+### M4 (later, requested 2026-10-31 21:46Z): PC game streaming
+Brian wants to stream games from his PC to the TV with a Bluetooth console controller. We do not build streaming:
+Sunshine (free, open source) on the PC and Moonlight (free) on the Google TV do it, and the controller pairs to the
+Google TV. Our part: (a) a Games tile in our launcher (M2) that opens Moonlight to his PC; (b) via M1c, "start <game> on
+my PC" wakes the PC (Wake-on-LAN) and launches the game. Installing software on his PC is his own step or a hard-stop OK.
+
 ## What Brian does, and how long
 | Milestone | Brian's steps | Minutes |
 |---|---|---|
@@ -140,3 +146,14 @@ Optional weather: free keyless source, "Weather unavailable" on failure; cut if 
 
 ## Success signal
 After a week of use Brian says "keep it". No telemetry.
+
+### M5 (PARKED by Brian 2026-10-31 23:43Z until more tokens are available; requested 23:22Z): clean Kodi, run by talking to Claude
+Brian wants Kodi on the Google TV that stays clean and easy to navigate, and that he configures by talking to Claude.
+Past installs got bogged down by bloat; that comes from third-party "builds" and add-on packs, so we use none.
+- Brian installs official Kodi (XBMC Foundation) from the Play Store himself; our tools never install apps.
+- Stock skin, home menu trimmed to what he uses, no builds, wizards or unofficial repositories.
+- New allowlisted `kodi_*` tools in tv-remote over Kodi's JSON-RPC (home network only, RFC 1918 host, its own
+  credentials stored like the other pairing secrets): play/pause/next, search and play from the library, add a
+  media source, show or hide home-menu items, switch skin among installed ones. No add-on installs without Brian's OK.
+- Brian chose both (2026-10-31 23:25Z): library tools first (sources, search, play, next episode), then our own free-legal-sources add-on (Pluto, Tubi, PBS, Internet Archive). No unlicensed-stream add-ons.
+Acceptance: Brian says "play the next episode of <show>" and "hide Music from the menu" and both happen on screen.

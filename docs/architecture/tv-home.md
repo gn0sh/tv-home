@@ -1,9 +1,11 @@
 # Architecture: tv-home (M1 agenda, M1b Ask Claude, M1c phone/laptop remote)
 
-Status: v2, 2026-10-31, software-architect. v2 applies the security review
-(`docs/reviews/security-tv-home-design.md`, findings tagged `#n key`) and the spec's M1b/M1c ACs. Spec: `docs/specs/tv-home.md` (M1, M1b, M1b-2, M1c). Build order: M1 → M1c → M1b.
+Status: v3, 2026-10-31, software-architect. v2 applied the security review
+(`docs/reviews/security-tv-home-design.md`, findings tagged `#n key`) and the spec's M1b/M1c ACs. v3 adds section 3a
+(bounded calendar parse, ADR 0004) after `ics-parse-cpu-memory-dos` came back a third time. Spec: `docs/specs/tv-home.md` (M1, M1b, M1b-2, M1c). Build order: M1 → M1c → M1b.
 ADRs: [0001](../adr/0001-tv-home-module-split-and-calendar-source.md) (module split, ICS library, secrets, signing),
-[0002](../adr/0002-tv-home-ask-claude.md) (M1b), [0003](../adr/0003-tv-home-remote-mcp-server.md) (M1c).
+[0002](../adr/0002-tv-home-ask-claude.md) (M1b), [0003](../adr/0003-tv-home-remote-mcp-server.md) (M1c),
+[0004](../adr/0004-tv-home-bounded-ics-parse.md) (bounded ICS parse; replaces biweekly in the app).
 
 ## 1. Facts this design rests on
 | Fact | Status | How |
@@ -12,6 +14,11 @@ ADRs: [0001](../adr/0001-tv-home-module-split-and-calendar-source.md) (module sp
 | No `jvmToolchain(17)` in the sandbox (no JDK 17, no auto-provisioning). Use `jvmTarget = 17` + `sourceCompatibility = 17` on JDK 21 | Verified | spike build failed with toolchain, passed with target |
 | Maven Central returns intermittent HTTP 429 to the sandbox; retries succeed (Gradle caches what it got) | Verified | spike |
 | biweekly 0.6.8 expands weekly RRULE across DST, honours EXDATE, handles UTC, TZID=Europe/Paris and VALUE=DATE | Verified | spike test (scratch, outside repo) |
+| ...but its iterator drops 1900 series, shifts floating series 1 h after DST, evaluates VTIMEZONE RRULEs while parsing (OOM on a 335-byte feed), and errs on DAILY;INTERVAL+BYDAY and WEEKLY+BYSETPOS. Test-scope reader oracle only since ADR 0004 (not in the APK); the expander is checked against a brute-force RFC reference | Verified | M1 core reviews; `RecurrenceExpanderTest` |
+| Google's ICS serializer writes CRLF only, `VERSION:2.0`, `CALSCALE:GREGORIAN`, one VCALENDAR, VTIMEZONE blocks, VEVENTs with VALARM, escaped TEXT folded at 75 octets. `IcsReader` rejects anything else in framing | Unverified (high confidence); the sandbox proxy blocks calendar.google.com (403, 2026-10-31) | T2b.6: CI fetches a public Google holiday feed and asserts `Complete`. If it fails, framing rules are revised before T11 |
+| An invite sender can get an arbitrary RRULE into Brian's feed through Google | Unverified | The design does not depend on it: it holds for any bytes up to 10 MiB |
+| Brian's feed size and VEVENT count fit 10 MiB / 50,000 (est. 0.5-1 KB per event; a 10-year calendar about 5-20k events) | Unverified | T8: `provision.ps1` prints counts only (KB, VEVENTs, recurring) after saving; checked against the limits at T11 |
+| A Chromecast-class CPU is 5-8x slower per step than the sandbox; app heap limit 128-256 MB | Unverified estimate | Sandbox measured (section 3a calibration); T9 on the emulator; Brian's TV at T11 |
 | biweekly deps: vinnie 2.0.2, jackson-core 2.16.1 only (Android-safe, uses java.util.TimeZone) | Verified | `gradle dependencies` |
 | ical4j 4.0.8 deps: slf4j, commons-codec, commons-lang3, threeten-extra (lighter than feared), but it loads its own tz data via ZoneRulesProvider, which is risky on Android | Deps verified; Android behaviour unverified | `gradle dependencies` |
 | anthropic-java 3.2.0 resolves; pulls OkHttp 4.12, Jackson 2.19 (databind, kotlin module, jsr310), kotlin-reflect, victools jsonschema-generator, OpenTelemetry API | Verified | `gradle dependencies` |
@@ -30,16 +37,17 @@ tv-home/
   scripts/           provision.ps1 / provision.sh (put secrets on the TV over adb), keystore helper.
   .github/workflows/ android.yml (core tests, APK build, signing), tv-remote.yml (pytest).
 ```
-`settings.gradle.kts` always includes `:core` and `:assistant-claude`, and includes `:app` only when an Android SDK is
-present (`ANDROID_HOME` set or `local.properties` has `sdk.dir`), so `gradle :core:test` works in the sandbox.
+`settings.gradle.kts` always includes `:core` and `:assistant-claude`, and includes `:app` only when `TVHOME_BUILD_APP=true`
+(set only in CI's app job; GitHub runners preset `ANDROID_HOME`, so SDK presence alone would pull AGP into the core job).
+Local and Android Studio builds must set `TVHOME_BUILD_APP=true` or no `:app` module appears. `gradle :core:test` works in the sandbox.
 Versions are pinned in `gradle/libs.versions.toml`. The Gradle wrapper is checked in (services.gradle.org is reachable).
 
 ### core packages
 | Package | Responsibility |
 |---|---|
-| `calendar` | `CalendarSource` interface, `IcsCalendarSource`, `IcsParser` (biweekly), `IcsFetcher` (OkHttp) |
+| `calendar` | `CalendarSource` interface, `IcsCalendarSource`, `IcsReader` (our strict tokenizer, ADR 0004), `IcsParser` (orchestration, `ParseOutcome`), `RecurrenceExpander`, `ZoneResolver`, `IcsFetcher` (OkHttp) |
 | `agenda` | Windowing into today/tomorrow in the device zone, labels, sorting |
-| `state` | `AgendaCache` format, `AgendaStateReducer`, `RefreshPolicy` |
+| `state` | `CachedAgenda` format, `reduce()`, `RefreshPolicy`, `AgendaRefresher` (single-flight, only cache writer) |
 | `secrets` | `SecretStore` interface, `SecretKey` enum, `Redactor`, input validation for provisioned values |
 | `services` (M1b) | `services.json` (shared with tv-remote), `DeepLinkBuilder`, `LaunchPlan` |
 | `assistant` (M1b) | `Assistant` contract, tool schemas, system prompt, `AskResult` |
@@ -52,7 +60,8 @@ sealed interface FetchResult {
   data class Ok(val events: List<EventInstance>, val fetchedAt: Instant) : FetchResult
   data class Failed(val error: SourceError) : FetchResult
 }
-enum class SourceError { NOT_CONFIGURED, OFFLINE, NETWORK, HTTP_STATUS, TOO_LARGE, PARSE, INSECURE_URL }
+enum class SourceError { NOT_CONFIGURED, OFFLINE, NETWORK, HTTP_STATUS, TOO_LARGE, PARSE, PARSE_LIMIT, INSECURE_URL }
+// ParseOutcome, IcsParse(ByteArray), AgendaRefresher, StaleCause: section 3a
 data class EventInstance(val uid: String, val title: String, val start: EventTime, val end: EventTime?)
 sealed interface EventTime {
   data class At(val instant: Instant) : EventTime        // UTC, TZID and floating times resolved to an instant
@@ -79,6 +88,16 @@ enum class SecretKey { CALENDAR_URL, ANTHROPIC_API_KEY }
 interface SecretStore { fun get(k: SecretKey): String?; fun put(k: SecretKey, v: String); fun clear(k: SecretKey) }
 class Redactor(secrets: () -> Collection<String>) { fun redact(s: String): String }
 ```
+**Threading contract (T5):** `CalendarSource.fetch` and `BodyFetcher.fetch` are main-safe; call them from any
+dispatcher, including Main. The secret read and the download run on `Dispatchers.IO`, the parse on
+`Dispatchers.Default` inside `runInterruptible`. Cancelling the calling coroutine (e.g. the lifecycle scope on
+`ON_STOP`) cancels the OkHttp call and interrupts the parse; `fetch` then throws `CancellationException`, which the
+app must let propagate. A cancel is never reported as a result (no `NETWORK` or `PARSE`): every boundary
+`catch (Throwable)` calls `ensureActive()` before mapping (section 3a, N7). Nothing else is thrown. `:core` exposes kotlinx-coroutines-core 1.9.0 as an `api` dependency.
+`IcsFetcher`'s client-customising constructor is `internal` (tests only); the app uses `IcsFetcher()`.
+`toString()` of `EventInstance`, `FetchResult.Ok`, `AgendaDay` and `AgendaItem` prints counts and times only, never
+titles or uids.
+
 No exception, exception message or URL crosses from `calendar` into `state` or `app`: errors are the `SourceError`
 enum only. That is the main redaction control; `Redactor` is defence in depth for anything that is logged.
 
@@ -87,28 +106,187 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
   (`ZoneId.systemDefault()`, injected). Timed instance appears on each local day it overlaps; label is its local start
   time if it starts that day, else `Continues`. All-day events (VALUE=DATE) appear on each date in [DTSTART, DTEND).
   Sort: all-day first, then by start, then title. Floating times are read in the device zone.
-- **Recurrence.** RRULE/RDATE via biweekly's `getDateIterator(tz)` using the VEVENT's own TZID (from VTIMEZONE or
-  Olson name). EXDATE removes instances. **RECURRENCE-ID overrides are not applied by biweekly**: core must group
-  VEVENTs by UID, drop the original instance for each RECURRENCE-ID, and add the override. `STATUS:CANCELLED`
-  instances are dropped. Iteration is capped (stop once past the window; hard cap 5,000 iterations per VEVENT).
+- **Recurrence (revised after the M1 core reviews, 2026-10-31; reader replaced by ADR 0004).** `IcsReader` (ours,
+  section 3a) reads the text; biweekly is a test oracle only. Its iterator was never safe: walking from DTSTART made
+  1900 series vanish, floating series drift an hour after DST, and SECONDLY rules (also inside VTIMEZONE, evaluated
+  at parse time) exhaust CPU or memory. Instead:
+  - VTIMEZONE components are skipped as opaque lines, never interpreted. TZID resolves against the device tz
+    database (`ZoneId.getAvailableZoneIds()` membership, also `/mozilla.org/...`-style prefixes), then a CLDR map of
+    the Windows names Outlook writes, then the device zone (never UTC).
+  - `RecurrenceExpander` (ours) expands DAILY / WEEKLY / MONTHLY / YEARLY with INTERVAL, COUNT, UNTIL, BYMONTH,
+    BYMONTHDAY, BYDAY (ordinals), BYSETPOS, BYHOUR/BYMINUTE/BYSECOND and WKST, in the event's local frame (TZID zone,
+    or the device zone for floating times), so wall-clock times hold across DST. It jumps to the window's period by
+    arithmetic. With COUNT it counts the earlier instances arithmetically when every period yields the same number
+    (all shapes Google writes), else walks period by period under the series budget. DTSTART is always instance 1
+    (RFC 5545). A property test checks it against biweekly's iterator on recent DTSTARTs; it found two biweekly bugs
+    (DAILY;INTERVAL>1 with BYDAY, WEEKLY with BYSETPOS), and ours follows the RFC there.
+  - Not expanded (the series shows its DTSTART only, counted as `unsupportedRules`): SECONDLY, MINUTELY, HOURLY
+    (no family calendar needs them, Google's UI cannot make them, and they were the DoS vector), BYYEARDAY,
+    BYWEEKNO, more than 1,000 candidates in one period, COUNT outside 1-10^9, an RRULE line over 1 KiB, any BYxxx
+    value outside its RFC range, an unknown or repeated part. Only the first RRULE counts; EXRULE is ignored. A
+    series that exceeds its own 20,000-step budget is skipped (`skippedSeries`); that is a different case.
+  - All-day series with a date-time UNTIL compare by the UNTIL's date in the device zone (`allday-until-utc-frame`).
+  - EXDATE removes instances (a DATE EXDATE removes that local day). RDATE adds them. **RECURRENCE-ID**: VEVENTs are
+    grouped by UID, the original instance for each RECURRENCE-ID is dropped and the override added.
+    **RANGE=THISANDFUTURE is not handled**: such an override replaces only its own instance (Google and Outlook split
+    the series instead of writing it). `STATUS:CANCELLED` events and instances are dropped.
+  - One VEVENT that throws (an impossible date, a bad value) is skipped; the rest of the feed is used. One bad
+    EXDATE or RDATE value is ignored (`ignoredValues`); it does not drop the series.
 - **Boundaries catch `Throwable`** (`#3 okhttp-key-in-exception`): `IcsCalendarSource.fetch` and
   `ClaudeAssistant.resolve` wrap everything, map to the error enum and drop the throwable; nothing is rethrown.
-- **Parsing limits:** biweekly text parser only (never `parseXml`); at most 500 expanded instances in total.
+- **Parsing limits:** section 3a (definition, limits table, outcome type). In short: 10 MiB, strict framing,
+  whitelist, 50,000 VEVENTs, 5,000,000 steps per parse and 20,000 per series charged before work, a 5 s deadline
+  over the whole parse, and `Exhausted` (never a shorter `Ok`) when a parse-wide limit runs out. At most 500
+  instances are returned: those overlapping today and tomorrow (`agendaFocus`) first, then the earliest; the list
+  is in start order. The parse polls the thread's interrupt flag.
 - **Fetch.** HTTPS only (rejected in core before any I/O, plus Android `cleartextTrafficPermitted=false`).
   OkHttp: connect 5 s, read 10 s, call 15 s, `followSslRedirects(false)`, response body capped at 10 MB
-  (`TOO_LARGE`). Parsing runs off the main thread. Before fetching, the app checks connectivity; offline gives
+  (`TOO_LARGE`), returned as `ByteArray`. The final response host must be `calendar.google.com` or end in
+  `.google.com` (else `HTTP_STATUS`), and `IcsCalendarSource` re-validates the stored URL with the provisioning
+  regex before any I/O. Parsing runs off the main thread. Before fetching, the app checks connectivity; offline gives
   `OFFLINE` immediately (AC8: launch with network off in under 2 s).
-- **Cache.** After a good fetch, store the expanded instances for the window above as JSON
-  (`{"v":1,"fetchedAt":...,"events":[...]}`, kotlinx.serialization) in `noBackupFilesDir/agenda-cache.json`
+- **Cache.** After a good fetch (`Ok`, that is a `Complete` parse; written only by `AgendaRefresher`), store the expanded instances for the window above as JSON
+  (`{"v":1,"fetchedAt":...,"windowStart":...,"windowEnd":...,"events":[...]}`, kotlinx.serialization) in `noBackupFilesDir/agenda-cache.json`
   (atomic write via temp file + rename). Titles are truncated to 200 chars before caching. The cache never contains
-  the URL. A cache whose window no longer covers today counts as no cache.
+  the URL. A cache whose window no longer covers all of today and tomorrow counts as no cache. A cache file over 1 MiB is read as no cache. Added T4 states: `NothingScheduled` (fresh and both days empty), `Unreadable` (no cache, PARSE/PARSE_LIMIT/TOO_LARGE); `Ok`/`Stale` carry `ageText`; `Stale` carries `cause` (section 3a).
 - **State.** No secret: `NotSetUp`. No usable cache and first fetch in flight: `Loading` (transient, at most the
   15 s call timeout). No usable cache and fetch failed: `CantReach`. Cache and last fetch this session succeeded:
   `Ok`. Cache and (last fetch failed, or none yet and cache older than 15 min): `Stale` with "Updated N min ago",
   `emphasised` when older than 60 min. "Nothing scheduled" is how an empty `AgendaDay` renders, not a state.
   (Assumption: "Updated N min ago" is shown whenever the cache is shown after a failed fetch; emphasis at 60 min.)
 - **Refresh.** Fetch on `ON_START`, then every 15 min while `STARTED` (lifecycle-scoped coroutine), never in the
-  background. No WorkManager, no wake locks.
+  background. No WorkManager, no wake locks. Each trigger calls `AgendaRefresher.refresh()` (section 3a), which is
+  single-flight and the only writer of the cache.
+
+## 3a. Bounded calendar parse (re-plan of `ics-parse-cpu-memory-dos`, ADR 0004)
+Third return of the key, so this section defines the concept and lists every consumer before the next fix.
+Enforcement architecture and alternatives: [ADR 0004](../adr/0004-tv-home-bounded-ics-parse.md). Tasks: T2b.
+
+### Definition
+A **bounded, safe calendar parse** turns any byte string of at most 10 MiB into exactly one `ParseOutcome`, such
+that, whatever the bytes are:
+1. **Time.** It returns within the 5 s wall-clock deadline plus one check interval. The deadline is a backstop:
+   deterministic limits (bytes, counts, steps) bind first on the sandbox JVM (every hostile probe under 1 s there
+   with the clock frozen). Each check interval is at most 64 KiB read or 512 steps.
+2. **Memory.** Live heap beyond the body itself stays within a fixed bound, estimated at 16 MiB (override keys about
+   3.2 MiB, collector about 1.2 MiB, one 8 KiB line buffer, one VEVENT's at most 2,000 EXDATE/RDATE values; each
+   series is expanded at its `END:VEVENT`, so none is kept, and RECURRENCE-ID keys are re-applied at the end). Tested by running every
+   probe, including 10 MiB bodies, in a test JVM with a 96 MiB heap.
+3. **Output.** At most 500 instances, each with uid and title of at most 200 chars (table below).
+4. **Exceptions.** Nothing escapes except `InterruptedException`/`CancellationException` on cancel. Bugs are
+   caught at the source boundary and become `PARSE`, with no text.
+5. **Determinism.** With the clock frozen, the same body, window and zone give the same outcome. Only the deadline
+   is clock-dependent, and it can only turn a result into `Exhausted`, never into a smaller `Complete`.
+
+On exhaustion: a **parse-wide** limit (deadline, 5,000,000 global steps, 50,000 VEVENTs, 5,000 kept series) gives
+`Exhausted(limit)`. The answer is unknown, so nothing from it is shown or cached. A **per-item** limit is
+deterministic and stays inside `Complete`, counted in `ParseStats`: a malformed VEVENT is skipped; an unsupported
+rule shows its DTSTART only; one series over its own 20,000 steps is skipped; one bad EXDATE/RDATE value is
+ignored; and over 500 instances, the extra ones are cut with today and tomorrow kept first (`truncated`). One UID
+holds at most 48 focus instances per local day (48 today, 48 tomorrow; the day of the instance's start, or today
+if it began earlier); its extra ones are cut (`truncated`). RECURRENCE-ID removal keys come from a first, keys-only
+reader pass, so they apply as instances are added and the result does not depend on file order.
+
+### Contract
+```kotlin
+// calendar
+fun interface IcsParse { fun parse(body: ByteArray, window: InstantRange): ParseOutcome }
+sealed interface ParseOutcome {
+  class Complete(val events: List<EventInstance>, val stats: ParseStats) : ParseOutcome   // the only one shown/cached
+  class Exhausted(val limit: ParseLimit) : ParseOutcome
+  class Rejected(val reason: RejectReason) : ParseOutcome
+}
+enum class ParseLimit { DEADLINE, STEPS, VEVENTS, SERIES }
+enum class RejectReason { NOT_VCALENDAR, LINE_ENDING, VERSION, CALSCALE, NESTING, STRUCTURE }
+data class ParseStats(val vevents: Int, val skippedEvents: Int, val unsupportedRules: Int, val skippedSeries: Int,
+                      val ignoredValues: Int, val truncated: Boolean, val steps: Long)          // counts only
+enum class SourceError { NOT_CONFIGURED, OFFLINE, NETWORK, HTTP_STATUS, TOO_LARGE, PARSE, PARSE_LIMIT, INSECURE_URL }
+class IcsFetchResult.Body(val bytes: ByteArray)                  // was String; the reader decodes kept lines only
+
+// state
+enum class StaleCause { OVERDUE, CANT_REACH, UNREADABLE }       // AgendaState.Stale gains `cause`
+class AgendaRefresher(source: CalendarSource, cache: CacheFile, zone: () -> ZoneId, clock: () -> Instant,
+                      io: CoroutineDispatcher = Dispatchers.IO) {
+  /** Single-flight: null (no fetch) if a refresh is running. Saves the cache only for Ok. Cancellation propagates
+   *  and changes nothing. */
+  suspend fun refresh(): FetchResult?
+}
+```
+`IcsCalendarSource` maps `Complete` to `Ok`, `Exhausted` to `Failed(PARSE_LIMIT)` and `Rejected` to `Failed(PARSE)`.
+For any other `Throwable` it calls `ensureActive()` first, then gives `PARSE` (parse phase) or `NETWORK` (other phases).
+
+### What the UI shows
+| Outcome | SourceError | With a usable cache | No usable cache |
+|---|---|---|---|
+| `Complete` | (Ok) | Ok / NothingScheduled; cache replaced | same |
+| `Exhausted` | `PARSE_LIMIT` | Stale, cause UNREADABLE: silent under 60 min; at 60 min or older amber plus footer "Calendar data unreadable. Showing the last copy." (proposed copy, T2b.4) | Unreadable ("Calendar data unreadable") |
+| `Rejected` | `PARSE` | same as above | Unreadable |
+| body over 10 MiB | `TOO_LARGE` | same as above | Unreadable |
+| network failures | `OFFLINE`, `NETWORK`, `HTTP_STATUS` | Stale, cause CANT_REACH (existing footer "Can't reach calendar. Showing the last copy.") | CantReach |
+| cancelled | none (throws) | nothing changes | nothing changes |
+
+### Never allowed
+| # | Never | Enforced by | Test |
+|---|---|---|---|
+| N1 | An agenda from a parse that hit a parse-wide limit is shown or cached | No path from `Exhausted` to `Ok` (`when` is exhaustive) | fake-clock deadline test; STEPS probe |
+| N2 | The last good cache is overwritten by anything but a `Complete` parse | `AgendaRefresher` is the only cache writer; app code never calls `save` | refresher tests with Failed and cancel after an Ok |
+| N3 | A parse on the main thread, or two parses at once | parse on `cpu` in `runInterruptible`; refresher `Mutex.tryLock` | refresher single-flight test; T5 review |
+| N4 | Any input of at most 10 MiB breaks the time, memory, output or exception bounds above | sections below | hostile suite (T2b), seeded fuzz |
+| N5 | VTIMEZONE, vCal 1.0 properties or any non-whitelisted property or component is interpreted | `IcsReader` whitelist; biweekly not on the runtime classpath | probes P1, P9, P12, P13, P20, P22; lockfile check |
+| N6 | Calendar content or the URL in an exception, log or `toString` | enum errors; counts-only `toString` (`ParseStats`, `Complete`) | `ToStringPrivacyTest` extended |
+| N7 | Cancellation reported as a result (NETWORK or PARSE) | `ensureActive()` before every boundary mapping | fetcher and source cancel tests on `fetch`'s own outcome |
+| N8 | A loop over an input-derived collection whose size was not capped at read time | `// bound:` comment on every loop in `calendar/`; domain sets | code review checklist; iteration-counter test |
+
+### Limits (every field, maximum encoded size after normalization)
+| Item | Limit | Max size | Enforced in |
+|---|---|---|---|
+| Response body | 10 MiB after gzip, counted while reading | 10,485,760 B | `IcsFetcher` (`TOO_LARGE`) |
+| Kept property logical line (after unfolding), except RRULE | 8 KiB; over: VEVENT skipped (SUMMARY: first 200 chars kept, rest skipped) | 8,192 B buffer | `IcsReader` |
+| RRULE logical line | 1 KiB; over: unsupported (DTSTART only) | 1,024 B | `IcsReader` |
+| Any other property line | any length, never buffered | 0 B kept | `IcsReader` |
+| `UID` | TEXT-unescaped, trimmed, cut to 200 chars at a code-point boundary (same constant as `CachedAgenda.MAX_TITLE`) | 600 B UTF-8 | `IcsReader` |
+| `SUMMARY` | unescaped, C0 controls to space, trimmed, 200 chars at a code-point boundary | 600 B UTF-8 | `IcsReader` |
+| `TZID` | 128 chars (over: device zone), last 4 path suffixes tried, memo of at most 256 per parse | 384 B transient; memo about 80 KB | `ZoneResolver` |
+| EXDATE + RDATE values per VEVENT | 2,000 (over: VEVENT skipped); kept only if near the window | 16 KB transient | `IcsReader` |
+| BYxxx sets | domain-bounded: 12 / 62 / 749 / 24 / 60 / 61 / 732; INTERVAL 1-100,000; COUNT 1-10^9 | fixed | RRULE parser |
+| Candidates per period | days x times at most 1,000 (else unsupported) | fixed | `RecurrenceExpander` |
+| Nesting depth | 4 (VCALENDAR > VEVENT > VALARM; VTIMEZONE > STANDARD) | n/a | `IcsReader` (`Rejected`) |
+| VEVENTs per feed | 50,000 | n/a | `IcsReader` (`Exhausted(VEVENTS)`) |
+| Recurring masters that can reach the window (DTSTART before window end, UNTIL not before window start minus span), counted | 5,000 | none kept (expanded as read) | `IcsParser` (`Exhausted(SERIES)`) |
+| RECURRENCE-ID removal keys | one per override, so at most 50,000 (the VEVENT cap; over: `Exhausted(VEVENTS)`), collected by a keys-only first pass, one step each | about 64 B each | `IcsReader` (keys pass), `IcsParser` |
+| Steps | 5,000,000 per parse, 20,000 per series, charged before work (an RRULE's BYxxx values before its rule is built, which happens only if it can reach the window; its times of day before they are built; each EXDATE before its key) | n/a | `Budget` |
+| Wall clock | 5 s from parse entry | n/a | `Budget` + `IcsReader` |
+| Instances returned | 500; at most 48 focus instances per (UID, local day) | one count per (UID, day) with focus instances | `Collector` |
+| Cache JSON per instance | uid 600 + title 600 + two times 80 + keys 80 | 1,360 B | `CachedAgenda` |
+| Cache file | 500 x 1,360 B + header | under 700 KB; a file over 1 MiB is read as no cache | `JvmCacheFile`, `CachedAgenda.decode` |
+
+Calibration (sandbox, measured 2026-10-31): the current code spends 0.41 s on 2,000,000 expander steps plus
+biweekly's parse of 3,000 VEVENTs, and 1.08 s on 20,000 SECONDLY VEVENTs (mostly biweekly). So 1,000,000 steps
+cost about 0.2 s here, est. 1-1.6 s on a Chromecast-class CPU (5-8x slower, unverified). A legit feed needs about
+50 steps per series. Re-measured 2026-10-31 with our own reader: 5,000,000 steps take about 0.3 s here (P7b, P33c),
+est. under 2.5 s on the TV, so the global budget is 5,000,000 (manager decision).
+
+### Consumers and code paths that touch untrusted ICS bytes
+| # | Consumer (file) | Touches | Limits that apply | Enforced where |
+|---|---|---|---|---|
+| 1 | Provisioning (`ProvisionValidator`, `provision.ps1`, `ProvisionActivity`) | the URL, not the bytes | host pin `calendar.google.com`, private-token regex | script, activity, core validator |
+| 2 | `IcsCalendarSource` | orchestration | re-validates the URL before fetching (H11); maps outcomes; `ensureActive()` before mapping a Throwable | `IcsCalendarSource.fetch` |
+| 3 | `IcsFetcher` | raw bytes from the network | HTTPS only, connect 5 / read 10 / call 15 s, 10 MiB after gzip, every redirect hop's host `calendar.google.com` or `*.google.com` (network interceptor, before the hop's request is sent), returns `ByteArray` (one copy), `call.cancel()` plus `ensureActive()` on cancel | `IcsFetcher.fetch/execute` |
+| 4 | `IcsReader` (replaces `IcsPrepass` and `Biweekly.parse`) | every byte, twice (a keys-only pass, then the full read) | framing, VERSION, depth, whitelist, line caps, per-VEVENT caps, VEVENT count, kept-series count, deadline and interrupt every 64 KiB; O(bytes) | `IcsReader` |
+| 5 | RRULE parser (in `IcsReader`) | the RRULE line | 1 KiB, domain sets, strict ranges (H9), unknown or repeated part means unsupported | `IcsReader.rule()` |
+| 6 | `ZoneResolver` | TZID strings | 128 chars, set membership (no exceptions), at most 4 suffixes, memo of at most 256 per parse (H8) | `ZoneResolver.resolve` |
+| 7 | `RecurrenceExpander` | rules, dates | static per-period bound charged before work; COUNT counted arithmetically or over one 400-year calendar cycle (count-only periods charged their own bound); 20k per series (skip), 5M global (`Exhausted`); interrupt every 512 steps | `RecurrenceExpander`, `Budget` |
+| 8 | Override and EXDATE matching (`Keys`) | removal keys | HashSet lookups; EXDATE/RDATE kept only near the window | `IcsParser.collect` |
+| 9 | `Collector` (window filter, 500 cap) | instances | each add costs 1 step; bounded heap of 500 (O(log 500)) | `Collector` |
+| 10 | `buildAgenda` | at most 500 instances | O(n log n) per call; runs on every `reduce` | `Agenda.kt` |
+| 11 | `CachedAgenda` encode/decode | at most 500 instances; our own file | written only from `Ok`; read cap 1 MiB; decode on IO | `CachedAgenda`, `JvmCacheFile` |
+| 12 | `reduce()` | `FetchResult`, cache | `PARSE_LIMIT` handled like `PARSE`; Stale carries `cause` | `AgendaState.kt` |
+| 13 | `AgendaRefresher` (new) | `FetchResult` | single-flight; only cache writer; Ok only; cancel changes nothing | `state/AgendaRefresher.kt` |
+| 14 | Android refresh loop and threads (T5) | none directly | `lifecycleScope` coroutine calls `refresher.refresh()` on ON_START and each 15-min TICK; parse on `Dispatchers.Default`; cache I/O on IO; ON_STOP cancels (interrupts the parse); never Main; release uncaught handler (does not delegate, so no dropbox entry; it is not the secret control, see section 4) | `AgendaActivity` (T5 review) |
+| 15 | Tests and CI | fixtures | `*.ics` kept CRLF via `.gitattributes`; `:core:hostileTest` (96 MiB heap) in CI job 1; live public-Google-feed check (manual job) | T2b.6 |
+
+Not consumers: M1b's assistant (never sees calendar data), M1c's `tv-remote` (no calendar access). A later
+`GoogleOAuthCalendarSource` returns the same `FetchResult`; it must give `Ok` only for a complete page set.
 
 ## 4. Android app (M1)
 - **UI toolkit: Compose for TV** (`androidx.tv:tv-material`) over Leanback. Leanback is in maintenance mode and
@@ -119,8 +297,11 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
 - Screen: two columns (Today, Tomorrow), 32 sp titles, 28 sp times, high contrast, 5% overscan margins. In M1 the
   only focusable element is the screen; Back exits. M1b adds one "Ask Claude" button that takes initial focus (spec
   M1b AC1); Back still exits. No focus trap by construction.
-- Release builds install an uncaught-exception handler that logs the exception class name only, never the message
-  or stack, then lets the process die (`#3`).
+- Release builds install an uncaught-exception handler that writes exception class names only to `System.err` and
+  ends the process without delegating, so no `data_app_crash` dropbox entry is made (`#3`). It is **not** what keeps
+  secrets out of crash output: since Android 8 the runtime's `LoggingHandler` runs first and logs the message and
+  stack to `logcat -b crash`. The control is that no exception carrying a secret escapes: fetch, provisioning,
+  Keystore and cache boundaries catch `Throwable` and map to enums (T9 proves it with a marker repro).
 - `KeystoreSecretStore`: AES-256-GCM key in AndroidKeyStore (non-exportable), ciphertext in `noBackupFilesDir`.
   (EncryptedSharedPreferences is deprecated; using the Keystore directly avoids the dependency.)
 - Manifest: `allowBackup=false`, `dataExtractionRules`/`fullBackupContent` excluding everything,
@@ -130,7 +311,13 @@ enum only. That is the main redaction control; `Redactor` is defence in depth fo
   are off until enabled over adb. Never `QUERY_ALL_PACKAGES`.
 - Release build: `isDebuggable=false`, R8 on, `-assumenosideeffects class android.util.Log { *; }` so no log call
   survives. Debug builds are for the emulator only and are never installed on Brian's TV.
-- minSdk 31, targetSdk 34, compileSdk 34 (bump target to 35 only if a Compose for TV release needs it). AGP pinned in
+- minSdk 31, targetSdk 34 (runtime behaviour), **compileSdk 35** (a build-time choice: AndroidX releases from late 2024 need
+  it, and a lower value could only fail in CI's `checkAarMetadata`, which the sandbox cannot run; the workflow installs
+  `platforms;android-35`).
+- Compose pins, T5 (2026-10-31): BOM 2024.12.01 (Compose 1.7), tv-material 1.0.0, activity-compose 1.9.3, lifecycle
+  2.8.7 instead of the earlier BOM 2025.06.00 / tv-material 1.0.1 / activity-compose 1.10.1. Reason: Kotlin is pinned at
+  2.0.21 and could not be compile-checked against the newer Compose here (no SDK), so T5 used the generation that
+  matches Kotlin 2.0.x. Revisit when CI is green: bump together with Kotlin, not one at a time. AGP pinned in
   the catalog to the newest stable release that supports Gradle 8.14 (devops-engineer records the exact version).
 
 ## 5. Getting secrets onto the TV (calendar URL, M1b API key)
@@ -142,11 +329,12 @@ an interactive console.
 1. `scripts/provision.ps1 -Key calendar_url` reads the value with `Read-Host -AsSecureString` (not written to
    PSReadLine history), trims it and checks it against a strict regex (`#3`), printing only "valid" or "not valid":
    - calendar URL: `^https://calendar\.google\.com/calendar/ical/[A-Za-z0-9%._-]+/private-[0-9a-f]{32}/basic\.ics$`
-   - API key: `^sk-ant-[A-Za-z0-9_-]{20,256}$`
-   It then hands the value to the TV. Preferred, if T9 confirms it works: pipe it over stdin with
+   - API key: `^sk-ant-[A-Za-z0-9_-]{20,500}$`
+   It then hands the value to the TV only by piping it over stdin with
    `adb shell content write --uri content://com.gnosh.tvhome.provision/calendar_url` into a `DUMP`-guarded
-   `ContentProvider`, so it is never a command-line argument (`#10`). Fallback: `adb shell am start -n
-   com.gnosh.tvhome/.ProvisionActivity --es calendar_url '<value>'` with single-quote escaping.
+   `ContentProvider`, so it is never a command-line argument (`#10`). There is no `am start` fallback (removed after
+   the T8 security review, `provision-fallback-argv`); if T9 finds `content write` over stdin unusable, this design
+   is revisited. ProvisionActivity stays DUMP-guarded but no script uses it.
 2. `ProvisionActivity` (and the provider) is protected by `android:permission="android.permission.DUMP"`, which the
    adb shell user holds and third-party apps cannot get, so no other app on the TV can plant or overwrite a value.
    The activity has no intent-filter, `excludeFromRecents`, `noHistory`; it reads the extra, calls
@@ -162,10 +350,10 @@ Traces, and what tests check (AC6):
 |---|---|---|
 | Claude / agent transcripts | none: Brian runs the script himself | ask wording; script refuses non-interactive stdin |
 | PC PowerShell history | none (`Read-Host`) | script review |
-| PC process list | none with `content write` over stdin; with the `am start` fallback, an adb argument for under a second, visible to Brian's own user only | accepted |
-| TV `am` process args | none with stdin; brief with the fallback; Android hides other apps' /proc | accepted |
+| PC process list | none (`content write` over stdin only) | script review, test-provision.sh |
+| TV `am` process args | none (stdin only) | script review |
 | TV logcat | ActivityTaskManager logs `START u0 {cmp=... (has extras)}`, not extra values | **QA greps a captured logcat after provisioning a dummy value on the emulator** |
-| App logs and crashes | none in release (R8 strips Log; uncaught handler logs class names only) | QA greps logcat incl. `System.err` and `AndroidRuntime`, and `dumpsys dropbox --print data_app_crash` (`#3`) |
+| App logs and crashes | none in release (R8 strips Log; boundaries never let an exception with a secret escape; the uncaught handler only avoids the dropbox) | QA greps logcat incl. `System.err`, `AndroidRuntime` and `logcat -b crash`, and `dumpsys dropbox --print data_app_crash` (`#3`) |
 | Repo / CI | value never present; fixtures use one fixed fake secret | CI greps the build log and the unzipped APK (dex and resources) for `private-[0-9a-f]` and `sk-ant-` (`#9`) |
 
 ## 6. Signing and CI
@@ -323,7 +511,7 @@ Tools (complete allowlist; anything else is not exposed):
 | `tv_status` | none | reachability, LG power/volume/input/foreground app, Google TV current app |
 | `tv_open` | `service`, `content_id?`, `search_query?` | builds the link from the shared `services.json`, sends it as an app link |
 | `tv_launch_app` | `service` (enum) | |
-| `tv_key` | `key` enum (UP, DOWN, LEFT, RIGHT, OK, BACK, HOME, PLAY_PAUSE, REWIND, FAST_FORWARD), `repeat` 1-10 | |
+| `tv_key` | `key` enum (UP, DOWN, LEFT, RIGHT, OK, BACK, HOME, PLAY_PAUSE, REWIND, FAST_FORWARD, VOLUME_UP, VOLUME_DOWN, MUTE, POWER), `repeat` 1-10 | VOLUME_UP/DOWN, MUTE and POWER reach the LG over HDMI-CEC (2026-10-31: Brian's LG BX on webOS 5 refuses wss 3001, so the `lg_*` tools stay unconfigured). No level comes back over CEC, so there is no 60 cap on this path: VOLUME_UP is capped at 3 presses per call and 10 per rolling minute, and POWER (a standby toggle) at 1. Tested 2026-11-01 on Brian's LG BX: POWER puts both TVs to sleep and the Google TV remote wakes both; the BX ignores CEC volume/mute (even from the physical remote), so LG volume needs another route. |
 | `lg_power` | `on` / `off` | on = Wake-on-LAN to the stored MAC; off = `ssap://system/turnOff` |
 | `lg_volume` | `level` 0-60, or `up` / `down` | capped at 60 |
 | `lg_mute` | bool | |
@@ -351,8 +539,8 @@ the ATV client private key are encrypted at rest with Windows DPAPI (current use
 - Performance: AC8 (cold start, network off, under 2 s, `am start -W` on the emulator). Parsing a 5 MB feed off
   the main thread is fine because the cache renders first.
 - Observability: none beyond the screen (spec: no telemetry). Debug builds log through `Redactor`.
-- Size budget (cache): at most 500 instances × (uid ≤ 256 B + title ≤ 800 B UTF-8 after truncation to 200 chars +
-  ~60 B times) ≈ 560 KB worst case; typical under 20 KB.
+- Size budget (cache): at most 500 instances × 1,360 B JSON (uid and title each ≤ 200 chars, ≤ 600 B UTF-8 after
+  normalization; times and keys 160 B) ≈ 680 KB worst case; typical under 20 KB. Every field: section 3a.
 
 ## 10. Risks
 | Risk | Likelihood | Mitigation |
@@ -374,3 +562,6 @@ the ATV client private key are encrypted at rest with Windows DPAPI (current use
 | A secret pasted into chat when a script fails | Medium | `#1`: Brian runs scripts himself; asks never request values; script refuses non-interactive stdin |
 | Answer too slow for a TV (search-heavy requests) | Medium | Stream progress; skip search when not needed; B10 measures; Sonnet 5.5 switch offered |
 | Maven Central 429s slow sandbox builds | High | Retry; Gradle cache |
+| Brian's real feed hits a parse limit on the TV (stale, then "Calendar data unreadable") | Low-medium | Limits are 20x a legit feed's step need; `provision.ps1` prints counts at T11; `Limits` is one parameter to change |
+| Google's feed framing differs from what `IcsReader` accepts (e.g. LF line ends) | Low | T2b.6 live check on a public Google feed before T11; fails visibly (Unreadable), never silently |
+| About 50 crafted recurring invites exhaust the global budget (availability only) | Low | Accepted (ADR 0004); the last copy stays on screen; Brian deletes them |
