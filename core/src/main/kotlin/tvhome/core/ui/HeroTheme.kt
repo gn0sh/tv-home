@@ -1,5 +1,7 @@
 package tvhome.core.ui
 
+import tvhome.core.feeds.GameDay
+import tvhome.core.feeds.TeamGame
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -7,7 +9,7 @@ import java.time.Month
 import java.time.temporal.TemporalAdjusters
 
 /** What the hero backdrop draws on top of its gradient. The app has one Canvas drawing per motif. */
-enum class HeroMotif { MOON_BATS, SNOW, DAWN, DAY, SUNSET, STARS }
+enum class HeroMotif { MOON_BATS, SNOW, DAWN, DAY, SUNSET, STARS, GAME }
 
 /**
  * The hero area's look for one moment (M2e). Colours are 0xRRGGBB. [text] and [secondaryText] are for the title,
@@ -27,6 +29,19 @@ data class HeroTheme(
         /** The fourth Thursday of [year]'s November (US Thanksgiving). */
         fun thanksgiving(year: Int): LocalDate =
             LocalDate.of(year, Month.NOVEMBER, 1).with(TemporalAdjusters.dayOfWeekInMonth(4, DayOfWeek.THURSDAY))
+
+        /**
+         * Game day beats holiday beats time of day (M2f). [game] is the followed game that owns the hero, if any (see
+         * [GameDay.select]); a live game is chosen over a scheduled one there, so it wins over everything. Weather never
+         * changes the theme: it is a chip and a motif overlay in the app.
+         */
+        fun resolve(date: LocalDate, time: LocalTime, game: TeamGame?): HeroTheme =
+            if (game != null) forGame(game) else at(date, time)
+
+        fun forGame(game: TeamGame): HeroTheme {
+            val t = game.team
+            return HeroTheme(t.backdropTop, t.backdropBottom, t.accent, HeroMotif.GAME, GameDay.badge(game))
+        }
 
         /** Holidays win over time of day. Time of day: morning 5-11, day 11-17, evening 17-21, night 21-5. */
         fun at(date: LocalDate, time: LocalTime): HeroTheme = holiday(date) ?: timeOfDay(time)
