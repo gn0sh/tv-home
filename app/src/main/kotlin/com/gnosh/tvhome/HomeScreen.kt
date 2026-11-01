@@ -48,7 +48,12 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -163,7 +168,7 @@ fun HomeScreen(
                 val rest = before - pkg
                 // Focus goes to the tile that slides into the hidden one's place, else the one before it, else the Hidden tile.
                 val next = rest.getOrNull(before.indexOf(pkg)) ?: rest.lastOrNull() ?: HIDDEN_KEY
-                commit(layout.copy(order = AppLayout.arrange(layout.order, installedPkgs), hidden = AppLayout.hide(layout.hidden, pkg)), next)
+                commit(layout.copy(order = AppLayout.stored(layout.order, installedPkgs), hidden = AppLayout.hide(layout.hidden, pkg)), next)
             }
             TileAction.Cancel -> pendingFocus = pkg
         }
@@ -552,12 +557,14 @@ private const val DOCK_ASK = "ask"
 /** Focus-requester key of the "Hidden apps (N)" tile; cannot clash with a package name. */
 private const val HIDDEN_KEY = "::hidden"
 
+private val OK_KEYS = setOf(Key.Enter, Key.DirectionCenter, Key.NumPadEnter)
+
 /** The tile menu's entries, in the order shown (M2g). */
 private enum class TileAction(val label: String) {
-    Left("Move left"), Right("Move right"), Front("Move to front"), Hide("Hide"), Cancel("Cancel"),
+    Cancel("Cancel"), Left("Move left"), Right("Move right"), Front("Move to front"), Hide("Hide"),
 }
 
-/** The small menu a long press on an app tile opens. The first entry has focus; Back closes it. */
+/** The small menu a long press on an app tile opens. The first entry (Cancel, the safe one) has focus; Back closes it. */
 @Composable
 private fun TileMenu(theme: HomeTheme, title: String, onAction: (TileAction) -> Unit, onDismiss: () -> Unit) {
     val first = remember { FocusRequester() }
@@ -593,13 +600,27 @@ private fun HiddenAppsDialog(theme: HomeTheme, hidden: List<TileApp>, onUnhide: 
 @Composable
 private fun DialogCard(theme: HomeTheme, title: String, content: @Composable ColumnScope.() -> Unit) {
     val shape = RoundedCornerShape(16.dp)
+    val armed = remember { booleanArrayOf(false) }
     Column(
         Modifier
             .width(420.dp)
             .clip(shape)
             .background(color(theme.background), shape)
             .border(Tokens.RING_DP.dp, color(theme.secondaryText), shape)
-            .padding(24.dp),
+            .padding(24.dp)
+            // menu-held-ok-repeat: OK is still held down when the dialog opens, and a real remote then sends repeated
+            // KeyDowns and finally a KeyUp. Swallow OK/Enter events until a fresh press (KeyDown, repeatCount 0)
+            // arrives, so the held press cannot choose an entry.
+            .onPreviewKeyEvent { e ->
+                if (armed[0] || e.key !in OK_KEYS) {
+                    false
+                } else if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) {
+                    armed[0] = true
+                    false
+                } else {
+                    true
+                }
+            },
     ) {
         Text(title, color = color(theme.text), fontSize = 22.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(12.dp))

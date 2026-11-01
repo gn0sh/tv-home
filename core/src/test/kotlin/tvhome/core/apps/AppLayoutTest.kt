@@ -25,7 +25,6 @@ class AppLayoutTest {
     @Test fun hiddenAreLeftOutAndListedSeparately() {
         assertEquals(listOf("a", "c", "d"), AppLayout.apply(emptyList(), setOf("b"), installed))
         assertEquals(listOf("b"), AppLayout.hiddenApps(emptyList(), setOf("b", "gone"), installed))
-        assertEquals(setOf("b"), AppLayout.prune(setOf("b", "gone"), installed))
     }
 
     @Test fun moveRightAndLeftSwapNeighbours() {
@@ -57,6 +56,20 @@ class AppLayoutTest {
         val hidden = AppLayout.hide(emptySet(), "c")
         assertEquals(listOf("a", "b", "d"), AppLayout.apply(order, hidden, installed))
         assertEquals(listOf("c", "a", "b", "d"), AppLayout.apply(order, AppLayout.unhide(hidden, "c"), installed))
+    }
+
+    @Test fun missingAppsKeepTheirPlaceAndHiddenFlagInStorage() {
+        // A query without "b" (transient, or b uninstalled for a while) must not forget b's place or hidden flag.
+        val order = listOf("b", "a", "c", "d")
+        val without = listOf("a", "c", "d")
+        val moved = AppLayout.moveRight(order, setOf("b"), without, "a")
+        assertEquals(listOf("c", "a", "d", "b"), moved)
+        assertEquals(listOf("a", "c", "d", "b"), AppLayout.moveToFront(listOf("c", "a", "d", "b"), without, "a"))
+        assertEquals(listOf("a", "c", "d", "b"), AppLayout.moveLeft(moved, setOf("b"), without, "a"))
+        assertEquals(listOf("a", "c", "d", "b"), AppLayout.stored(order, without))
+        // b is back: it is still hidden, and the rest keep the new order.
+        assertEquals(listOf("c", "a", "d"), AppLayout.apply(moved, setOf("b"), listOf("a", "b", "c", "d")))
+        assertEquals(listOf("b"), AppLayout.hiddenApps(moved, setOf("b"), listOf("a", "b", "c", "d")))
     }
 
     @Test fun orderRoundTripsAndToleratesJunk() {

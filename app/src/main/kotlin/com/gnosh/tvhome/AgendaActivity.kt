@@ -23,7 +23,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import tvhome.core.apps.AppLayout
 import tvhome.core.assistant.AskEngine
 import tvhome.core.assistant.OpenTarget
 import tvhome.core.assistant.askAppsOf
@@ -136,11 +135,11 @@ class AgendaActivity : ComponentActivity() {
                 ask = askHost,
                 layout = layout,
                 onLayoutChange = { next ->
-                    // Drop hidden entries for apps that are gone, so the stored set stays true to what is installed.
-                    val now = (apps as? AppsState.Loaded)?.apps?.map { it.app.packageName }
-                    val saved = if (now == null) next else next.copy(hidden = AppLayout.prune(next.hidden, now))
-                    layout = saved
-                    lifecycleScope.launch(Dispatchers.IO) { runCatching { layoutStore.save(saved) } }
+                    // Unknown packages stay in the stored order and hidden set (layout-prune-transient): only display
+                    // filters them. apply() updates the in-memory prefs at once and writes in call order, so saves
+                    // cannot land out of order (layout-save-order); it is called on the main thread on purpose.
+                    layout = next
+                    runCatching { layoutStore.save(next) }
                 },
             )
         }

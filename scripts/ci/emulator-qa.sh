@@ -481,9 +481,11 @@ hero_text() { # the "Hero title: <label>" description in the UI dump (also defin
   ui_text | grep -oE 'content-desc="Hero title: [^"]*"' | head -1 | sed -E 's/^content-desc="Hero title: (.*)"$/\1/' || true
 }
 step "Row edit (M2g): long-press OK opens the menu, Move right reorders, Hide hides, the Hidden tile restores"
-# The tile menu (a dialog) opens with focus on its first entry, Move left; Move right is one Down from there, Hide is
-# three. The menu entries are plain text nodes, so they are checked with expect_text, and chosen by key count.
-long_press_ok() { sh_ input keyevent --longpress KEYCODE_DPAD_CENTER; sleep 2; }
+# The tile menu (a dialog) opens with focus on its first entry, Cancel; Move left is one Down from there, Move right
+# two, Hide four. The menu entries are plain text nodes, so they are checked with expect_text, and chosen by key count.
+# OK is held for 1.5 s (a real repeat stream, like a remote): the held press must open the menu and choose nothing
+# (menu-held-ok-repeat).
+long_press_ok() { sh_ input keyevent --duration 1500 KEYCODE_DPAD_CENTER; sleep 2; }
 if (( napps < 2 )); then
   warn "Row edit NOT VERIFIED: $napps other TV app(s) on this image, a reorder needs at least 2"
 else
@@ -497,14 +499,16 @@ else
   # Long-press OK on the first tile: the menu shows all five entries.
   long_press_ok
   in_front || fail "row-edit: the long press left the app (it launched the tile instead of opening the menu)"
-  for t in "Move left" "Move right" "Move to front" "Hide" "Cancel"; do expect_text "row-edit-menu" "$t"; done
-  # Back closes the menu and focus returns to the same tile.
+  for t in "Cancel" "Move left" "Move right" "Move to front" "Hide"; do expect_text "row-edit-menu" "$t"; done
+  # Back closes the menu and focus returns to the same tile, which did not move during the hold.
   key BACK
   cur=$(focus_after row-edit)
   [[ ${cur%%|*} == "$first_name" ]] || fail "row-edit: after Back from the menu focus is on '${cur%%|*}', not '$first_name'"
-  pass "row-edit: Back closed the menu and focus returned to '$first_name'"
+  [[ $(cut -d'|' -f2 <<<"$cur") == "$first_x" ]] || fail "row-edit: the held OK moved '$first_name' without a choice ($cur)"
+  pass "row-edit: Back closed the menu, the hold chose nothing, focus returned to '$first_name'"
   # Move right: the first tile swaps with the second and focus follows it.
-  long_press_ok; key DPAD_DOWN; key DPAD_CENTER; sleep 1
+  long_press_ok; expect_text "row-edit-held" "Move right"   # still open: the hold chose nothing
+  key DPAD_DOWN; key DPAD_DOWN; key DPAD_CENTER; sleep 1
   cur=$(focus_after row-edit)
   [[ ${cur%%|*} == "$first_name" ]] || fail "row-edit: after Move right focus is on '${cur%%|*}', not the moved tile '$first_name'"
   moved_x=$(cut -d'|' -f2 <<<"$cur")
@@ -515,14 +519,14 @@ else
   # The hero title follows the focused tile.
   [[ $(hero_text) == "$second_name" ]] || fail "row-edit: hero title is '$(hero_text)', expected '$second_name'"
   pass "row-edit: Move right put '$first_name' after '$second_name', focus followed, hero title updated"
-  # Restore the order: Right back onto the moved tile, long-press, Move left (the first entry, so OK alone).
-  key DPAD_RIGHT; long_press_ok; key DPAD_CENTER; sleep 1
+  # Restore the order: Right back onto the moved tile, long-press, Move left (one Down from Cancel).
+  key DPAD_RIGHT; long_press_ok; key DPAD_DOWN; key DPAD_CENTER; sleep 1
   cur=$(focus_after row-edit)
   [[ ${cur%%|*} == "$first_name" && $(cut -d'|' -f2 <<<"$cur") == "$first_x" ]] || fail "row-edit: Move left did not restore '$first_name' to the front ($cur)"
   pass "row-edit: Move left restored the original order"
 
   # Hide the first tile: it is gone from the row, and a "Hidden apps (1)" tile is at the end.
-  long_press_ok; key DPAD_DOWN; key DPAD_DOWN; key DPAD_DOWN; key DPAD_CENTER; sleep 1
+  long_press_ok; key DPAD_DOWN; key DPAD_DOWN; key DPAD_DOWN; key DPAD_DOWN; key DPAD_CENTER; sleep 1
   ui=$(ui_text); [[ -n $ui ]] || fail "row-edit: uiautomator dump failed after Hide"
   printf '%s\n' "$ui" > "$OUT/ui-row-edit-hidden.xml"
   grep -qF "content-desc=\"$first_name\"" <<<"$ui" && fail "row-edit: '$first_name' is still on the row after Hide"

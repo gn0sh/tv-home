@@ -26,8 +26,14 @@ object AppLayout {
     fun hiddenApps(order: List<String>, hidden: Set<String>, installed: List<String>): List<String> =
         arrange(order, installed).filter { it in hidden }
 
-    /** [hidden] without packages that are no longer installed, so the Hidden tile's count stays true. */
-    fun prune(hidden: Set<String>, installed: List<String>): Set<String> = hidden intersect installed.toSet()
+    /**
+     * The order to store: [arrange] plus, at the end, saved packages that are not in [installed] right now. They are
+     * kept (an app can be missing from one query and back in the next, or be reinstalled); only display filters them.
+     */
+    fun stored(order: List<String>, installed: List<String>): List<String> {
+        val present = installed.toHashSet()
+        return arrange(order, installed) + order.filter { it !in present }.distinct()
+    }
 
     /** The new saved order after moving [pkg] one visible place left; unchanged at the front or if unknown. */
     fun moveLeft(order: List<String>, hidden: Set<String>, installed: List<String>, pkg: String): List<String> =
@@ -40,8 +46,8 @@ object AppLayout {
     /** The new saved order with [pkg] first; unchanged if unknown. */
     fun moveToFront(order: List<String>, installed: List<String>, pkg: String): List<String> {
         val all = arrange(order, installed)
-        if (pkg !in all) return all
-        return listOf(pkg) + all.filter { it != pkg }
+        if (pkg !in all) return stored(order, installed)
+        return listOf(pkg) + all.filter { it != pkg } + unknown(order, installed)
     }
 
     /** [hidden] plus [pkg]. */
@@ -55,13 +61,18 @@ object AppLayout {
         val visible = all.filter { it !in hidden }
         val i = visible.indexOf(pkg)
         val j = i + step
-        if (i < 0 || j !in visible.indices) return all
+        if (i < 0 || j !in visible.indices) return stored(order, installed)
         val mutable = all.toMutableList()
         val a = mutable.indexOf(visible[i])
         val b = mutable.indexOf(visible[j])
         mutable[a] = visible[j]
         mutable[b] = visible[i]
-        return mutable
+        return mutable + unknown(order, installed)
+    }
+
+    private fun unknown(order: List<String>, installed: List<String>): List<String> {
+        val present = installed.toHashSet()
+        return order.filter { it !in present }.distinct()
     }
 
     /** Stored form: packages one per line (package names never contain a newline). */
