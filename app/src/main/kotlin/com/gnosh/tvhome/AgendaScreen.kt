@@ -23,14 +23,18 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -62,19 +66,34 @@ private val FILL = color(Tokens.FOCUS_FILL)
 private val RING = color(Tokens.FOCUS_RING)
 
 /**
- * The calendar panel of the home screen (M2): draws a [ScreenModel]; every word and row was decided in `:core`
- * (`screenModel`), so this file only lays things out. The home screen owns the background, margins and initial focus
- * (the first app tile), so this panel never requests focus. When there is no row to focus (message, or two empty
- * days) the panel itself is focusable with the focus ring, so D-pad Down from the tiles always lands somewhere and Up
- * goes back. Back is not handled here and exits the activity.
+ * The agenda (M2b: shown full screen when the Calendar tile is opened): draws a [ScreenModel]; every word and row was
+ * decided in `:core` (`screenModel`), so this file only lays things out. The caller owns the background, margins and
+ * Back. When there is no row to focus (message, or two empty days) the panel itself is focusable with the focus ring,
+ * so focus always has somewhere visible to be.
+ *
+ * [takeFocus]: when the panel appears, focus goes to the first row, or to the panel when there are no rows. A refresh
+ * that keeps rows never moves focus; one that switches between "no rows" and rows moves it to the new target, since
+ * the old one can no longer hold it. Up/Down then walk the rows and the list scrolls to keep the focused row in view.
  */
 @Composable
-fun AgendaPanel(model: ScreenModel, modifier: Modifier = Modifier) {
+fun AgendaPanel(model: ScreenModel, modifier: Modifier = Modifier, takeFocus: Boolean = false) {
     val noRows = when (model) {
         is ScreenModel.Message -> true
         is ScreenModel.Agenda -> model.today.rows.isEmpty() && model.tomorrow.rows.isEmpty()
     }
     var focused by remember { mutableStateOf(false) }
+    var rowFocused by remember { mutableStateOf(false) }
+    val panel = remember { FocusRequester() }
+    val firstRow = remember { FocusRequester() }
+    LaunchedEffect(takeFocus, noRows) {
+        if (!takeFocus || (!noRows && rowFocused)) return@LaunchedEffect
+        val target = if (noRows) panel else firstRow
+        withFrameNanos { }
+        if (runCatching { target.requestFocus() }.isFailure) {
+            withFrameNanos { }
+            runCatching { target.requestFocus() }
+        }
+    }
     val shape = RoundedCornerShape(8.dp)
     Box(
         // The focus node stays in the tree in every state; only canFocus changes, so the panel's focus target is not
@@ -82,12 +101,13 @@ fun AgendaPanel(model: ScreenModel, modifier: Modifier = Modifier) {
         modifier
             .onFocusChanged { focused = it.isFocused }
             .then(if (focused && noRows) Modifier.border(Tokens.RING_DP.dp, RING, shape) else Modifier)
+            .focusRequester(panel)
             .focusProperties { canFocus = noRows }
             .focusable(),
     ) {
         when (model) {
             is ScreenModel.Message -> MessageBody(model)
-            is ScreenModel.Agenda -> AgendaBody(model)
+            is ScreenModel.Agenda -> AgendaBody(model, firstRow) { rowFocused = it }
         }
     }
 }
@@ -136,13 +156,13 @@ private fun entriesOf(m: ScreenModel.Agenda): List<Entry> {
 }
 
 @Composable
-private fun AgendaBody(m: ScreenModel.Agenda) {
+private fun AgendaBody(m: ScreenModel.Agenda, firstRow: FocusRequester, onRowFocus: (Boolean) -> Unit) {
     Column(Modifier.widthIn(max = Tokens.MAX_CONTENT_WIDTH_DP.dp).fillMaxHeight()) {
         Header(m.today, m.age)
         Spacer(Modifier.height(8.dp))
         Box(Modifier.fillMaxWidth().height(1.dp).background(SECONDARY))
         Spacer(Modifier.height(12.dp))
-        AgendaList(m, Modifier.weight(1f))
+        AgendaList(m, firstRow, Modifier.weight(1f).onFocusChanged { onRowFocus(it.hasFocus) })
         m.footer?.let { footer ->
             Spacer(Modifier.height(8.dp))
             Text(footer, color = AMBER, fontSize = Tokens.SECONDARY_SP.sp, fontWeight = FontWeight.Bold)
@@ -193,13 +213,12 @@ private fun AgeText(age: AgeLine) {
 }
 
 @Composable
-private fun AgendaList(m: ScreenModel.Agenda, modifier: Modifier) {
+private fun AgendaList(m: ScreenModel.Agenda, firstRow: FocusRequester, modifier: Modifier) {
     val entries = remember(m) { entriesOf(m) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    // No initial focus here: on the home screen the first app tile takes it (HomeScreen). D-pad Down from a tile lands on
-    // the nearest visible row. Refreshes never move focus or scroll position.
+    // Initial focus is AgendaPanel's (the first row, via [firstRow]). Refreshes never move focus or scroll position.
 
     Box(modifier) {
         LazyColumn(
@@ -218,6 +237,7 @@ private fun AgendaList(m: ScreenModel.Agenda, modifier: Modifier) {
                     is Entry.Heading -> DayHeading(e.day)
                     is Entry.Row -> AgendaRow(
                         row = e.row,
+                        requester = if (e.flat == 0) firstRow else null,
                         onFocused = {
                             // Focus skips headings; bring this day's heading into view with its first row.
                             val h = e.headingItem
@@ -246,7 +266,7 @@ private fun DayHeading(day: DayModel) {
 }
 
 @Composable
-private fun AgendaRow(row: RowModel, onFocused: () -> Unit) {
+private fun AgendaRow(row: RowModel, requester: FocusRequester?, onFocused: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(8.dp)
     val quietTime = row.time == Copy.ALL_DAY || row.time == Copy.CONTINUES
@@ -260,6 +280,7 @@ private fun AgendaRow(row: RowModel, onFocused: () -> Unit) {
             }
             .background(if (focused) FILL else Color.Transparent, shape)
             .then(if (focused) Modifier.border(Tokens.RING_DP.dp, RING, shape) else Modifier)
+            .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .focusable()
             // One sentence per row for TalkBack ("9:00 AM, Dentist"); the two Text children are not read separately.
             .clearAndSetSemantics { contentDescription = row.description }
