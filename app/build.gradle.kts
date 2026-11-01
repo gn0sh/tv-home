@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 // :app is included by settings.gradle.kts only when an Android SDK is present (CI, or a PC with the SDK). It could not
 // be compiled in the sandbox it was written in; CI is its first build (docs/tasks/tv-home-m1.md, T5).
 plugins {
-    alias(libs.plugins.android.application)
+    id("com.android.application") // version from the root buildscript classpath (build.gradle.kts)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }

@@ -303,6 +303,30 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+      # TODO steps 1-2 above, automated: while :app verification is lenient, a pull_request run regenerates the :app
+      # lockfile and verification metadata (CI is the only place AGP resolves) and uploads them for the team to review
+      # and commit. No secrets exist on pull_request. Stops by itself once APP_DEP_VERIFICATION is strict.
+      - name: Regenerate dependency locks and verification metadata
+        if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request' && env.APP_DEP_VERIFICATION != 'strict'
+        run: |
+          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/regen.log" --write-locks --write-verification-metadata sha256 \
+            :core:dependencies :app:dependencies :app:lintRelease :app:assembleRelease
+          git status --short
+          git diff --stat
+
+      - name: Upload regenerated dependency files
+        if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request' && env.APP_DEP_VERIFICATION != 'strict'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tv-home-dependency-files
+          path: |
+            gradle/verification-metadata.xml
+            settings-gradle.lockfile
+            core/gradle.lockfile
+            app/gradle.lockfile
+          retention-days: 7
+          if-no-files-found: error
+
   # Manual only (T2b.6). Fetches the public Google US-holiday feed (no secret) inside GoogleFramingLiveTest, which
   # asserts Complete and records CRLF, VERSION and the component set. Must pass before T11.
   live:
