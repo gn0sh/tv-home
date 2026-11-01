@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -76,14 +77,13 @@ fun AgendaPanel(model: ScreenModel, modifier: Modifier = Modifier) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(8.dp)
     Box(
-        modifier.then(
-            if (noRows) {
-                Modifier
-                    .onFocusChanged { focused = it.isFocused }
-                    .then(if (focused) Modifier.border(Tokens.RING_DP.dp, RING, shape) else Modifier)
-                    .focusable()
-            } else Modifier,
-        ),
+        // The focus node stays in the tree in every state; only canFocus changes, so the panel's focus target is not
+        // added and removed as refreshes switch between "no rows" and rows (panel-focus-drop).
+        modifier
+            .onFocusChanged { focused = it.isFocused }
+            .then(if (focused && noRows) Modifier.border(Tokens.RING_DP.dp, RING, shape) else Modifier)
+            .focusProperties { canFocus = noRows }
+            .focusable(),
     ) {
         when (model) {
             is ScreenModel.Message -> MessageBody(model)

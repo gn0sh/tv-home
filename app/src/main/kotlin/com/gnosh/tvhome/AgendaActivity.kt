@@ -17,6 +17,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import tvhome.core.ui.HomeTheme
 import tvhome.core.ui.screenModel
 import java.time.Instant
 import java.time.ZoneId
@@ -25,22 +26,33 @@ import java.time.ZoneId
  * The home screen (M2): app tiles plus the calendar panel. Kept under its M1 name so the launcher entry, CI checks
  * and provisioning steps stay the same. It is a LEANBACK_LAUNCHER entry only; becoming the default Home is M3.
  *
- * While STARTED: the app list is reloaded (so installs and removals show up on return) in its own coroutine, and
- * [com.gnosh.tvhome.AppGraph.session] refreshes the calendar (fetch now, then every 15 minutes). The two never wait
- * on each other, so calendar failures cannot block the tiles. Back exits (nothing handles it).
+ * While STARTED: the app list is refreshed (so installs and removals show up on return; unchanged apps reuse their
+ * cached tiles) in its own coroutine, and [com.gnosh.tvhome.AppGraph.session] refreshes the calendar (fetch now, then
+ * every 15 minutes). The two never wait on each other, so calendar failures cannot block the tiles. Back exits.
  */
 class AgendaActivity : ComponentActivity() {
-    private var apps by mutableStateOf<List<TileApp>>(emptyList())
+    private var apps by mutableStateOf<AppsState>(AppsState.Loading)
+    private var theme by mutableStateOf(HomeTheme.DEFAULT)
+    private val installed = InstalledApps()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val session = (application as TvHomeApp).graph.session
 
         lifecycleScope.launch {
+            theme = withContext(Dispatchers.IO) { InstalledApps.loadTheme(applicationContext) }
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    val loaded = withContext(Dispatchers.IO) { runCatching { InstalledApps.load(applicationContext) }.getOrNull() }
-                    if (loaded != null) apps = loaded
+                    val density = resources.displayMetrics.density
+                    val w = (theme.tileWidthDp * density).toInt()
+                    val h = (theme.tileHeightDp * density).toInt()
+                    val loaded = withContext(Dispatchers.IO) { runCatching { installed.load(applicationContext, w, h) }.getOrNull() }
+                    val next = when {
+                        loaded != null -> AppsState.Loaded(loaded)
+                        apps is AppsState.Loaded -> apps // keep the last good row rather than blanking it
+                        else -> AppsState.Failed
+                    }
+                    if (next != apps) apps = next
                 }
                 session.runWhileStarted()
             }
@@ -52,8 +64,11 @@ class AgendaActivity : ComponentActivity() {
             val model = remember(state, is24h) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h) }
             HomeScreen(
                 apps = apps,
+                theme = theme,
                 onLaunch = { app ->
-                    if (!InstalledApps.launch(this@AgendaActivity, app)) Toast.makeText(this@AgendaActivity, "Couldn't open ${app.label}", Toast.LENGTH_SHORT).show()
+                    if (!InstalledApps.launch(this@AgendaActivity, app)) {
+                        Toast.makeText(this@AgendaActivity, "Couldn't open ${app.label}", Toast.LENGTH_SHORT).show()
+                    }
                 },
                 agenda = model,
             )

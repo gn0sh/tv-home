@@ -43,38 +43,40 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import tvhome.core.apps.LauncherApp
+import tvhome.core.ui.HomeTheme
 import tvhome.core.ui.ScreenModel
 import tvhome.core.ui.Tokens
 
 /** One tile: the app, and its banner (16:9) or, failing that, its icon, already drawn to a bitmap off the main thread. */
 class TileApp(val app: LauncherApp, val image: ImageBitmap?, val isBanner: Boolean)
 
-private val BG = color(Tokens.BACKGROUND)
-private val TEXT = color(Tokens.TEXT)
-private val SECONDARY = color(Tokens.SECONDARY)
-private val FILL = color(Tokens.FOCUS_FILL)
-private val RING = color(Tokens.FOCUS_RING)
+/** The tile row's data: still loading, loaded (possibly empty), or the package manager query failed. */
+sealed interface AppsState {
+    data object Loading : AppsState
+    data class Loaded(val apps: List<TileApp>) : AppsState
+    data object Failed : AppsState
+}
 
-private const val TILE_W = 240
-private const val TILE_H = 135
 private const val FOCUS_SCALE = 1.1f
 
 /**
  * M2 home screen: a row of app tiles on top, the calendar panel below. The two are independent: the tiles come from
  * the package manager and never wait on, or fail with, the calendar. Initial focus goes to the first tile once the row
- * has apps; D-pad Down/Up moves between the row and the panel (the panel is focusable itself when it has no rows).
+ * has apps, unless something already has focus; D-pad Down/Up moves between the row and the panel (the panel is
+ * focusable itself when it has no rows). Colours and tile size come from [theme].
  */
 @Composable
-fun HomeScreen(apps: List<TileApp>, onLaunch: (LauncherApp) -> Unit, agenda: ScreenModel) {
+fun HomeScreen(apps: AppsState, theme: HomeTheme, onLaunch: (LauncherApp) -> Unit, agenda: ScreenModel) {
+    var childFocused by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxSize()
-            .background(BG)
+            .background(color(theme.background))
             .focusable() // somewhere for D-pad presses to land before the row has loaded
             .padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
     ) {
-        Column(Modifier.fillMaxSize()) {
-            AppRow(apps, onLaunch)
+        Column(Modifier.fillMaxSize().onFocusChanged { childFocused = it.hasFocus }) {
+            AppRow(apps, theme, mayTakeFocus = { !childFocused }, onLaunch)
             Spacer(Modifier.height(16.dp))
             AgendaPanel(agenda, Modifier.fillMaxWidth().weight(1f))
         }
@@ -82,50 +84,58 @@ fun HomeScreen(apps: List<TileApp>, onLaunch: (LauncherApp) -> Unit, agenda: Scr
 }
 
 @Composable
-private fun AppRow(apps: List<TileApp>, onLaunch: (LauncherApp) -> Unit) {
+private fun AppRow(state: AppsState, theme: HomeTheme, mayTakeFocus: () -> Boolean, onLaunch: (LauncherApp) -> Unit) {
+    val apps = (state as? AppsState.Loaded)?.apps.orEmpty()
     val first = remember { FocusRequester() }
     var focusedOnce by remember { mutableStateOf(false) }
     LaunchedEffect(apps.isNotEmpty()) {
         if (focusedOnce || apps.isEmpty()) return@LaunchedEffect
         focusedOnce = true
         withFrameNanos { }
+        // Never steal focus: if the user already moved into the calendar panel while the row loaded, leave it there.
+        if (!mayTakeFocus()) return@LaunchedEffect
         if (runCatching { first.requestFocus() }.isFailure) {
             withFrameNanos { }
-            runCatching { first.requestFocus() }
+            if (mayTakeFocus()) runCatching { first.requestFocus() }
         }
     }
     if (apps.isEmpty()) {
         // Not a dead end: the root and the calendar panel are still focusable.
-        Text("No TV apps found", color = SECONDARY, fontSize = Tokens.SECONDARY_SP.sp, modifier = Modifier.height((TILE_H + 56).dp))
+        val msg = when (state) {
+            AppsState.Loading -> "Loading apps…"
+            AppsState.Failed -> "Couldn't list apps"
+            is AppsState.Loaded -> "No TV apps found"
+        }
+        Text(msg, color = color(theme.secondaryText), fontSize = Tokens.SECONDARY_SP.sp, modifier = Modifier.height((theme.tileHeightDp + 56).dp))
         return
     }
     // Content padding leaves room for the 1.1x focus scale inside the safe area.
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+        contentPadding = PaddingValues(horizontal = (theme.tileWidthDp / 16).dp, vertical = (theme.tileHeightDp / 13).dp),
         horizontalArrangement = Arrangement.spacedBy(28.dp),
     ) {
         items(apps, key = { it.app.packageName }) { t ->
-            AppTile(t, if (t === apps.first()) first else null) { onLaunch(t.app) }
+            AppTile(t, theme, if (t === apps.first()) first else null) { onLaunch(t.app) }
         }
     }
 }
 
 @Composable
-private fun AppTile(t: TileApp, requester: FocusRequester?, onClick: () -> Unit) {
+private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(10.dp)
-    Column(Modifier.width(TILE_W.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.width(theme.tileWidthDp.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
-                .size(TILE_W.dp, TILE_H.dp)
+                .size(theme.tileWidthDp.dp, theme.tileHeightDp.dp)
                 .graphicsLayer {
                     val s = if (focused) FOCUS_SCALE else 1f
                     scaleX = s; scaleY = s
                 }
                 .clip(shape)
-                .background(if (focused) FILL else color(0x1C222B), shape)
-                .then(if (focused) Modifier.border(Tokens.RING_DP.dp, RING, shape) else Modifier)
+                .background(color(if (focused) theme.focusFill else theme.tile), shape)
+                .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
                 .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
                 .onFocusChanged { focused = it.isFocused }
                 .semantics { contentDescription = t.app.label }
@@ -138,16 +148,16 @@ private fun AppTile(t: TileApp, requester: FocusRequester?, onClick: () -> Unit)
                     bitmap = img,
                     contentDescription = null, // the label below names the tile
                     contentScale = if (t.isBanner) ContentScale.Crop else ContentScale.Fit,
-                    modifier = if (t.isBanner) Modifier.fillMaxSize() else Modifier.size(80.dp),
+                    modifier = if (t.isBanner) Modifier.fillMaxSize() else Modifier.size((minOf(theme.tileWidthDp, theme.tileHeightDp) * 3 / 5).dp),
                 )
             } else {
-                Text(t.app.label.take(1).uppercase(), color = TEXT, fontSize = 48.sp)
+                Text(t.app.label.take(1).uppercase(), color = color(theme.text), fontSize = 48.sp)
             }
         }
         Spacer(Modifier.height(12.dp))
         Text(
             t.app.label,
-            color = if (focused) TEXT else SECONDARY,
+            color = color(if (focused) theme.text else theme.secondaryText),
             fontSize = Tokens.SECONDARY_SP.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
