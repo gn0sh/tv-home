@@ -310,7 +310,7 @@ jobs:
         if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request' && env.APP_DEP_VERIFICATION != 'strict'
         run: |
           scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/regen.log" --write-locks --write-verification-metadata sha256 \
-            :core:dependencies :app:dependencies :app:lintRelease :app:assembleRelease
+            :core:dependencies :core:test :core:hostileTest :app:dependencies :app:lintRelease :app:assembleRelease
           git status --short
           git diff --stat
 
