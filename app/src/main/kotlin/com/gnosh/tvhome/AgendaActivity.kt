@@ -2,32 +2,46 @@ package com.gnosh.tvhome
 
 import android.os.Bundle
 import android.text.format.DateFormat
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import tvhome.core.ui.screenModel
 import java.time.Instant
 import java.time.ZoneId
 
 /**
- * The agenda screen. Refresh runs only while STARTED: `repeatOnLifecycle` starts [com.gnosh.tvhome.AppGraph.session]
- * on ON_START (fetch now, then every 15 minutes) and cancels it on ON_STOP, which cancels the fetch and parse.
- * Back exits (nothing handles it). No cache write happens here.
+ * The home screen (M2): app tiles plus the calendar panel. Kept under its M1 name so the launcher entry, CI checks
+ * and provisioning steps stay the same. It is a LEANBACK_LAUNCHER entry only; becoming the default Home is M3.
+ *
+ * While STARTED: the app list is reloaded (so installs and removals show up on return) in its own coroutine, and
+ * [com.gnosh.tvhome.AppGraph.session] refreshes the calendar (fetch now, then every 15 minutes). The two never wait
+ * on each other, so calendar failures cannot block the tiles. Back exits (nothing handles it).
  */
 class AgendaActivity : ComponentActivity() {
+    private var apps by mutableStateOf<List<TileApp>>(emptyList())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val session = (application as TvHomeApp).graph.session
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    val loaded = withContext(Dispatchers.IO) { runCatching { InstalledApps.load(applicationContext) }.getOrNull() }
+                    if (loaded != null) apps = loaded
+                }
                 session.runWhileStarted()
             }
         }
@@ -36,7 +50,13 @@ class AgendaActivity : ComponentActivity() {
             val state by session.state.collectAsStateWithLifecycle()
             val is24h = DateFormat.is24HourFormat(LocalContext.current)
             val model = remember(state, is24h) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h) }
-            AgendaScreen(model)
+            HomeScreen(
+                apps = apps,
+                onLaunch = { app ->
+                    if (!InstalledApps.launch(this@AgendaActivity, app)) Toast.makeText(this@AgendaActivity, "Couldn't open ${app.label}", Toast.LENGTH_SHORT).show()
+                },
+                agenda = model,
+            )
         }
     }
 }
