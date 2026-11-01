@@ -12,7 +12,11 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 /** Why a call failed. Enum only: never exception text, response text, or headers. */
-enum class ClaudeError { NO_KEY, NETWORK, HTTP_STATUS, TIMEOUT, REFUSED, BAD_RESPONSE }
+/**
+ * [KEY_REJECTED]: HTTP 401/403. [BAD_REQUEST]: HTTP 400. [BUSY]: HTTP 429/529. [HTTP_STATUS]: any other non-2xx
+ * (5xx, a redirect, a hop off the pin). [NETWORK]/[TIMEOUT]: no usable connection.
+ */
+enum class ClaudeError { NO_KEY, NETWORK, HTTP_STATUS, KEY_REJECTED, BAD_REQUEST, BUSY, TIMEOUT, REFUSED, BAD_RESPONSE }
 
 sealed interface ClaudeResult {
     /** The reply's text (the structured JSON). Personal data: toString hides it. */
@@ -65,6 +69,14 @@ class DailyCap(
         return runCatching { store.write("$today ${used + 1}") }.isSuccess
     }
 
+    /** Gives back one question used today (the request was refused before Claude did any work). */
+    @Synchronized
+    fun refund() {
+        val today = clock().atZone(zone()).toLocalDate()
+        val used = usedOn(today)
+        if (used > 0) runCatching { store.write("$today ${used - 1}") }
+    }
+
     @Synchronized
     fun used(): Int = usedOn(clock().atZone(zone()).toLocalDate())
 
@@ -79,8 +91,14 @@ class DailyCap(
 sealed interface AskOutcome {
     data class Answer(val reply: AskReply, val canFollowUp: Boolean) : AskOutcome
     object NotSetUp : AskOutcome { override fun toString() = "NotSetUp" }
-    /** Offline or any API error: "Can't reach Claude" with Retry. */
+    /** Offline, a timeout or a 5xx: "Can't reach Claude" (check the Wi-Fi) with Retry. */
     object CantReach : AskOutcome { override fun toString() = "CantReach" }
+    /** HTTP 401/403: the key on the TV was refused. Not counted against the cap. */
+    object KeyRejected : AskOutcome { override fun toString() = "KeyRejected" }
+    /** HTTP 400: the request was refused (a bug on our side). Not counted against the cap. */
+    object RequestRejected : AskOutcome { override fun toString() = "RequestRejected" }
+    /** HTTP 429/529: rate limited or overloaded; try again in a minute. */
+    object Busy : AskOutcome { override fun toString() = "Busy" }
     /** Malformed, empty or declined reply: "Couldn't work that out". Nothing to open. */
     object Unworkable : AskOutcome { override fun toString() = "Unworkable" }
     object CapReached : AskOutcome { override fun toString() = "CapReached" }
@@ -100,13 +118,17 @@ class AskEngine(
 ) {
     private val conversation = Conversation()
 
-    val hasKeyNow: Boolean get() = hasKey()
+    /** The key check, done once per engine (one Ask visit) on the IO dispatcher: it decrypts through the Keystore. */
+    private var keyChecked: Boolean? = null
+
+    suspend fun checkKey(): Boolean =
+        keyChecked ?: withContext(Dispatchers.IO) { runCatching { hasKey() }.getOrDefault(false) }.also { keyChecked = it }
     val canAsk: Boolean get() = conversation.canAsk
     /** True once one question has been answered: the next one is the follow-up. */
     val isFollowUp: Boolean get() = conversation.isFollowUp
 
     suspend fun ask(rawQuestion: String): AskOutcome {
-        if (!hasKey()) return AskOutcome.NotSetUp
+        if (!checkKey()) return AskOutcome.NotSetUp
         val question = cleanQuestion(rawQuestion)
         if (question.isEmpty()) return AskOutcome.EmptyQuestion
         if (!conversation.canAsk) return AskOutcome.FollowUpUsed
@@ -114,10 +136,19 @@ class AskEngine(
         if (!withContext(Dispatchers.IO) { cap.tryConsume() }) return AskOutcome.CapReached
         val installed = apps()
         return when (val r = client.send(installed, conversation.turnsFor(question))) {
-            is ClaudeResult.Failed -> when (r.error) {
-                ClaudeError.NO_KEY -> AskOutcome.NotSetUp
-                ClaudeError.REFUSED, ClaudeError.BAD_RESPONSE -> AskOutcome.Unworkable
-                ClaudeError.NETWORK, ClaudeError.HTTP_STATUS, ClaudeError.TIMEOUT -> AskOutcome.CantReach
+            is ClaudeResult.Failed -> {
+                // Refused before Claude did any work (no key, bad key, bad request): not a question used.
+                if (r.error == ClaudeError.NO_KEY || r.error == ClaudeError.KEY_REJECTED || r.error == ClaudeError.BAD_REQUEST) {
+                    withContext(Dispatchers.IO) { cap.refund() }
+                }
+                when (r.error) {
+                    ClaudeError.NO_KEY -> { keyChecked = false; AskOutcome.NotSetUp }
+                    ClaudeError.KEY_REJECTED -> AskOutcome.KeyRejected
+                    ClaudeError.BAD_REQUEST -> AskOutcome.RequestRejected
+                    ClaudeError.BUSY -> AskOutcome.Busy
+                    ClaudeError.REFUSED, ClaudeError.BAD_RESPONSE -> AskOutcome.Unworkable
+                    ClaudeError.NETWORK, ClaudeError.HTTP_STATUS, ClaudeError.TIMEOUT -> AskOutcome.CantReach
+                }
             }
             is ClaudeResult.Text -> {
                 val reply = AskReply.parse(r.text, installed) ?: return AskOutcome.Unworkable

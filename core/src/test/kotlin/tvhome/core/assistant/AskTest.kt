@@ -135,6 +135,49 @@ class AskTest {
         }
     }
 
+    @Test fun httpErrorsMapToTheirOwnCopyAndRefusedRequestsAreNotCharged() {
+        val cases = mapOf(
+            ClaudeError.KEY_REJECTED to (AskOutcome.KeyRejected to 0),
+            ClaudeError.BAD_REQUEST to (AskOutcome.RequestRejected to 0),
+            ClaudeError.NO_KEY to (AskOutcome.NotSetUp to 0),
+            ClaudeError.BUSY to (AskOutcome.Busy to 1),
+            ClaudeError.HTTP_STATUS to (AskOutcome.CantReach to 1),
+            ClaudeError.NETWORK to (AskOutcome.CantReach to 1),
+            ClaudeError.TIMEOUT to (AskOutcome.CantReach to 1),
+        )
+        for ((err, want) in cases) {
+            val c = cap(MemCount())
+            val (_, e) = engine(ClaudeResult.Failed(err), cap = c)
+            assertEquals(want.first, runSuspend { e.ask("x") }, err.name)
+            assertEquals(want.second, c.used(), "cap charged for $err")
+        }
+    }
+
+    @Test fun refundNeverGoesBelowZeroAndOnlyTouchesToday() {
+        val store = MemCount().apply { text = "2026-10-31 5" }
+        val c = cap(store)
+        c.refund()
+        assertEquals("2026-10-31 5", store.text)
+        assertTrue(c.tryConsume())
+        c.refund()
+        assertEquals(0, c.used())
+        c.refund()
+        assertEquals("2026-11-01 0", store.text)
+    }
+
+    @Test fun theKeyIsCheckedOncePerVisitOffTheCallingThread() {
+        var checks = 0
+        var on: Thread? = null
+        val client = FakeClient(mutableListOf(text("vague.json"), text("general.json")))
+        val e = AskEngine(client, { checks++; on = Thread.currentThread(); true }, cap(), { apps })
+        val caller = Thread.currentThread()
+        assertTrue(runSuspend { e.checkKey() })
+        runSuspend { e.ask("one") }
+        runSuspend { e.ask("two") }
+        assertEquals(1, checks)
+        assertNotSame(caller, on)
+    }
+
     @Test fun noKeyIsNotSetUpAndNothingIsSentOrCounted() {
         val store = MemCount()
         val (client, e) = engine(hasKey = false, cap = cap(store))

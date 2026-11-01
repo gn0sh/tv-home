@@ -25,7 +25,7 @@ object AskConfig {
     const val MODEL = "claude-opus-5-5"
     const val EFFORT = "low"
     /** Room for low-effort thinking plus a short answer; the prompt asks for under 120 words. */
-    const val MAX_TOKENS = 2048
+    const val MAX_TOKENS = 4096
     const val TIMEOUT_MS = 20_000L
     /** ADR 0002 decision 7: default daily question cap. Each API call counts, Retry included (it is spend). */
     const val DAILY_CAP = 20
@@ -45,6 +45,12 @@ object AskCopy {
     const val NOT_SET_UP_DETAIL = "Add the API key from your PC: see the setup steps in the README."
     const val CANT_REACH = "Can't reach Claude"
     const val CANT_REACH_DETAIL = "Check the TV's Wi-Fi, then try again."
+    const val KEY_REJECTED = "Claude rejected the key"
+    const val KEY_REJECTED_DETAIL = "Check the key on the TV: send it again from your PC (see the README)."
+    const val REQUEST_REJECTED = "Claude rejected the request"
+    const val REQUEST_REJECTED_DETAIL = "This one is on our side. Try a different question, or tell the team."
+    const val BUSY = "Claude is busy"
+    const val BUSY_DETAIL = "Try again in a minute."
     const val UNWORKABLE = "Couldn't work that out"
     const val CAP_REACHED = "That's today's questions used up. Ask again tomorrow."
     const val FOLLOW_UP_USED = "That was the one follow-up. Start over to ask something new."

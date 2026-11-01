@@ -56,9 +56,11 @@ class AnthropicClient internal constructor(
         .build()
 
     override suspend fun send(apps: List<AskApp>, turns: List<Turn>): ClaudeResult {
-        val key = runCatching { apiKey() }.getOrNull()?.takeIf { it.isNotBlank() } ?: return ClaudeResult.Failed(ClaudeError.NO_KEY)
         if (!allowed(baseUrl)) return ClaudeResult.Failed(ClaudeError.HTTP_STATUS)
         val result = try {
+            // The key is read on the IO dispatcher (KeystoreSecretStore decrypts), together with the call.
+            val key = withContext(Dispatchers.IO) { runCatching { apiKey() }.getOrNull() }?.takeIf { it.isNotBlank() }
+                ?: return ClaudeResult.Failed(ClaudeError.NO_KEY)
             val request = Request.Builder()
                 .url(baseUrl)
                 .header("x-api-key", key)
@@ -90,7 +92,7 @@ class AnthropicClient internal constructor(
     }
 
     private fun execute(call: Call): ClaudeResult = call.execute().use { response ->
-        if (!response.isSuccessful) return ClaudeResult.Failed(ClaudeError.HTTP_STATUS)
+        if (!response.isSuccessful) return ClaudeResult.Failed(statusError(response.code))
         val body = response.body ?: return ClaudeResult.Failed(ClaudeError.BAD_RESPONSE)
         if (body.contentLength() > MAX_BODY) return ClaudeResult.Failed(ClaudeError.BAD_RESPONSE)
         val source = body.source()
@@ -114,6 +116,14 @@ class AnthropicClient internal constructor(
         private const val MAX_BODY = 256L * 1024
         private val JSON = "application/json".toMediaType()
         private val envelope = Json { ignoreUnknownKeys = true }
+
+        /** 401/403 key refused, 400 request refused, 429/529 busy; anything else (5xx, 3xx) is "can't reach". */
+        internal fun statusError(code: Int): ClaudeError = when (code) {
+            401, 403 -> ClaudeError.KEY_REJECTED
+            400 -> ClaudeError.BAD_REQUEST
+            429, 529 -> ClaudeError.BUSY
+            else -> ClaudeError.HTTP_STATUS
+        }
 
         internal fun isPinned(url: HttpUrl): Boolean = url.isHttps && url.host == "api.anthropic.com"
 

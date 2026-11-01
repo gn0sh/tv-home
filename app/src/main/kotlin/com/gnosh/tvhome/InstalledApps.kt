@@ -105,7 +105,9 @@ class InstalledApps {
             }
             target.deepLink?.let { link ->
                 val view = Intent(Intent.ACTION_VIEW, Uri.parse(link)).setPackage(pkg)
-                if (resolves(view)) return plan("Opens \u201C${target.title}\u201D directly in $label.", view)
+                // The link's host is shown, so Brian sees where a link points before pressing Open.
+                val host = runCatching { Uri.parse(link).host }.getOrNull()?.removePrefix("www.").orEmpty()
+                if (resolves(view)) return plan("Opens \u201C${target.title}\u201D directly in $label ($host).", view)
             }
             val search = Intent(Intent.ACTION_SEARCH).setPackage(pkg).putExtra(SearchManager.QUERY, target.title)
             if (resolves(search)) return plan("Opens $label's search for \u201C${target.title}\u201D.", search)

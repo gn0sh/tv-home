@@ -79,6 +79,8 @@ interface AskHost {
 }
 
 private sealed interface Step {
+    /** The key check (Keystore decrypt, on IO) for this visit; a frame or two. */
+    object Checking : Step
     data class Start(val note: String?) : Step
     data class Typing(val text: String) : Step
     data class Confirm(val text: String) : Step
@@ -98,8 +100,9 @@ fun AskFullScreen(host: AskHost, theme: HomeTheme, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
     var generation by remember { mutableIntStateOf(0) }
     val engine = remember(generation) { host.newEngine() }
-    var step by remember(generation) {
-        mutableStateOf<Step>(if (engine.hasKeyNow) Step.Start(null) else Step.Done("", AskOutcome.NotSetUp))
+    var step by remember(generation) { mutableStateOf<Step>(Step.Checking) }
+    LaunchedEffect(generation) {
+        step = if (engine.checkKey()) Step.Start(null) else Step.Done("", AskOutcome.NotSetUp)
     }
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
@@ -133,6 +136,7 @@ fun AskFullScreen(host: AskHost, theme: HomeTheme, onClose: () -> Unit) {
             Text(AskCopy.TILE_LABEL, color = fg, fontSize = Tokens.HEADING_SP.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(20.dp))
             when (val s = step) {
+                Step.Checking -> Line("\u2026", dim)
                 is Step.Start -> {
                     Line(s.note ?: prompt(engine), dim)
                     Buttons(theme, step) {
@@ -210,6 +214,24 @@ private fun ColumnScope.Result(
         }
         AskOutcome.CantReach -> {
             Message(AskCopy.CANT_REACH, AskCopy.CANT_REACH_DETAIL, amber, dim)
+            Buttons(theme, s) {
+                button("Retry") { onRetry() }
+                button("Done") { onClose() }
+            }
+        }
+        AskOutcome.KeyRejected -> {
+            Message(AskCopy.KEY_REJECTED, AskCopy.KEY_REJECTED_DETAIL, amber, dim)
+            Buttons(theme, s) { button("Done") { onClose() } }
+        }
+        AskOutcome.RequestRejected -> {
+            Message(AskCopy.REQUEST_REJECTED, AskCopy.REQUEST_REJECTED_DETAIL, amber, dim)
+            Buttons(theme, s) {
+                button("Try again") { onFollowUp() }
+                button("Done") { onClose() }
+            }
+        }
+        AskOutcome.Busy -> {
+            Message(AskCopy.BUSY, AskCopy.BUSY_DETAIL, fg, dim)
             Buttons(theme, s) {
                 button("Retry") { onRetry() }
                 button("Done") { onClose() }

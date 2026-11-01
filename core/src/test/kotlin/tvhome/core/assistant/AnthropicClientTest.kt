@@ -74,13 +74,33 @@ class AnthropicClientTest {
         assertEquals(ClaudeResult.Failed(ClaudeError.BAD_RESPONSE), send(client()))
     }
 
-    @Test fun httpErrorsAreAnEnumWithNoBodyText() {
-        for (code in listOf(400, 401, 429, 500, 529)) {
+    @Test fun httpErrorsAreSplitByMeaningWithNoBodyText() {
+        val expected = mapOf(
+            400 to ClaudeError.BAD_REQUEST,
+            401 to ClaudeError.KEY_REJECTED,
+            403 to ClaudeError.KEY_REJECTED,
+            404 to ClaudeError.HTTP_STATUS,
+            429 to ClaudeError.BUSY,
+            500 to ClaudeError.HTTP_STATUS,
+            503 to ClaudeError.HTTP_STATUS,
+            529 to ClaudeError.BUSY,
+        )
+        for ((code, err) in expected) {
             server.enqueue(MockResponse().setResponseCode(code).setBody("""{"error":{"message":"${FakeSecrets.API_KEY}"}}"""))
             val r = send(client())
-            assertEquals(ClaudeResult.Failed(ClaudeError.HTTP_STATUS), r, "$code")
+            assertEquals(ClaudeResult.Failed(err), r, "$code")
             assertFalse(r.toString().contains(FakeSecrets.API_KEY))
         }
+    }
+
+    @Test fun theKeyIsReadOffTheCallingThread() {
+        server.enqueue(MockResponse().setBody(fixture("envelope-ok.json")))
+        val caller = Thread.currentThread()
+        var readOn: Thread? = null
+        val c = AnthropicClient({ readOn = Thread.currentThread(); FakeSecrets.API_KEY }, server.url("/v1/messages"), { it.isHttps }, 2_000, trust)
+        assertTrue(send(c) is ClaudeResult.Text)
+        assertNotNull(readOn)
+        assertNotSame(caller, readOn)
     }
 
     @Test fun redirectsAreNotFollowed() {
