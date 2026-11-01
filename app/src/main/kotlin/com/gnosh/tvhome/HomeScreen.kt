@@ -475,7 +475,7 @@ private fun TileFrame(
                                 true
                             }
                             KeyEventType.KeyUp -> {
-                                if (downAt.longValue >= 0 && !longFired.value) {
+                                if (downAt.longValue >= 0 && !longFired.value && !n.isCanceled) {
                                     if (n.eventTime - downAt.longValue >= longTimeout) onLongClick() else onClick()
                                 }
                                 downAt.longValue = -1L; longFired.value = false
