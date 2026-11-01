@@ -364,6 +364,7 @@ jobs:
             -storepass:env QA_PW -keypass:env QA_PW >/dev/null
           "$bt/zipalign" -f -p 4 "${apks[0]}" "$RUNNER_TEMP/aligned.apk"
           "$bt/apksigner" sign --ks "$RUNNER_TEMP/qa-throwaway.jks" --ks-pass env:QA_PW --key-pass env:QA_PW \
+            --v4-signing-enabled false \
             --out "$RUNNER_TEMP/qa-signed.apk" "$RUNNER_TEMP/aligned.apk"
           "$bt/apksigner" verify "$RUNNER_TEMP/qa-signed.apk"
           rm -f "$RUNNER_TEMP/qa-throwaway.jks" "$RUNNER_TEMP/aligned.apk"

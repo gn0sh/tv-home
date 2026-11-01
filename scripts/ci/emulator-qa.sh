@@ -127,7 +127,10 @@ adb logcat -b main,system,crash,events -v threadtime > "$OUT/logcat-stream.txt" 
 LOGCAT_PID=$!
 
 step "T9 install and launcher entry"
-a install -r -g "$APK" | tr -d '\r' | tail -1 | grep -q '^Success' || fail "adb install failed"
+# --no-incremental: an .idsig next to the APK makes adb use incremental install, whose output and status differ.
+inst=$(a install --no-incremental -r -g "$APK" 2>&1 | tr -d '\r') && irc=0 || irc=$?
+echo "$inst"
+if [[ $irc -ne 0 ]] || ! grep -q 'Success' <<<"$inst"; then fail "adb install failed (exit $irc)"; fi
 sh_ pm path "$PKG" | grep -q '^package:' || fail "$PKG not installed"
 r=$(sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER "$PKG" | tr -d '\r' | tail -1)
 [[ $r == "$MAIN" || $r == "$PKG/com.gnosh.tvhome.AgendaActivity" ]] || fail "LEANBACK_LAUNCHER does not resolve to AgendaActivity (got: $r)"
