@@ -37,11 +37,13 @@ data class WeatherNow(
     val nextPrecip: String?,
 ) {
     val chip: String
-        get() = buildString {
-            append(tempF).append("°F")
-            if (condition.isNotEmpty()) append(' ').append(condition)
-            if (nextPrecip != null) append(" · ").append(nextPrecip)
-        }.take(Feeds.LABEL_CAP)
+        get() {
+            // Drop whole parts, never cut mid-word: first "rain after ..", then the condition.
+            val temp = "$tempF°F"
+            val withCond = if (condition.isNotEmpty()) "$temp $condition" else temp
+            val full = if (nextPrecip != null) "$withCond · $nextPrecip" else withCond
+            return listOf(full, withCond, temp).first { it.length <= Feeds.LABEL_CAP }
+        }
 }
 
 object WeatherFeed {

@@ -24,6 +24,7 @@ object FeedTiming {
     const val SCHEDULE_MS = 60L * 60_000
     const val LIVE_MS = 60_000L
     const val NO_LOCATION_RECHECK_MS = 60_000L
+    const val SLICE_MS = 60_000L
     const val MAX_BACKOFF_MS = 2L * 60 * 60_000
     const val MAX_LIVE_BACKOFF_MS = 15L * 60_000
 
@@ -53,6 +54,8 @@ class LiveFeeds(
     private val teams: List<TeamConfig> = Teams.ALL,
     private val clock: () -> Instant = Instant::now,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** Injectable for tests (a fake clock advances inside it). */
+    private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val state = MutableStateFlow(FeedsSnapshot())
     val snapshot: StateFlow<FeedsSnapshot> get() = state
@@ -102,20 +105,30 @@ class LiveFeeds(
 
     private var weatherLast: Instant? = null
     private var scheduleLast: Instant? = null
+    private var weatherLoc: Location? = null
     private var weatherFailures = 0
     private var scheduleFailures = 0
 
+    /**
+     * Both loops wake every [FeedTiming.SLICE_MS] at most and re-evaluate everything (the live/about-to-start rate, the
+     * location), so a puck drop switches to 60 s polling within a minute, not at the next hourly fetch. "Last attempt"
+     * is stamped after the attempt completes, so a cancelled fetch (leaving the home screen) does not count as one.
+     */
     private suspend fun weatherLoop() {
         while (true) {
-            if (withContext(io) { runCatching(location).getOrNull() } == null) {
+            val loc = withContext(io) { runCatching(location).getOrNull() }
+            if (loc == null) {
                 refreshWeather() // clears any weather; makes no request
-                delay(FeedTiming.NO_LOCATION_RECHECK_MS)
+                weatherLoc = null
+                sleep(FeedTiming.NO_LOCATION_RECHECK_MS)
                 continue
             }
-            val wait = waitLeft(weatherLast, FeedTiming.delayMs(FeedTiming.WEATHER_MS, weatherFailures))
-            if (wait > 0) { delay(wait); continue }
+            val due = loc != weatherLoc || waitLeft(weatherLast, FeedTiming.delayMs(FeedTiming.WEATHER_MS, weatherFailures)) <= 0
+            if (!due) { sleep(FeedTiming.SLICE_MS); continue }
+            val ok = refreshWeather()
+            weatherLoc = loc
+            weatherFailures = if (ok) 0 else weatherFailures + 1
             weatherLast = clock()
-            weatherFailures = if (refreshWeather()) 0 else weatherFailures + 1
         }
     }
 
@@ -124,9 +137,10 @@ class LiveFeeds(
             val base = FeedTiming.scheduleBase(state.value.games, clock())
             val max = if (base == FeedTiming.LIVE_MS) FeedTiming.MAX_LIVE_BACKOFF_MS else FeedTiming.MAX_BACKOFF_MS
             val wait = waitLeft(scheduleLast, FeedTiming.delayMs(base, scheduleFailures, max))
-            if (wait > 0) { delay(wait); continue }
+            if (wait > 0) { sleep(minOf(wait, FeedTiming.SLICE_MS)); continue }
+            val ok = refreshSchedules()
+            scheduleFailures = if (ok) 0 else scheduleFailures + 1
             scheduleLast = clock()
-            scheduleFailures = if (refreshSchedules()) 0 else scheduleFailures + 1
         }
     }
 

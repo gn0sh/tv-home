@@ -71,8 +71,25 @@ class GameDayTest {
 
     @Test fun countdownBoundaries() {
         assertEquals("starting now", GameDay.countdown(Duration.ofSeconds(59)))
-        assertEquals("starting now", GameDay.countdown(Duration.ofMinutes(-3)))
+        assertEquals("starting now", GameDay.countdown(Duration.ofSeconds(-30)))
+        assertEquals("started", GameDay.countdown(Duration.ofMinutes(-3)))
         assertEquals("in 1m", GameDay.countdown(Duration.ofSeconds(60)))
         assertEquals("in 1h 0m", GameDay.countdown(Duration.ofMinutes(60)))
+    }
+
+    @Test fun extremeInstantsNeverThrow() {
+        val utc = ZoneId.of("UTC")
+        for (start in listOf(Instant.MIN, Instant.MAX)) for (phase in GamePhase.values()) {
+            val g = TeamGame(nsh, GameInfo(start, "Blues", true, phase, 1, 2, null))
+            assertNull(GameDay.select(listOf(g), at(12), utc))
+            assertNotNull(GameDay.line(g, at(12), utc))
+        }
+    }
+
+    @Test fun chipDropsWholePartsNotWords() {
+        val c = WeatherNow(55, "Thunderstorm, hail", null, "snow after 12 AM").chip
+        assertTrue(c.length <= Feeds.LABEL_CAP); assertFalse(c.endsWith("a") && c.contains("after"))
+        assertEquals("55\u00B0F Thunderstorm, hail", c)
+        assertEquals("55\u00B0F", WeatherNow(55, "x".repeat(60), null, null).chip)
     }
 }

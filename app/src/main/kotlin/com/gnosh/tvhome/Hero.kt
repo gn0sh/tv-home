@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -89,16 +90,15 @@ fun HeroLayer(label: () -> String, modifier: Modifier = Modifier) {
     }
     val snap by feeds.snapshot.collectAsState()
     val zone = ZoneId.systemDefault()
-    val instant = now.atZone(zone).toInstant()
+    val instant = Instant.now()
     val game = GameDay.select(snap.games, instant, zone)
     // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).
     val resolved = HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game)
-    val theme = remember(resolved) { resolved }
     val gameLine = game?.let { GameDay.line(it, instant, zone) }
     Box(modifier.fillMaxSize()) {
-        HeroBackdrop(theme, snap.weather?.precipNow, Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION))
-        HeroTopBar(theme, now, gameLine, snap.weather?.chip)
-        HeroText(theme, label)
+        HeroBackdrop(resolved, snap.weather?.precipNow, Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION))
+        HeroTopBar(resolved, now, gameLine, snap.weather?.chip)
+        HeroText(resolved, label)
     }
 }
 

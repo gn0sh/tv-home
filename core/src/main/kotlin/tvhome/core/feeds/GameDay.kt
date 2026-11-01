@@ -27,7 +27,7 @@ object GameDay {
         val today = now.atZone(zone).toLocalDate()
         val candidates = games.filter { (_, g) ->
             when (g.phase) {
-                GamePhase.LIVE -> Duration.between(g.start, now) < STALE_LIVE
+                GamePhase.LIVE -> Duration.between(g.start, now).let { it < STALE_LIVE && it > Duration.ofDays(-1) }
                 GamePhase.UPCOMING -> Duration.between(g.start, now) < STALE_UPCOMING && g.start.atZone(zone).toLocalDate() == today
                 GamePhase.FINAL -> g.start.atZone(zone).toLocalDate() == today
             }
@@ -71,6 +71,7 @@ object GameDay {
     internal fun countdown(d: Duration): String {
         val minutes = d.toMinutes()
         return when {
+            d.seconds <= -60 -> "started"
             minutes < 1 -> "starting now"
             minutes < 60 -> "in ${minutes}m"
             else -> "in ${minutes / 60}h ${minutes % 60}m"
