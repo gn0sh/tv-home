@@ -51,24 +51,44 @@ ui_text() { # prints the UI hierarchy, or nothing if uiautomator cannot get an i
 
 expect_text() { # $1 = label, $2 = fixed text (from ScreenModel.kt) the screen must show
   local xml; xml=$(ui_text)
-  if [[ -z $xml ]]; then warn "$1: uiautomator dump unavailable; relying on resumed activity and screenshot"; return 0; fi
+  [[ -n $xml ]] || fail "$1: uiautomator dump failed 3 times; cannot confirm the screen shows \"$2\""
   printf '%s\n' "$xml" > "$OUT/ui-$1.xml"
   grep -qF "$2" <<<"$xml" || fail "$1: screen does not show \"$2\""
   pass "$1: screen shows \"$2\""
 }
 
+# Network off for the app only. The TV emulator's default network is wired (the first CI run showed "Active default
+# network: 100" after svc wifi/data off and airplane mode), and those cannot take it down without root. So the app's
+# uid is denied in firewall chain OEM_DENY_3 (`cmd connectivity`, API 34, shell holds NETWORK_SETTINGS), and both
+# get-* commands must confirm it. If this image lacks those commands, the offline checks still run but are labelled
+# AC8-offline NOT VERIFIED; if the commands exist and the deny is not confirmed, the job fails.
+OFFLINE_VERIFIED=unknown
 network() { # on|off
-  if [[ $1 == off ]]; then
-    sh_ svc wifi disable || true; sh_ svc data disable || true
-    sh_ cmd connectivity airplane-mode enable || true
-  else
-    sh_ cmd connectivity airplane-mode disable || true
-    sh_ svc wifi enable || true; sh_ svc data enable || true
+  local c p
+  if [[ $1 == on ]]; then
+    sh_ cmd connectivity set-package-networking-enabled true "$PKG" >/dev/null 2>&1 || true
+    sh_ cmd connectivity set-chain3-enabled false >/dev/null 2>&1 || true
+    p=$(sh_ cmd connectivity get-package-networking-enabled "$PKG" 2>&1 | tr -d '\r' || true)
+    echo "network on: package networking enabled=${p:-?}"
+    return 0
   fi
-  sleep 3
-  local d; d=$(sh_ dumpsys connectivity | tr -d '\r' | grep -m1 'Active default network' || true)
-  echo "network $1: ${d:-unknown}"
-  if [[ $1 == off && -n $d && $d != *none* ]]; then warn "network still has a default route after turning it off"; fi
+  c=$(sh_ cmd connectivity set-chain3-enabled true 2>&1 | tr -d '\r' || true)
+  p=$(sh_ cmd connectivity set-package-networking-enabled false "$PKG" 2>&1 | tr -d '\r' || true)
+  if grep -qiE 'unknown|usage|not supported' <<<"$c$p"; then
+    OFFLINE_VERIFIED=no
+    warn "AC8-offline NOT VERIFIED: this image has no per-package networking command ($c $p); offline checks run online"
+    return 0
+  fi
+  sleep 2
+  c=$(sh_ cmd connectivity get-chain3-enabled 2>&1 | tr -d '\r' || true)
+  p=$(sh_ cmd connectivity get-package-networking-enabled "$PKG" 2>&1 | tr -d '\r' || true)
+  echo "network off: chain3: $c | package networking enabled: $p"
+  if ! grep -qiE 'enabled|true' <<<"$c" || grep -qiE 'disabled|false' <<<"$c"; then
+    fail "network off: firewall chain OEM_DENY_3 is not enabled ($c)"
+  fi
+  grep -qiE 'false' <<<"$p" || fail "network off: $PKG still has networking ($p)"
+  [[ $OFFLINE_VERIFIED == no ]] || OFFLINE_VERIFIED=yes
+  pass "network off: $PKG is denied all networking (OEM_DENY_3)"
 }
 
 cold_start() { # $1 = label; prints the TotalTime of each of 3 cold starts and checks the median against AC8
@@ -88,7 +108,8 @@ cold_start() { # $1 = label; prints the TotalTime of each of 3 cold starts and c
   echo "$1 cold start TotalTime ms: ${times[*]} (median $median, limit $MAX_COLD_MS)"
   echo "$1 ${times[*]} median=$median" >> "$OUT/cold-start.txt"
   (( median < MAX_COLD_MS )) || fail "$1: median cold start ${median} ms is not under ${MAX_COLD_MS} ms (AC8)"
-  pass "$1: cold start median ${median} ms"
+  if [[ $OFFLINE_VERIFIED == yes ]]; then pass "$1: cold start median ${median} ms, app offline (AC8-offline VERIFIED)"
+  else warn "$1: cold start median ${median} ms, but the app was NOT offline (AC8-offline NOT VERIFIED)"; fi
 }
 
 no_app_crash_yet() { # $1 = label
@@ -228,4 +249,5 @@ fi
 note "marker repro (throw RuntimeException(\"MARKER\") from Handler.post) needs an app hook and is not run here"
 
 final_scan
-echo; echo "All emulator QA checks passed."
+echo; echo "AC8-offline: $([[ $OFFLINE_VERIFIED == yes ]] && echo VERIFIED || echo 'NOT VERIFIED')"
+echo "All emulator QA checks passed."
