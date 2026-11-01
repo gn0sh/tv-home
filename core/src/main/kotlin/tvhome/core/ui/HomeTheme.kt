@@ -16,8 +16,8 @@ data class HomeTheme(
     val focusRing: Int = Tokens.FOCUS_RING,
     val text: Int = Tokens.TEXT,
     val secondaryText: Int = Tokens.SECONDARY,
-    val tileWidthDp: Int = 240,
-    val tileHeightDp: Int = 135,
+    val tileWidthDp: Int = 192,
+    val tileHeightDp: Int = 108,
 ) {
     companion object {
         val DEFAULT = HomeTheme()
