@@ -360,8 +360,21 @@ focused_node() {
   printf '%s\n' "$xml" > "$OUT/ui-focus-last.xml"
   node=$(grep -oE '<node [^>]*focused="true"[^>]*>' <<<"$xml" | head -1 || true)
   [[ -n $node ]] || return 0
-  printf '%s|%s\n' "$(sed -E 's/.*content-desc="([^"]*)".*/\1/' <<<"$node")" \
-    "$(sed -E 's/.*bounds="\[([0-9]+),[0-9]+\]\[([0-9]+),[0-9]+\]".*/\1|\2/' <<<"$node")"
+  local desc b fx1 fy1 fx2 fy2 n nx1 ny1 nx2 ny2
+  desc=$(sed -E 's/.*content-desc="([^"]*)".*/\1/' <<<"$node")
+  b=$(sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' <<<"$node")
+  read -r fx1 fy1 fx2 fy2 <<<"$b"
+  # Compose can report the description on a node inside the focused one (the Calendar tile does): then use the first
+  # described node whose bounds lie within the focused node's bounds.
+  if [[ -z $desc ]]; then
+    while IFS= read -r n; do
+      read -r nx1 ny1 nx2 ny2 <<<"$(sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' <<<"$n")"
+      if (( nx1 >= fx1 && ny1 >= fy1 && nx2 <= fx2 && ny2 <= fy2 )); then
+        desc=$(sed -E 's/.*content-desc="([^"]*)".*/\1/' <<<"$n"); break
+      fi
+    done < <(grep -oE '<node [^>]*content-desc="[^"]+"[^>]*>' <<<"$xml" || true)
+  fi
+  printf '%s|%s|%s\n' "$desc" "$fx1" "$fx2"
 }
 SCREEN_W=$(sh_ wm size | tr -d '\r' | grep -oE '[0-9]+x[0-9]+' | tail -1 | cut -dx -f1)
 on_screen() { # $1 = focused_node output: the node lies inside the screen horizontally (the row scrolled to it)
