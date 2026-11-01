@@ -448,7 +448,14 @@ else
   # Same through the Ask button: Down, Down, Up (to Calendar), Up (to the row), Right moves.
   key DPAD_DOWN; key DPAD_DOWN
   cur=$(focus_after re-entry)
-  [[ ${cur%%|*} == "Ask Claude. Talk or type a question." ]] || fail "re-entry: Down, Down did not reach the Ask button (now '${cur%%|*}')"
+  if [[ -z ${cur%%|*} ]]; then  # the Ask button hides focus from uiautomator: confirm with OK, then Back
+    key DPAD_CENTER; sleep 1
+    expect_text "re-entry-ask-2" "Ask Claude full screen"
+    key BACK; sleep 1
+    in_front || fail "re-entry: Back from the Ask view left the app"
+  else
+    [[ ${cur%%|*} == "Ask Claude. Talk or type a question." ]] || fail "re-entry: Down, Down did not reach the Ask button (now '${cur%%|*}')"
+  fi
   key DPAD_UP
   cur=$(focus_after re-entry)
   [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach Calendar (now '${cur%%|*}')"
