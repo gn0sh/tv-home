@@ -1,6 +1,5 @@
 package com.gnosh.tvhome
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,7 +11,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.SystemClock
+import android.provider.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -28,7 +34,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -70,16 +79,28 @@ fun HeroLayer(label: () -> String, modifier: Modifier = Modifier) {
     }
 }
 
-/** The current local time, refreshed at each minute boundary. */
+/**
+ * The current local time. Driven by the system's minute tick and by time and time-zone changes (no `delay`), so it stays
+ * right across device sleep, a clock change or a zone change (clock-sleep-stale). The receiver is registered while the
+ * hero is composed and unregistered when it leaves. All three actions are protected system broadcasts, so no
+ * exported/not-exported flag is needed.
+ */
 @Composable
 private fun rememberMinuteClock(): State<LocalDateTime> {
+    val context = LocalContext.current
     val state = remember { mutableStateOf(LocalDateTime.now()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            val ms = System.currentTimeMillis()
-            delay(60_000 - ms % 60_000 + 20)
-            state.value = LocalDateTime.now()
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) { state.value = LocalDateTime.now() }
         }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_TICK)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        context.registerReceiver(receiver, filter)
+        state.value = LocalDateTime.now() // catch up on anything missed before registering
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
     return state
 }
@@ -147,39 +168,70 @@ private const val OPAQUE = 0xFF000000.toInt()
 private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alpha)
 
 /**
- * Canvas shapes only: no images, no network. Takes just the theme, so it is skipped when the focus changes. Only
- * Christmas animates (slow snowfall, about 15 frames a second); the frame clock is read in the draw phase, so each frame
- * redraws without recomposing.
+ * Canvas shapes only: no images, no network. Takes just the theme, so it is skipped when the focus changes.
+ *
+ * - Own `graphicsLayer`, so the animation redraws this layer and not the screen (snow-redraw-scope).
+ * - `drawWithCache` builds the brushes and the hill and moon paths once per size and theme, not per frame.
+ * - First frame stays cheap: only the gradient and the bottom fade are drawn until the first frame has been shown; the
+ *   motif and the animation start after that (cold-start budget, AC8).
+ * - Only Christmas animates (slow snowfall). The loop ticks about 15 times a second with a delay, not every vsync, and
+ *   does not run at all when the system animator scale is 0 (snow-uiautomator-idle: QA sets that so uiautomator can
+ *   reach an idle state; it also honours the user's "remove animations" choice).
  */
 @Composable
 private fun HeroBackdrop(theme: HeroTheme, modifier: Modifier) {
+    val context = LocalContext.current
+    val frozen = remember(context) { animationsFrozen(context) }
+    var ready by remember { mutableStateOf(false) }
     val tick = remember { mutableLongStateOf(0L) }
-    if (theme.motif == HeroMotif.SNOW) {
-        LaunchedEffect(Unit) {
-            var last = 0L
-            while (true) {
-                withFrameNanos { n -> if (n - last >= FRAME_NS) { last = n; tick.longValue = n } }
-            }
+    LaunchedEffect(Unit) {
+        withFrameNanos { } // the first frame has been drawn with the plain gradient
+        ready = true
+    }
+    val animate = ready && !frozen && theme.motif == HeroMotif.SNOW
+    LaunchedEffect(animate) {
+        if (!animate) return@LaunchedEffect
+        val t0 = SystemClock.elapsedRealtime()
+        while (true) {
+            delay(FRAME_MS)
+            tick.longValue = (SystemClock.elapsedRealtime() - t0) * 1_000_000L
         }
     }
-    Canvas(modifier) {
-        drawRect(Brush.verticalGradient(listOf(rgb(theme.backdropTop), rgb(theme.backdropBottom))))
-        when (theme.motif) {
-            HeroMotif.MOON_BATS -> drawMoonAndBats(theme)
-            HeroMotif.SNOW -> drawSnow(tick.longValue)
-            HeroMotif.DAWN -> drawSun(theme, 0.74f, 0.98f, 0.11f, 0.30f)
-            HeroMotif.DAY -> { drawSun(theme, 0.80f, 0.34f, 0.07f, 0.22f); drawClouds(0.22f) }
-            HeroMotif.SUNSET -> drawSun(theme, 0.74f, 0.88f, 0.14f, 0.34f)
-            HeroMotif.STARS -> drawStars(theme)
-        }
-        // Fade into the screen background so the tile row sits on a calm base.
-        drawRect(
-            Brush.verticalGradient(listOf(Color.Transparent, rgb(Tokens.BACKGROUND)), startY = size.height * 0.6f, endY = size.height),
-        )
-    }
+    Box(
+        modifier
+            .graphicsLayer { }
+            .drawWithCache {
+                val w = size.width
+                val h = size.height
+                val base = Brush.verticalGradient(listOf(rgb(theme.backdropTop), rgb(theme.backdropBottom)))
+                // Fade into the screen background so the tile row sits on a calm base.
+                val fade = Brush.verticalGradient(listOf(Color.Transparent, rgb(Tokens.BACKGROUND)), startY = h * 0.6f, endY = h)
+                val hill = if (theme.motif == HeroMotif.SNOW) hillPath(w, h) else null
+                val moon = if (theme.motif == HeroMotif.STARS) moonPath(w, h) else null
+                onDrawBehind {
+                    drawRect(base)
+                    if (ready) {
+                        when (theme.motif) {
+                            HeroMotif.MOON_BATS -> drawMoonAndBats(theme)
+                            HeroMotif.SNOW -> { drawSnow(tick.longValue); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
+                            HeroMotif.DAWN -> drawSun(theme, 0.74f, 0.98f, 0.11f, 0.30f)
+                            HeroMotif.DAY -> { drawSun(theme, 0.80f, 0.34f, 0.07f, 0.22f); drawClouds(0.22f) }
+                            HeroMotif.SUNSET -> drawSun(theme, 0.74f, 0.88f, 0.14f, 0.34f)
+                            HeroMotif.STARS -> drawStars(theme, moon)
+                        }
+                    }
+                    drawRect(fade)
+                }
+            },
+    )
 }
 
-private const val FRAME_NS = 66_000_000L
+/** True when the system animator duration scale is 0 (developer option, or QA via `settings put global`). */
+private fun animationsFrozen(context: Context): Boolean = runCatching {
+    Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+}.getOrDefault(false)
+
+private const val FRAME_MS = 66L
 
 private fun DrawScope.drawSun(theme: HeroTheme, cx: Float, cy: Float, r: Float, glowAlpha: Float) {
     val c = Offset(size.width * cx, size.height * cy)
@@ -204,7 +256,7 @@ private fun DrawScope.drawClouds(alpha: Float) {
     cloud(0.90f, 0.62f, 0.8f)
 }
 
-private fun DrawScope.drawStars(theme: HeroTheme) {
+private fun DrawScope.drawStars(theme: HeroTheme, moon: Path?) {
     // Deterministic scatter, kept to the right and upper part away from the title; dim for night.
     for (i in 0 until 46) {
         val x = frac(i * 0.6180339f + 0.13f)
@@ -213,11 +265,15 @@ private fun DrawScope.drawStars(theme: HeroTheme) {
         drawCircle(rgb(theme.text, a), size.height * (0.004f + 0.004f * frac(i * 0.57f)), Offset(size.width * (0.4f + 0.6f * x), size.height * y))
     }
     // A quiet crescent moon.
-    val c = Offset(size.width * 0.82f, size.height * 0.40f)
-    val r = size.height * 0.09f
+    if (moon != null) drawPath(moon, rgb(theme.text, 0.55f))
+}
+
+private fun moonPath(w: Float, h: Float): Path {
+    val c = Offset(w * 0.82f, h * 0.40f)
+    val r = h * 0.09f
     val moon = Path().apply { addOval(androidx.compose.ui.geometry.Rect(c, r)) }
     val bite = Path().apply { addOval(androidx.compose.ui.geometry.Rect(c + Offset(r * 0.5f, -r * 0.2f), r * 0.9f)) }
-    drawPath(Path.combine(PathOperation.Difference, moon, bite), rgb(theme.text, 0.55f))
+    return Path.combine(PathOperation.Difference, moon, bite)
 }
 
 private fun DrawScope.drawMoonAndBats(theme: HeroTheme) {
@@ -264,16 +320,16 @@ private fun DrawScope.drawSnow(tickNs: Long) {
         val r = size.height * (0.004f + 0.007f * frac(i * 0.53f))
         drawCircle(Color.White.copy(alpha = 0.35f + 0.4f * frac(i * 0.29f)), r, Offset(x, size.height * y))
     }
-    // A few static hills along the bottom of the backdrop.
-    val hill = Path().apply {
-        moveTo(0f, size.height)
-        lineTo(0f, size.height * 0.86f)
-        cubicTo(size.width * 0.25f, size.height * 0.78f, size.width * 0.45f, size.height * 0.92f, size.width * 0.7f, size.height * 0.84f)
-        cubicTo(size.width * 0.85f, size.height * 0.80f, size.width * 0.95f, size.height * 0.86f, size.width, size.height * 0.83f)
-        lineTo(size.width, size.height)
-        close()
-    }
-    drawPath(hill, Color.White.copy(alpha = 0.08f))
+}
+
+/** A few static hills along the bottom of the backdrop. */
+private fun hillPath(w: Float, h: Float): Path = Path().apply {
+    moveTo(0f, h)
+    lineTo(0f, h * 0.86f)
+    cubicTo(w * 0.25f, h * 0.78f, w * 0.45f, h * 0.92f, w * 0.7f, h * 0.84f)
+    cubicTo(w * 0.85f, h * 0.80f, w * 0.95f, h * 0.86f, w, h * 0.83f)
+    lineTo(w, h)
+    close()
 }
 
 private fun frac(x: Float): Float = x - kotlin.math.floor(x)
