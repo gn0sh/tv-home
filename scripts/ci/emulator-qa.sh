@@ -486,6 +486,11 @@ step "Row edit (M2g): long-press OK opens the menu, Move right reorders, Hide hi
 # OK is held for 1.5 s (a real repeat stream, like a remote): the held press must open the menu and choose nothing
 # (menu-held-ok-repeat).
 long_press_ok() { sh_ input keyevent --duration 1500 KEYCODE_DPAD_CENTER; sleep 2; }
+key_trace() { # the app's OK-key trace and the input tool's keyevent usage, for diagnosing a long press that misfired
+  echo "--- TvHomeKeys trace:"; sh_ logcat -d -s TvHomeKeys:D | tr -d '\r' | tail -20 || true
+  echo "--- input keyevent usage:"; sh_ input 2>&1 | tr -d '\r' | grep -iA2 'keyevent' || true
+}
+sh_ setprop log.tag.TvHomeKeys DEBUG || true
 if (( napps < 2 )); then
   warn "Row edit NOT VERIFIED: $napps other TV app(s) on this image, a reorder needs at least 2"
 else
@@ -497,8 +502,9 @@ else
   [[ -n $second_name && $second_name != "$first_name" ]] || fail "row-edit: Right did not reach a second tile (now '$second_name')"
   key DPAD_LEFT
   # Long-press OK on the first tile: the menu shows all five entries.
+  sh_ logcat -c || true
   long_press_ok
-  in_front || fail "row-edit: the long press left the app (it launched the tile instead of opening the menu)"
+  in_front || { key_trace; fail "row-edit: the long press left the app (it launched the tile instead of opening the menu)"; }
   for t in "Cancel" "Move left" "Move right" "Move to front" "Hide"; do expect_text "row-edit-menu" "$t"; done
   # Back closes the menu and focus returns to the same tile, which did not move during the hold.
   key BACK

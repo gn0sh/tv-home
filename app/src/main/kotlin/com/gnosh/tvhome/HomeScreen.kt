@@ -2,6 +2,7 @@ package com.gnosh.tvhome
 
 import androidx.activity.compose.BackHandler
 import android.os.SystemClock
+import android.util.Log
 import android.view.ViewConfiguration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -466,6 +467,10 @@ private fun TileFrame(
                             return@onPreviewKeyEvent false
                         }
                         val n = e.nativeKeyEvent
+                        if (Log.isLoggable(KEY_TAG, Log.DEBUG)) {
+                            Log.d(KEY_TAG, "ok ${n.action} rep=${n.repeatCount} long=${n.isLongPress} cancel=${n.isCanceled} " +
+                                "held=${if (downAt.longValue >= 0) SystemClock.uptimeMillis() - downAt.longValue else -1} ev=${n.eventTime - n.downTime}")
+                        }
                         when (e.type) {
                             KeyEventType.KeyDown -> {
                                 if (n.repeatCount == 0) {
@@ -586,6 +591,8 @@ private const val DOCK_ASK = "ask"
 /** Focus-requester key of the "Hidden apps (N)" tile; cannot clash with a package name. */
 private const val HIDDEN_KEY = "::hidden"
 
+// Tile OK-key trace, off unless enabled: adb shell setprop log.tag.TvHomeKeys DEBUG (the emulator QA does this).
+private const val KEY_TAG = "TvHomeKeys"
 private val OK_KEYS = setOf(Key.Enter, Key.DirectionCenter, Key.NumPadEnter)
 
 /** The tile menu's entries, in the order shown (M2g). */
