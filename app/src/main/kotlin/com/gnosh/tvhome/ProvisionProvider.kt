@@ -59,12 +59,25 @@ class ProvisionProvider : ContentProvider() {
 
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
         enforceShell()
+        if (uri.pathSegments == listOf("location")) { FeedSettings.clearLocation(context!!.applicationContext); return 1 }
         val key = keyOf(uri) ?: throw FileNotFoundException()
         last[key] = Provision.apply(secrets(), ProvisionCommand.Clear(key))
         return 1
     }
 
-    override fun insert(uri: Uri, values: ContentValues?): Uri? = throw UnsupportedOperationException()
+    /**
+     * `content insert --uri content://com.gnosh.tvhome.provision/location --bind lat:d:36.53 --bind lon:d:-87.36`: the
+     * hero's weather location. Not a secret, so it may travel as arguments. Anything else is refused.
+     */
+    override fun insert(uri: Uri, values: ContentValues?): Uri? {
+        enforceShell()
+        if (uri.pathSegments != listOf("location")) throw UnsupportedOperationException()
+        val v = values ?: throw IllegalArgumentException("values")
+        val lat = v.getAsDouble("lat") ?: throw IllegalArgumentException("lat")
+        val lon = v.getAsDouble("lon") ?: throw IllegalArgumentException("lon")
+        if (!FeedSettings.setLocation(context!!.applicationContext, lat, lon)) throw IllegalArgumentException("range")
+        return uri
+    }
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int =
         throw UnsupportedOperationException()
     override fun getType(uri: Uri): String? = null
