@@ -1,6 +1,7 @@
 package com.gnosh.tvhome
 
 import androidx.activity.compose.BackHandler
+import android.os.SystemClock
 import android.view.ViewConfiguration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -435,6 +436,8 @@ private fun TileFrame(
     // Holding OK (M2g tile menu). combinedClickable's long click did not fire for a held DPAD_CENTER on the emulator (the
     // tile launched instead), so OK is handled here: a press shorter than the long-press timeout clicks, a longer one
     // (a repeat flagged long-press, or held past the timeout) opens the menu once; the release after it does nothing.
+    // Held time is measured on arrival, not from event times: `input keyevent --duration` sends the release with the
+    // press's own event time, so event times read as a short press there.
     val longTimeout = remember { ViewConfiguration.getLongPressTimeout().toLong() }
     val downAt = remember { mutableLongStateOf(-1L) }
     val longFired = remember { mutableStateOf(false) }
@@ -466,9 +469,9 @@ private fun TileFrame(
                         when (e.type) {
                             KeyEventType.KeyDown -> {
                                 if (n.repeatCount == 0) {
-                                    downAt.longValue = n.eventTime; longFired.value = false
+                                    downAt.longValue = SystemClock.uptimeMillis(); longFired.value = false
                                 } else if (!longFired.value && downAt.longValue >= 0 &&
-                                    (n.isLongPress || n.eventTime - downAt.longValue >= longTimeout)
+                                    (n.isLongPress || SystemClock.uptimeMillis() - downAt.longValue >= longTimeout)
                                 ) {
                                     longFired.value = true; onLongClick()
                                 }
@@ -476,7 +479,7 @@ private fun TileFrame(
                             }
                             KeyEventType.KeyUp -> {
                                 if (downAt.longValue >= 0 && !longFired.value && !n.isCanceled) {
-                                    if (n.eventTime - downAt.longValue >= longTimeout) onLongClick() else onClick()
+                                    if (SystemClock.uptimeMillis() - downAt.longValue >= longTimeout) onLongClick() else onClick()
                                 }
                                 downAt.longValue = -1L; longFired.value = false
                                 true
