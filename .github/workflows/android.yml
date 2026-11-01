@@ -41,7 +41,7 @@ env:
   #   1. `./gradlew --write-locks :app:dependencies` and commit app/gradle.lockfile (and settings lock changes);
   #   2. `./gradlew --write-verification-metadata sha256 :app:lintRelease :app:assembleRelease`, review the diff, commit;
   #   3. set this to "strict".
-  APP_DEP_VERIFICATION: strict
+  APP_DEP_VERIFICATION: lenient
 
 jobs:
   core:
@@ -310,7 +310,7 @@ jobs:
       - name: Regenerate dependency locks and verification metadata
         if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request' && env.APP_DEP_VERIFICATION != 'strict'
         run: |
-          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/regen.log" --write-locks --write-verification-metadata sha256 \
+          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/regen.log" --rerun-tasks --write-locks --write-verification-metadata sha256 \
             :core:dependencies :core:test :core:hostileTest :app:dependencies :app:lintRelease :app:assembleRelease
           git status --short
           git diff --stat
