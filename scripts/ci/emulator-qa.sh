@@ -189,17 +189,26 @@ in_front && fail "Back does not leave the app (focus/Back trap)"
 pass "Back leaves the app (now: $(resumed | head -1 | sed 's/^ *//'))"
 no_app_crash_yet "D-pad walk"
 
-step "M2b Calendar tile: OK opens the full-screen calendar, Back returns to the row"
-# The Calendar tile is the first tile and takes focus on launch; it does not depend on other apps being installed.
-# Still "not set up" here (no URL yet), so the full screen shows that message and the panel itself holds focus.
+# Other TV launcher apps on this image: the app row's tiles. Which is first depends on the image, so it is only reported.
+others=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER \
+  | tr -d '\r' | sed 's/^[[:space:]]*//' | grep '/' | grep -v "^$PKG/" || true)
+echo "other TV launcher entries:"; printf '%s\n' "$others" | sed 's/^/  /'
+
+step "M2c dock: DPAD_DOWN reaches the Calendar tile, OK opens the full screen, Back returns to it"
+# Home is two rows: the app carousel, and below it the dock with the Calendar tile. Initial focus is the first app tile
+# (or the Calendar tile when the row has no apps), so DPAD_DOWN reaches the Calendar tile either way. The dock does not
+# depend on other apps being installed. Still "not set up" here (no URL yet), so the full screen shows that message
+# and the panel itself holds focus.
 sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
 in_front || fail "M2b: home screen not in front before OK"
 expect_text "m2b-home" "Calendar, "            # the tile's description: "Calendar, <weekday date>. <status>."
 xml=$(ui_text)
 [[ -n $xml ]] || fail "M2b: uiautomator dump failed before OK; cannot confirm the full screen is closed"
 grep -qF "Calendar full screen" <<<"$xml" && fail "M2b: full-screen calendar is showing before OK"
+[[ -n $others ]] || warn "M2c: no other TV apps on this image, so focus starts on the Calendar tile and DPAD_DOWN from the app row is NOT VERIFIED"
+sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
 sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
-in_front || fail "M2b: OK on the Calendar tile left the app"
+in_front || fail "M2b: OK after DPAD_DOWN left the app (focus did not reach the Calendar tile; an app opened?)"
 expect_text "m2b-full" "Calendar full screen"
 expect_text "m2b-full-message" "Calendar not set up"
 before=$(pid_of)
@@ -214,7 +223,9 @@ xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-m2b-back.xml"
 grep -qF "Calendar full screen" <<<"$xml" && fail "M2b: Back did not close the full-screen calendar"
 pass "M2b: Back closed the full-screen calendar and the app stayed in front"
 # Focus is back on the Calendar tile if OK opens the full screen again (uiautomator's focused flag is not relied on).
+# With apps present this also shows focus did not go to the first app tile (OK there would open that app).
 sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 2
+in_front || fail "M2b: OK after Back left the app: focus went back to an app tile, not the Calendar tile"
 expect_text "m2b-refocus" "Calendar full screen"
 pass "M2b: focus was restored to the Calendar tile (OK reopened the full screen)"
 sh_ input keyevent KEYCODE_BACK; sleep 2
@@ -232,37 +243,47 @@ pass "M2b: Back on the home row leaves the app"
 note "M2b with event rows (focus on the first row, Up/Down through rows, scrolling) is NOT VERIFIED here: the emulator only has the dummy URL, so it never shows rows"
 no_app_crash_yet "M2b calendar"
 
-step "M2 tile row: OK on the first app tile opens it, then the home screen comes back"
-# The tile row is the Calendar tile, then the other apps with a LEANBACK_LAUNCHER entry; initial focus is the Calendar
-# tile, so DPAD_RIGHT once moves to the first app tile. The emulator image has few apps, and which one is first
-# depends on the image, so the app itself is only reported.
-others=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER \
-  | tr -d '\r' | sed 's/^[[:space:]]*//' | grep '/' | grep -v "^$PKG/" || true)
-echo "other TV launcher entries:"; printf '%s\n' "$others" | sed 's/^/  /'
+# Return to our home screen from an app we opened. Third-party apps may consume Back (YouTube TV shows an exit
+# dialog), so Back is tried first and then the app is force-stopped; either way our task must be underneath and resume.
+return_home() { # $1 = label, $2 = launched package
+  local how="" _
+  for _ in 1 2; do sh_ input keyevent KEYCODE_BACK; sleep 3; if in_front; then how="Back"; break; fi; done
+  if [[ -z $how ]]; then
+    note "$1: $2 kept Back; force-stopping it to check our task is underneath"
+    sh_ am force-stop "$2"; sleep 3
+    in_front && how="force-stop of $2"
+  fi
+  [[ -n $how ]] || fail "$1: home screen did not return after Back or force-stop of $2 (now: $(resumed | head -1 | sed 's/^ *//'))"
+  pass "$1: home screen resumed after $how"
+}
+LAUNCHED=""
+expect_app_opened() { # $1 = label; sets LAUNCHED (not a $(...) capture, so fail's ::error:: line is printed)
+  local top launched
+  top=$(resumed | head -1 | sed 's/^ *//')
+  in_front && fail "$1: OK did not open another app (still in front: $top)"
+  launched=$(grep -oE '[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+' <<<"$top" | head -1 | cut -d/ -f1)
+  [[ -n $launched ]] || fail "$1: cannot tell which app is in front ($top)"
+  cut -d/ -f1 <<<"$others" | grep -qxF "$launched" || fail "$1: front app $launched is not one of the TV launcher apps"
+  LAUNCHED=$launched
+}
+
+step "M2 app row: OK on the initial focus (first app tile) opens it; Down then Up returns to the app row"
 if [[ -z $others ]]; then
-  warn "M2 launch NOT VERIFIED: this image has no other LEANBACK_LAUNCHER app, so the row is empty"
+  warn "M2 launch and M2c Up NOT VERIFIED: this image has no other LEANBACK_LAUNCHER app, so the app row is empty"
 else
   sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
   in_front || fail "M2: home screen not in front before OK"
-  sh_ input keyevent KEYCODE_DPAD_RIGHT; sleep 1
   sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 5
-  top=$(resumed | head -1 | sed 's/^ *//')
-  in_front && fail "M2: OK on the first app tile did not open another app (still in front: $top)"
-  launched=$(grep -oE '[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+' <<<"$top" | head -1 | cut -d/ -f1)
-  [[ -n $launched ]] || fail "M2: cannot tell which app is in front ($top)"
-  cut -d/ -f1 <<<"$others" | grep -qxF "$launched" || fail "M2: front app $launched is not one of the TV launcher apps"
-  pass "M2: OK on the first app tile opened $launched"
-  # Third-party apps may consume Back (YouTube TV shows an exit dialog), so Back is tried first and then the app is
-  # force-stopped; either way our home screen must be the task underneath and resume.
-  how=""
-  for _ in 1 2; do sh_ input keyevent KEYCODE_BACK; sleep 3; if in_front; then how="Back"; break; fi; done
-  if [[ -z $how ]]; then
-    note "M2: $launched kept Back; force-stopping it to check our task is underneath"
-    sh_ am force-stop "$launched"; sleep 3
-    in_front && how="force-stop of $launched"
-  fi
-  [[ -n $how ]] || fail "M2: home screen did not return after Back or force-stop of $launched (now: $(resumed | head -1 | sed 's/^ *//'))"
-  pass "M2: home screen resumed after $how"
+  expect_app_opened "M2"
+  pass "M2: OK on the first app tile (initial focus) opened $LAUNCHED"
+  return_home "M2" "$LAUNCHED"
+  # Down to the dock, Up back to the app row: OK must open an app again, not the full-screen calendar.
+  sh_ input keyevent KEYCODE_DPAD_DOWN; sleep 1
+  sh_ input keyevent KEYCODE_DPAD_UP; sleep 1
+  sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 5
+  expect_app_opened "M2c"
+  pass "M2c: Down then Up returned focus to the app row (OK opened $LAUNCHED)"
+  return_home "M2c" "$LAUNCHED"
   no_app_crash_yet "M2 launch"
 fi
 

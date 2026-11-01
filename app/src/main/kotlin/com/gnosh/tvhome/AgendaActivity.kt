@@ -26,8 +26,9 @@ import java.time.Instant
 import java.time.ZoneId
 
 /**
- * The home screen (M2b): a row of tiles, the Calendar tile first, which opens the full-screen agenda. Kept under its
- * M1 name so the launcher entry, CI checks and provisioning steps stay the same. It is a LEANBACK_LAUNCHER entry only; becoming the default Home is M3.
+ * The home screen (M2c): the app carousel, and below it a dock whose Calendar tile opens the full-screen agenda. Kept
+ * under its M1 name so the launcher entry, CI checks and provisioning steps stay the same. It is a LEANBACK_LAUNCHER
+ * entry only; becoming the default Home is M3.
  *
  * While STARTED: the app list is refreshed (so installs and removals show up on return; unchanged apps reuse their
  * cached tiles) in its own coroutine, and [com.gnosh.tvhome.AppGraph.session] refreshes the calendar (fetch now, then
