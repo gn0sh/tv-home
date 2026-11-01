@@ -23,17 +23,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -58,7 +55,6 @@ import tvhome.core.ui.Tokens
 
 internal fun color(rgb: Int): Color = Color(0xFF000000.toInt() or rgb)
 
-private val BG = color(Tokens.BACKGROUND)
 private val TEXT = color(Tokens.TEXT)
 private val SECONDARY = color(Tokens.SECONDARY)
 private val AMBER = color(Tokens.AMBER)
@@ -66,18 +62,28 @@ private val FILL = color(Tokens.FOCUS_FILL)
 private val RING = color(Tokens.FOCUS_RING)
 
 /**
- * Draws a [ScreenModel]; every word and row was decided in `:core` (`screenModel`), so this file only lays things out.
- * Dark theme, 5% overscan margins, one column. In M1 the only focusable things are the rows and the screen root, so
- * there is no focus trap; Back is not handled here and exits the activity.
+ * The calendar panel of the home screen (M2): draws a [ScreenModel]; every word and row was decided in `:core`
+ * (`screenModel`), so this file only lays things out. The home screen owns the background, margins and initial focus
+ * (the first app tile), so this panel never requests focus. When there is no row to focus (message, or two empty
+ * days) the panel itself is focusable with the focus ring, so D-pad Down from the tiles always lands somewhere and Up
+ * goes back. Back is not handled here and exits the activity.
  */
 @Composable
-fun AgendaScreen(model: ScreenModel) {
+fun AgendaPanel(model: ScreenModel, modifier: Modifier = Modifier) {
+    val noRows = when (model) {
+        is ScreenModel.Message -> true
+        is ScreenModel.Agenda -> model.today.rows.isEmpty() && model.tomorrow.rows.isEmpty()
+    }
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
     Box(
-        Modifier
-            .fillMaxSize()
-            .background(BG)
-            .focusable() // keeps focus on the root when there is no row, so D-pad presses have somewhere to land
-            .padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
+        // The focus node stays in the tree in every state; only canFocus changes, so the panel's focus target is not
+        // added and removed as refreshes switch between "no rows" and rows (panel-focus-drop).
+        modifier
+            .onFocusChanged { focused = it.isFocused }
+            .then(if (focused && noRows) Modifier.border(Tokens.RING_DP.dp, RING, shape) else Modifier)
+            .focusProperties { canFocus = noRows }
+            .focusable(),
     ) {
         when (model) {
             is ScreenModel.Message -> MessageBody(model)
@@ -192,27 +198,8 @@ private fun AgendaList(m: ScreenModel.Agenda, modifier: Modifier) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    // Initial focus is chosen once, when the list first appears. Later refreshes never move focus or scroll position.
-    val initialFlat = remember { m.initialFocus }
-    val initialRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        val target = initialFlat ?: return@LaunchedEffect
-        val item = entries.indexOfFirst { it is Entry.Row && it.flat == target }
-        if (item < 0) return@LaunchedEffect
-        listState.scrollToItem(item)
-        // Wait until the row is laid out (in the visible items) so its FocusRequester is attached; give up after a
-        // few frames rather than loop forever. Retry once if the first request races the attach.
-        var frames = 0
-        while (listState.layoutInfo.visibleItemsInfo.none { it.index == item } && frames < 30) {
-            withFrameNanos { }
-            frames++
-        }
-        withFrameNanos { }
-        if (runCatching { initialRequester.requestFocus() }.isFailure) {
-            withFrameNanos { }
-            runCatching { initialRequester.requestFocus() }
-        }
-    }
+    // No initial focus here: on the home screen the first app tile takes it (HomeScreen). D-pad Down from a tile lands on
+    // the nearest visible row. Refreshes never move focus or scroll position.
 
     Box(modifier) {
         LazyColumn(
@@ -231,7 +218,6 @@ private fun AgendaList(m: ScreenModel.Agenda, modifier: Modifier) {
                     is Entry.Heading -> DayHeading(e.day)
                     is Entry.Row -> AgendaRow(
                         row = e.row,
-                        requester = if (e.flat == initialFlat) initialRequester else null,
                         onFocused = {
                             // Focus skips headings; bring this day's heading into view with its first row.
                             val h = e.headingItem
@@ -260,7 +246,7 @@ private fun DayHeading(day: DayModel) {
 }
 
 @Composable
-private fun AgendaRow(row: RowModel, requester: FocusRequester?, onFocused: () -> Unit) {
+private fun AgendaRow(row: RowModel, onFocused: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(8.dp)
     val quietTime = row.time == Copy.ALL_DAY || row.time == Copy.CONTINUES
@@ -268,7 +254,6 @@ private fun AgendaRow(row: RowModel, requester: FocusRequester?, onFocused: () -
         Modifier
             .fillMaxWidth()
             .heightIn(min = Tokens.ROW_HEIGHT_DP.dp)
-            .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocused()

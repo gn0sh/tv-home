@@ -174,18 +174,52 @@ no_app_crash_yet "cold start"
 
 step "AC5 D-pad/Back walk (no focus trap, no crash)"
 before=$(pid_of)
-for k in DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_UP DPAD_UP DPAD_RIGHT DPAD_LEFT DPAD_CENTER DPAD_DOWN DPAD_CENTER DPAD_UP DPAD_LEFT; do
+# No DPAD_CENTER here: on the M2 home screen OK on a tile launches that app (checked in the M2 step below).
+WALK="DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_UP DPAD_UP DPAD_RIGHT DPAD_RIGHT DPAD_LEFT DPAD_DOWN DPAD_UP DPAD_LEFT DPAD_LEFT"
+for k in $WALK; do
   sh_ input keyevent "KEYCODE_$k"; sleep 0.4
 done
 sleep 1
 [[ -n $before && $(pid_of) == "$before" ]] || fail "process changed or died during the D-pad walk"
 in_front || fail "AgendaActivity left the foreground during the D-pad walk"
-pass "12 D-pad keys: still in front, same process"
+pass "$(wc -w <<<"$WALK") D-pad keys: still in front, same process"
 sh_ input keyevent KEYCODE_BACK; sleep 2
 if in_front; then sh_ input keyevent KEYCODE_BACK; sleep 2; fi
 in_front && fail "Back does not leave the app (focus/Back trap)"
 pass "Back leaves the app (now: $(resumed | head -1 | sed 's/^ *//'))"
 no_app_crash_yet "D-pad walk"
+
+step "M2 tile row: OK opens the first app, then the home screen comes back"
+# The tile row lists other apps with a LEANBACK_LAUNCHER entry; initial focus is the first tile. The emulator image
+# has few apps, and which one is first depends on the image, so the app itself is only reported.
+others=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER \
+  | tr -d '\r' | sed 's/^[[:space:]]*//' | grep '/' | grep -v "^$PKG/" || true)
+echo "other TV launcher entries:"; printf '%s\n' "$others" | sed 's/^/  /'
+if [[ -z $others ]]; then
+  warn "M2 launch NOT VERIFIED: this image has no other LEANBACK_LAUNCHER app, so the row is empty"
+else
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  in_front || fail "M2: home screen not in front before OK"
+  sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 5
+  top=$(resumed | head -1 | sed 's/^ *//')
+  in_front && fail "M2: OK on the first tile did not open another app (still in front: $top)"
+  launched=$(grep -oE '[A-Za-z0-9_.]+/[A-Za-z0-9_.$]+' <<<"$top" | head -1 | cut -d/ -f1)
+  [[ -n $launched ]] || fail "M2: cannot tell which app is in front ($top)"
+  cut -d/ -f1 <<<"$others" | grep -qxF "$launched" || fail "M2: front app $launched is not one of the TV launcher apps"
+  pass "M2: OK on the first tile opened $launched"
+  # Third-party apps may consume Back (YouTube TV shows an exit dialog), so Back is tried first and then the app is
+  # force-stopped; either way our home screen must be the task underneath and resume.
+  how=""
+  for _ in 1 2; do sh_ input keyevent KEYCODE_BACK; sleep 3; if in_front; then how="Back"; break; fi; done
+  if [[ -z $how ]]; then
+    note "M2: $launched kept Back; force-stopping it to check our task is underneath"
+    sh_ am force-stop "$launched"; sleep 3
+    in_front && how="force-stop of $launched"
+  fi
+  [[ -n $how ]] || fail "M2: home screen did not return after Back or force-stop of $launched (now: $(resumed | head -1 | sed 's/^ *//'))"
+  pass "M2: home screen resumed after $how"
+  no_app_crash_yet "M2 launch"
+fi
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"
 network on
