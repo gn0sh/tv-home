@@ -44,6 +44,15 @@ jobs:
           get nhl-season "https://api-web.nhle.com/v1/club-schedule-season/NSH/now"
           get espn-team-194 "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/194/schedule"
           get espn-cfb-scoreboard "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
+      - name: Print trimmed bodies (temp)
+        shell: bash
+        run: |
+          for f in feeds/*.json; do
+            echo "=====BEGIN $f"
+            jq -c 'if type=="object" then with_entries(if (.value|type)=="array" then .value |= .[0:3] else . end) else . end' "$f" | head -c 60000
+            echo
+            echo "=====END $f"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: feed-captures
