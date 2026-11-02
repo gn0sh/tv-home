@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Agenda</string>
+    <string name="mic_service_label">Dashboard mic button</string>
+    <string name="mic_service_description">Opens Ask Claude when you press the remote\'s mic button. It reads no screen content and passes every other key on untouched.</string>
 </resources>

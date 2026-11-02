@@ -41,11 +41,10 @@
             </intent-filter>
         </activity>
 
-        <!-- M3, both OFF as installed (android:enabled="false"), so installing changes nothing about Home or the mic.
-             scripts/tv-home-takeover.ps1, run by Brian himself, turns one on with `pm enable` and makes it the
-             default, and its -Rollback undoes it. HomeEntry: the remote's Home button opens the dashboard. MicEntry:
-             with Google Assistant switched off, the assist and voice keys open Ask Claude, listening. Neither has a
-             permission guard: like any launcher, they only bring the dashboard or the Ask view to the front. -->
+        <!-- M3 Home: OFF as installed (android:enabled="false"), so installing changes nothing about Home.
+             scripts/tv-home-takeover.ps1 -Home, run by Brian himself, turns it on with `pm enable` and makes it the
+             default home; -Rollback restores the TV's own home. Like any launcher it only brings the dashboard to
+             the front, so it has no permission guard. -->
         <activity-alias
             android:name=".HomeEntry"
             android:targetActivity=".AgendaActivity"
@@ -57,18 +56,24 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity-alias>
-        <activity-alias
-            android:name=".MicEntry"
-            android:targetActivity=".AgendaActivity"
-            android:enabled="false"
-            android:exported="true">
+
+        <!-- M3 mic: an accessibility service that only filters key events (res/xml/mic_key_filter.xml): it reads no
+             screen content and handles no events. It consumes the remote's assist, voice and search keys and opens Ask
+             Claude, listening; every other key passes untouched. It does nothing until enabled in the TV's
+             accessibility settings, which scripts/tv-home-takeover.ps1 -Mic (run by Brian) does and -Rollback undoes.
+             Google Assistant stays installed: it provides the speech recognition Ask Claude uses. -->
+        <service
+            android:name=".MicKeyService"
+            android:exported="true"
+            android:label="@string/mic_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
-                <action android:name="android.intent.action.ASSIST" />
-                <action android:name="android.intent.action.VOICE_COMMAND" />
-                <action android:name="android.intent.action.SEARCH_LONG_PRESS" />
-                <category android:name="android.intent.category.DEFAULT" />
+                <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
-        </activity-alias>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/mic_key_filter" />
+        </service>
 
         <!-- Put a secret on the device over adb (architecture section 5). No intent-filter. Only holders of DUMP
              (the adb shell user; third-party apps cannot get it) may start it. -->

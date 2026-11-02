@@ -86,3 +86,20 @@ git pull
 ```
 It uses the adb in `%LOCALAPPDATA%\tv-home-tools`, opens no port and sends only the fixed commands its buttons name.
 Typed text may use letters, numbers, spaces and `. , - _ @`. For another TV address: `-Serial 192.168.68.71:5555`.
+
+## Home button and mic button (optional; you choose)
+As installed, the dashboard changes nothing about Home or the mic. To switch them on, in PowerShell from the tv-home
+folder (it shows what it will change and asks you to type YES):
+```
+.\scripts\tv-home-takeover.ps1 -SetHome -SetMic
+```
+- **Home:** the remote's Home button opens the dashboard, from any app. A Google TV system update can undo this; run
+  the line again after one.
+- **Mic:** the remote's mic button opens Ask Claude, listening. This turns on "Dashboard mic button" in the TV's
+  accessibility settings; it reads no screen content and passes every other key on. Google Assistant stays installed
+  (Ask Claude uses its speech recognition), but the mic button no longer opens it.
+
+To undo both: `.\scripts\tv-home-takeover.ps1 -Rollback`. By hand, without the script (adb from `%LOCALAPPDATA%\tv-home-tools`):
+1. `adb shell cmd package set-home-activity <the TV's own home, saved in %LOCALAPPDATA%\tv-home-tools\takeover-rollback.json>`
+2. `adb shell pm disable com.gnosh.tvhome/.HomeEntry`
+3. `adb shell settings put secure enabled_accessibility_services "<the list saved in that file>"` (or uninstall the dashboard, which removes both)

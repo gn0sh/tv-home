@@ -55,32 +55,42 @@ class AppManifestTest {
     }
 
     /**
-     * M3 (a hard stop): Home and the mic keys reach the app only through two aliases that are OFF as installed, so an
-     * install changes nothing until Brian runs the takeover script. HOME appears in HomeEntry and nowhere else.
+     * M3 (a hard stop): Home reaches the app only through HomeEntry, an alias that is OFF as installed, so an install
+     * changes nothing until Brian runs the takeover script. HOME appears there and nowhere else.
      */
-    @Test fun homeAndMicEntriesAreDisabledAliases() {
-        val aliases = application.kids("activity-alias")
-        assertEquals(setOf(".HomeEntry", ".MicEntry"), aliases.map { it.attr("name") }.toSet())
-        for (a in aliases) {
-            assertEquals(".AgendaActivity", a.attr("targetActivity"))
-            assertEquals("false", a.attr("enabled"), "${a.attr("name")} must be off as installed")
-            assertEquals("true", a.attr("exported"))
-            assertNull(a.attr("permission"))
-        }
-        val home = aliases.single { it.attr("name") == ".HomeEntry" }.kids("intent-filter").single()
+    @Test fun homeEntryIsADisabledAlias() {
+        val alias = application.kids("activity-alias").single()
+        assertEquals(".HomeEntry", alias.attr("name"))
+        assertEquals(".AgendaActivity", alias.attr("targetActivity"))
+        assertEquals("false", alias.attr("enabled"))
+        assertEquals("true", alias.attr("exported"))
+        val home = alias.kids("intent-filter").single()
         assertEquals(listOf("android.intent.action.MAIN"), home.kids("action").map { it.attr("name") })
         assertEquals(
             setOf("android.intent.category.HOME", "android.intent.category.DEFAULT"),
             home.kids("category").map { it.attr("name") }.toSet(),
         )
-        val mic = aliases.single { it.attr("name") == ".MicEntry" }.kids("intent-filter").single()
-        assertEquals(
-            setOf("android.intent.action.ASSIST", "android.intent.action.VOICE_COMMAND", "android.intent.action.SEARCH_LONG_PRESS"),
-            mic.kids("action").map { it.attr("name") }.toSet(),
-        )
-        assertEquals(listOf("android.intent.category.DEFAULT"), mic.kids("category").map { it.attr("name") })
         val text = File(app, "src/main/AndroidManifest.xml").readText()
         assertEquals(1, Regex("android\\.intent\\.category\\.HOME").findAll(text).count())
+    }
+
+    /** M3 mic: key filtering only. Bound by the system only (BIND_ACCESSIBILITY_SERVICE), no window content. */
+    @Test fun micServiceOnlyFiltersKeys() {
+        val svc = application.kids("service").single()
+        assertEquals(".MicKeyService", svc.attr("name"))
+        assertEquals("android.permission.BIND_ACCESSIBILITY_SERVICE", svc.attr("permission"))
+        assertEquals(
+            listOf("android.accessibilityservice.AccessibilityService"),
+            svc.kids("intent-filter").single().kids("action").map { it.attr("name") },
+        )
+        assertEquals("@xml/mic_key_filter", svc.kids("meta-data").single().attr("resource"))
+        val cfg = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(File(app, "src/main/res/xml/mic_key_filter.xml")).documentElement
+        assertEquals("false", cfg.attr("canRetrieveWindowContent"))
+        assertEquals("true", cfg.attr("canRequestFilterKeyEvents"))
+        assertEquals("flagRequestFilterKeyEvents", cfg.attr("accessibilityFlags"))
+        assertNull(cfg.attr("canPerformGestures"))
+        assertNull(cfg.attr("canRequestTouchExplorationMode"))
     }
 
     @Test fun agendaIsAOnlyLeanbackLauncherEntry() {
@@ -116,8 +126,9 @@ class AppManifestTest {
             application.kids("activity").map { it.attr("name") }.toSet(),
         )
         assertEquals(listOf(".ProvisionProvider"), application.kids("provider").map { it.attr("name") })
-        assertTrue(application.kids("service").isEmpty() && application.kids("receiver").isEmpty())
-        assertEquals(setOf(".HomeEntry", ".MicEntry"), application.kids("activity-alias").map { it.attr("name") }.toSet())
+        assertEquals(listOf(".MicKeyService"), application.kids("service").map { it.attr("name") })
+        assertTrue(application.kids("receiver").isEmpty())
+        assertEquals(listOf(".HomeEntry"), application.kids("activity-alias").map { it.attr("name") })
     }
 
     @Test fun referencedResourcesExist() {

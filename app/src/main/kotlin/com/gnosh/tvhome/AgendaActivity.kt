@@ -50,11 +50,8 @@ class AgendaActivity : ComponentActivity() {
     private val layoutStore by lazy { AppLayoutStore(applicationContext) }
     private var entry by mutableStateOf(HomeEntry(0, null))
 
-    /** M3: the mic aliases' actions open Ask Claude; anything else (Home, the launcher entry) shows the home row. */
-    private fun targetOf(intent: Intent?): String? = when (intent?.action) {
-        Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND, Intent.ACTION_SEARCH_LONG_PRESS -> HomeEntry.ASK
-        else -> null
-    }
+    /** M3: [ACTION_ASK] (the mic key service) opens Ask Claude; anything else (Home, the launcher entry) shows the row. */
+    private fun targetOf(intent: Intent?): String? = if (intent?.action == ACTION_ASK) HomeEntry.ASK else null
 
     /**
      * Speech for Ask Claude: the system recognizer dialog (RecognizerIntent), so the app needs no RECORD_AUDIO
@@ -160,5 +157,10 @@ class AgendaActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         entry = HomeEntry(entry.seq + 1, targetOf(intent))
+    }
+
+    companion object {
+        /** Opens Ask Claude, listening (sent by [MicKeyService]). Any app could send it; it only shows the Ask view. */
+        const val ACTION_ASK = "com.gnosh.tvhome.action.ASK"
     }
 }
