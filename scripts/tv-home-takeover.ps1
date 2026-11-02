@@ -77,7 +77,13 @@ function Get-TvA11yList {
 }
 
 function Load-Rollback {
-    if (Test-Path $RollbackFile) { return (Get-Content $RollbackFile -Raw | ConvertFrom-Json) }
+    if (Test-Path $RollbackFile) {
+        try { $r = Get-Content $RollbackFile -Raw | ConvertFrom-Json } catch { $r = $null }
+        if ($null -eq $r -or -not ($r.PSObject.Properties.Name -contains 'home' -and $r.PSObject.Properties.Name -contains 'a11y' -and $r.PSObject.Properties.Name -contains 'a11yOn')) {
+            throw "The rollback file $RollbackFile is damaged. Delete it and run again (-Rollback still works without it)."
+        }
+        return $r
+    }
     return [pscustomobject]@{ home = $null; a11y = $null; a11yOn = $null }
 }
 
@@ -102,12 +108,14 @@ if ($Rollback) {
     Confirm-Change ("This will:`n - " + ($plan -join "`n - "))
     $problems = @()
     # Each part runs even if another fails, so a failed home restore cannot leave the mic service on.
+    # Turning HomeEntry off alone gives the TV its own home back, so it runs even if the restore fails
+    # (rollback-home-blocks-disable).
+    try { Adb @('shell', 'pm', 'disable', $HomeComponent) | Out-Null } catch { $problems += "Home entry: $($_.Exception.Message)" }
     try {
         if ($saved.home) {
             if ($saved.home -notmatch $ComponentRe) { throw 'the rollback file has an unexpected home' }
             Adb @('shell', 'cmd', 'package', 'set-home-activity', $saved.home) | Out-Null
         }
-        Adb @('shell', 'pm', 'disable', $HomeComponent) | Out-Null
     } catch { $problems += "Home: $($_.Exception.Message)" }
     try {
         # Remove only our service (a11y-settings-overwrite): a service turned on after -SetMic, such as TalkBack, stays.
@@ -139,7 +147,8 @@ Confirm-Change ("This will change settings on the TV:`n - " + ($plan -join "`n -
 
 if ($SetHome) {
     $before = Get-TvHome
-    if (-not $saved.home -and $before -and $before -notlike "$Pkg/*") { $saved.home = $before }
+    # Not our own entry, and not the system chooser (android/...): neither is a home to go back to.
+    if (-not $saved.home -and $before -and $before -notlike "$Pkg/*" -and $before -notlike 'android/*') { $saved.home = $before }
     if (-not $saved.home) { throw "Couldn't read the TV's current home app, so there would be nothing to roll back to; stopping." }
     Save-Rollback $saved
     Adb @('shell', 'pm', 'enable', $HomeComponent) | Out-Null
@@ -158,7 +167,7 @@ if ($SetMic) {
         Save-Rollback $saved
     }
     $items = @($list -split ':' | Where-Object { $_ })
-    if ($items -notcontains $MicService) {
+    if ($items -notcontains $MicService -and $items -notcontains "$Pkg/.MicKeyService") {
         $new = (@($items) + $MicService) -join ':'
         Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', $new) | Out-Null
     }
