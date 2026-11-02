@@ -483,9 +483,10 @@ hero_text() { # the "Hero title: <label>" description in the UI dump (also defin
 step "Row edit (M2g): long-press OK opens the menu, Move right reorders, Hide hides, the Hidden tile restores"
 # The tile menu (a dialog) opens with focus on its first entry, Cancel; Move left is one Down from there, Move right
 # two, Hide four. The menu entries are plain text nodes, so they are checked with expect_text, and chosen by key count.
-# OK is held for 1.5 s (a real repeat stream, like a remote): the held press must open the menu and choose nothing
-# (menu-held-ok-repeat).
-long_press_ok() { sh_ input keyevent --duration 1500 KEYCODE_DPAD_CENTER; sleep 2; }
+# OK is held with `input keyevent --longpress` (press, a repeat flagged long-press after the timeout, release); API 34's
+# input tool has no --duration, which was silently a short press. The release lands after the menu opened, so the menu
+# must ignore it and choose nothing (menu-held-ok-repeat).
+long_press_ok() { sh_ input keyevent --longpress KEYCODE_DPAD_CENTER; sleep 2; }
 key_trace() { # the dispatcher's recent OK-key events and the input tool's keyevent usage, for a long press that misfired
   echo "--- recent DPAD_CENTER events (dumpsys input):"; sh_ dumpsys input | tr -d '\r' | grep -E 'KeyEvent.*keyCode=(23|DPAD_CENTER|KEYCODE_DPAD_CENTER)' | tail -20 || true
   echo "--- input keyevent usage:"; sh_ input 2>&1 | tr -d '\r' | grep -iA2 'keyevent' || true
