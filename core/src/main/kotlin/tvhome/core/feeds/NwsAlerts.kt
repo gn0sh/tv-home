@@ -29,20 +29,27 @@ data class AlertSet(val alerts: List<NwsAlert>) {
     }
 }
 
-/** Which alerts take over the card (architecture 11.3, security review `nws-hostile-json`). */
+/** Which alerts take over the card (architecture 11.3, security review `nws-hostile-json`, real TX capture). */
 object AlertRules {
     private val OVERRIDE_SEVERITY = setOf("severe", "extreme")
 
+    /** Event-name endings that are never an override, whatever the severity (spec M7-2.3: chip suffix). */
+    private val NEVER_OVERRIDE = listOf("Watch", "Advisory", "Statement", "Outlook", "Message")
+
     /**
-     * OVERRIDE iff the severity is Extreme, or the event name ends in "Warning" and the severity is Severe or Extreme.
-     * Everything else (Watches, Advisories, Statements, a Severe Watch) is SUFFIX. Call with the raw trimmed event
-     * name, before it is cut to 40 chars, so a long name keeps its "Warning".
+     * OVERRIDE iff the severity is Severe or Extreme and the event is not a Watch, Advisory, Statement, Outlook or
+     * Message, and either the event ends in "Warning" or "Emergency" or the severity is Extreme (an unknown Extreme
+     * event overrides). The real NWS feed sends a Tornado Watch with severity Extreme (CI capture 2026-11-02), so
+     * "Extreme always overrides" would put every Watch on the card. Call with the raw trimmed event name, before it
+     * is cut to 40 chars, so a long name keeps its ending.
      */
     fun classify(event: String, severity: String): AlertKind {
         val sev = severity.trim().lowercase(Locale.ROOT)
-        if (sev == "extreme") return AlertKind.OVERRIDE
-        return if (event.trim().endsWith("Warning", ignoreCase = true) && sev in OVERRIDE_SEVERITY) AlertKind.OVERRIDE
-        else AlertKind.SUFFIX
+        val name = event.trim()
+        if (sev !in OVERRIDE_SEVERITY) return AlertKind.SUFFIX
+        if (NEVER_OVERRIDE.any { name.endsWith(it, ignoreCase = true) }) return AlertKind.SUFFIX
+        val strong = name.endsWith("Warning", ignoreCase = true) || name.endsWith("Emergency", ignoreCase = true)
+        return if (strong || sev == "extreme") AlertKind.OVERRIDE else AlertKind.SUFFIX
     }
 }
 

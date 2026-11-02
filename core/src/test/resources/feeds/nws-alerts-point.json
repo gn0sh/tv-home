@@ -1,0 +1,6 @@
+// PROVENANCE: real response, captured by the capture-feeds CI workflow (M7-D1) on 2026-11-02 from
+// https://api.weather.gov/alerts/active?point=36.53,-87.36 (no active alerts at capture)
+// Trimmed to the first 2 items of each top-level array; otherwise unchanged. Public data.
+// Leading "//" lines are stripped by the test loader (Fixtures.text).
+{"@context":{"@version":"1.1"},"type":"FeatureCollection","features":[],"title":"Current watches, warnings, and advisories for 36.53 N, 87.36 W","updated":"2026-11-02T21:35:11+00:00"}
+

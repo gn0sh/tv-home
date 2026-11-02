@@ -18,8 +18,10 @@ class LiveFeedsPanelsTest {
     private var now = t0
     private val loc = Location(36.53, -87.36)
     private val weatherDoc = """{"current":{"time":"2026-04-14T23:00","temperature_2m":61.0,"weather_code":95}}"""
-    private val alertDoc = Fixtures.text("nws-alerts-point-hand.json")
-    private val emptyAlerts = Fixtures.text("nws-alerts-empty-hand.json")
+    /** Synthetic (the real captures hold no Warning), in the shape of the real nws-alerts-area.json. */
+    private val alertDoc = """{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"event":"Tornado Warning",
+        "severity":"Extreme","status":"Actual","messageType":"Alert","ends":"2026-04-15T09:00:00-00:00","expires":"2026-04-15T09:00:00Z"}}]}"""
+    private val emptyAlerts = Fixtures.text("nws-alerts-point.json")
 
     private inner class Fake(val replies: MutableMap<String, String?> = HashMap()) : FeedFetcher {
         val asked = mutableListOf<Pair<String, Instant>>()
