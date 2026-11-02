@@ -41,7 +41,8 @@ data class NowNext(val line1: String, val line2: String?, val ageText: String?) 
 /** Wording in one place, so ux can change it without touching the rules. */
 object NowNextCopy {
     const val NOTHING_TODAY = "Nothing on today"
-    const val BUSY = "Busy"
+    const val NOTHING_TOMORROW = "Nothing on tomorrow"
+    const val BUSY = QuietMode.BUSY
     const val STARTING_NOW = "starting now"
     const val LEAVE_NOW = "Leave now"
     const val MAX_TITLE = 60
@@ -98,8 +99,7 @@ fun nowNext(
         }
     }
 
-    fun shown(item: AgendaItem): String =
-        if (quiet) NowNextCopy.BUSY else item.title.trim().take(NowNextCopy.MAX_TITLE).trim().ifEmpty { Copy.NO_TITLE }
+    fun shown(item: AgendaItem): String = QuietMode.title(item.title, quiet)
 
     val today = days.firstOrNull { it.date == todayDate }
     val tomorrow = days.firstOrNull { it.date == todayDate.plusDays(1) }

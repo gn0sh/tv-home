@@ -321,6 +321,16 @@ private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.semantics { contentDescription = HERO_CARD_DESC_PREFIX + card.line },
             )
+            // Placeholder until F5/F6 draw the time-of-day card properly: same text style as the game card.
+            is ContextCard.TimeOfDay -> Text(
+                listOfNotNull(card.heading + ": " + card.text, card.detail).joinToString("\n"),
+                color = rgb(ink.text),
+                fontSize = GlanceTokens.CARD_SP.sp,
+                lineHeight = (GlanceTokens.CARD_SP + 6).sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
