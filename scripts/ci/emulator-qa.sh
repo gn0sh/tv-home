@@ -477,9 +477,6 @@ else
   no_app_crash_yet "row re-entry"
 fi
 
-hero_text() { # the "Hero title: <label>" description in the UI dump (also defined as hero_title for the Hero step)
-  ui_text | grep -oE 'content-desc="Hero title: [^"]*"' | head -1 | sed -E 's/^content-desc="Hero title: (.*)"$/\1/' || true
-}
 step "Row edit (M2g): long-press OK opens the menu, Move right reorders, Hide hides, the Hidden tile restores"
 # The tile menu (a dialog) opens with focus on its first entry, Cancel; Move left is one Down from there, Move right
 # two, Hide four. The menu entries are plain text nodes, so they are checked with expect_text, and chosen by key count.
@@ -521,9 +518,7 @@ else
   on_screen "$cur" || fail "row-edit: the moved tile is off screen ($cur)"
   key DPAD_LEFT; cur=$(focus_after row-edit)
   [[ ${cur%%|*} == "$second_name" ]] || fail "row-edit: Left of the moved tile is '${cur%%|*}', expected '$second_name' (now first)"
-  # The hero title follows the focused tile.
-  [[ $(hero_text) == "$second_name" ]] || fail "row-edit: hero title is '$(hero_text)', expected '$second_name'"
-  pass "row-edit: Move right put '$first_name' after '$second_name', focus followed, hero title updated"
+  pass "row-edit: Move right put '$first_name' after '$second_name', focus followed"
   # Restore the order: Right back onto the moved tile, long-press, Move left (one Down from Cancel).
   key DPAD_RIGHT; long_press_ok; key DPAD_DOWN; key DPAD_CENTER; sleep 1
   cur=$(focus_after row-edit)
@@ -563,30 +558,25 @@ else
   no_app_crash_yet "row edit"
 fi
 
-step "Hero (M2e): the hero title matches the focused tile after Right x2"
-# The hero title carries the content description "Hero title: <label>"; the focused app tile's description is its label.
-hero_title() {
-  local xml; xml=$(ui_text)
-  if [[ -z $xml ]]; then echo "::error::UI dump failed: uiautomator gave no hierarchy after its retries, so the hero title cannot be read" >&2; exit 1; fi
-  grep -oE 'content-desc="Hero title: [^"]*"' <<<"$xml" | head -1 | sed -E 's/^content-desc="Hero title: (.*)"$/\1/' || true
-}
-if (( napps < 3 )); then
-  warn "Hero title check NOT VERIFIED: $napps other TV app(s) on this image, Right x2 has nowhere to go"
+step "Hero (M7): no focusable hero; focus starts on the apps row; one Back leaves"
+# M7 removed the M2e focused-tile title (each tile labels itself); the hero is non-focusable text (home-back-twice).
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+in_front || fail "hero: home screen not in front"
+ui=$(ui_text); [[ -n $ui ]] || fail "hero: uiautomator dump failed"
+printf '%s\n' "$ui" > "$OUT/ui-hero-m7.xml"
+grep -oE '<node [^>]*content-desc="Hero (now|card): [^"]*"[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
+  && fail "hero: a hero node is focusable (home-back-twice)"
+cur=$(focus_after hero)
+if (( napps >= 1 )); then
+  case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) fail "hero: focus on launch is '${cur%%|*}', not an app tile (R1)" ;; esac
+  pass "hero: focus on launch is on the apps row ('${cur%%|*}')"
 else
-  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
-  in_front || fail "hero: home screen not in front"
-  key DPAD_RIGHT; key DPAD_RIGHT
-  cur=$(focused_node); want=${cur%%|*}
-  [[ -n $want ]] || fail "hero: no focused tile after Right x2"
-  got=$(hero_title)
-  [[ -n $got ]] || fail "hero: no node with a 'Hero title: ...' description in the UI dump"
-  [[ $got == "$want" ]] || fail "hero: title is '$got' but the focused tile is '$want'"
-  pass "hero: after Right x2 the title '$got' matches the focused tile"
-  sh_ input keyevent KEYCODE_BACK; sleep 2
-  in_front && fail "hero: one Back with the hero showing does not leave the app (home-back-twice)"
-  pass "hero: one Back leaves the app"
-  no_app_crash_yet "hero"
+  warn "hero: no other TV apps on this image; first focus on the apps row NOT VERIFIED here"
 fi
+sh_ input keyevent KEYCODE_BACK; sleep 2
+in_front && fail "hero: one Back with the M7 hero showing does not leave the app (home-back-twice)"
+pass "hero: one Back leaves the app"
+no_app_crash_yet "hero"
 
 step "M3 Home: off as installed; turning on the Home watch makes Home open the dashboard; rollback restores"
 # The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV. Google TV's launcher holds HOME at priority 2
@@ -693,6 +683,64 @@ network off
 cold_start "offline-configured"
 expect_text "offline-configured" "reach calendar"
 no_app_crash_yet "offline configured"
+
+m7_relog() { # restart the background logcat stream (appending) after adbd restarts
+  [[ -n $LOGCAT_PID ]] && kill "$LOGCAT_PID" 2>/dev/null || true
+  adb logcat -b main,system,crash,events -v threadtime >> "$OUT/logcat-stream.txt" 2>/dev/null &
+  LOGCAT_PID=$!
+}
+step "M7 Q1: hero shows the next event with a countdown and a severe-alert override (planted caches, network off)"
+# Release APK, so no run-as: the caches are planted as root, which only some emulator images allow. Without root this
+# step is NOT VERIFIED and the JVM tests (NowNextTest, HomeGlanceTest) stand in.
+m7_root=""
+if a root 2>&1 | tr -d '\r' | grep -qiE 'restarting|already running as root'; then
+  a wait-for-device; sleep 2
+  [[ $(sh_ id -u | tr -d '\r') == 0 ]] && m7_root=1
+  m7_relog   # adbd restarted, which ends the logcat stream
+fi
+if [[ -z $m7_root ]]; then
+  warn "M7 hero countdown and alert override NOT VERIFIED on the emulator: adb root is not available on this image"
+else
+  sh_ content insert --uri "content://$PKG.provision/location" --bind lat:d:36.53 --bind lon:d:-87.36 \
+    || fail "m7: location insert refused"
+  sh_ am force-stop "$PKG"
+  iso() { date -u -d "$1" +%Y-%m-%dT%H:%M:%SZ; }
+  now=$(iso now); ev=$(iso '+42 minutes'); evend=$(iso '+102 minutes'); until=$(iso '+90 minutes')
+  ws=$(iso '-2 days'); we=$(iso '+3 days')
+  data=/data/user/0/$PKG/no_backup
+  uid=$(sh_ stat -c %u "/data/user/0/$PKG" | tr -d '\r')
+  [[ $uid =~ ^[0-9]+$ ]] || fail "m7: could not read the app's uid ($uid)"
+  agenda='{"v":1,"fetchedAt":"'$now'","windowStart":"'$ws'","windowEnd":"'$we'","events":[{"uid":"qa-1","title":"QA Dentist","start":{"kind":"at","value":"'$ev'"},"end":{"kind":"at","value":"'$evend'"}}]}'
+  alerts='{"v":1,"at":"'$now'","data":{"alerts":[{"event":"Tornado Warning","severity":"Extreme","kind":"OVERRIDE","until":"'$until'"}]}}'
+  sh_ mkdir -p "$data/panels"
+  printf '%s' "$agenda" | a shell "cat > $data/agenda-cache.json"
+  printf '%s' "$alerts" | a shell "cat > $data/panels/alerts.json"
+  sh_ chown -R "$uid:$uid" "$data"; sh_ chmod -R u+rwX,go-rwx "$data"; sh_ restorecon -R "$data" >/dev/null 2>&1 || true
+  network off
+  sh_ am start -W -n "$MAIN" >/dev/null; sleep 8   # first frame, 1.5 s settle, cache load
+  ui=$(ui_text); [[ -n $ui ]] || fail "m7: uiautomator dump failed"
+  printf '%s\n' "$ui" > "$OUT/ui-m7-hero.xml"
+  a exec-out screencap -p > "$SHOT_DIR/tv-home-m7-hero.png" || true
+  grep -qE 'content-desc="Hero now: [^"]*in (4[0-2]|3[0-9]) min"' <<<"$ui" \
+    || fail "m7: the hero does not show the next event with an 'in N min' countdown"
+  pass "m7: the hero shows the next event with a countdown"
+  grep -qE 'content-desc="Hero card: Tornado Warning until [^"]+"' <<<"$ui" \
+    || fail "m7: an active Tornado Warning does not take the context card"
+  pass "m7: a severe alert overrides the context card"
+  cur=$(focus_after m7)
+  if (( napps >= 1 )); then
+    case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) fail "m7: with the hero full, first focus is '${cur%%|*}', not the apps row (R1)" ;; esac
+    pass "m7: with the hero full, focus starts on the apps row ('${cur%%|*}')"
+  fi
+  sh_ input keyevent KEYCODE_BACK; sleep 2
+  in_front && fail "m7: one Back with the M7 hero full does not leave the app (home-back-twice)"
+  pass "m7: one Back returns home (leaves the app)"
+  no_app_crash_yet "m7 hero"
+  sh_ rm -f "$data/agenda-cache.json" "$data/panels/alerts.json"
+  sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
+  network on
+  a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
+fi
 
 step "fetch attempt with network on (dummy URL fails; error paths must not log it)"
 network on
