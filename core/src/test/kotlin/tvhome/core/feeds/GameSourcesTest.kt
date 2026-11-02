@@ -2,6 +2,7 @@ package tvhome.core.feeds
 
 import kotlinx.coroutines.Dispatchers
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import tvhome.core.Fixtures
@@ -176,5 +177,114 @@ class GameSourcesTest {
         now = now.plus(Duration.ofMinutes(61))
         assertFalse(runSuspend { lf.refreshSchedules() }, "fallback games count as a failed refresh so the back-off applies")
         assertEquals(2, lf.snapshot.value.games!!.value.size, "and the games from the fallback are shown")
+    }
+
+    // --- review round: row-shape-change-no-fallback, fallback stamp, write churn, depth, body cap ----------------------
+
+    @Test fun aFieldRenamedInEveryRowIsNullNotEmptyForBothLeagues() {
+        val nhl = nhlDoc("2026-11-04T01:00:00Z", "2026-11-06T02:30:00Z").replace("startTimeUTC", "startTime")
+        assertNull(Schedules.parse(Teams.PREDATORS, nhl, now0))
+        assertNull(Schedules.parseSeason(Teams.PREDATORS, nhl, now0))
+        val renamedState = nhlDoc("2026-11-04T01:00:00Z").replace("gameState", "state")
+        assertNull(Schedules.parse(Teams.PREDATORS, renamedState, now0))
+        val espn = Fixtures.text("espn-team-194.json").replace("\"competitors\"", "\"teams\"")
+        assertNull(Schedules.parse(Teams.OHIO_STATE, espn, Instant.parse("2026-09-04T12:00:00Z")))
+        assertNull(Schedules.parseSeason(Teams.OHIO_STATE, espn, Instant.parse("2026-09-04T12:00:00Z")))
+        val espnDate = Fixtures.text("espn-team-194.json").replace("\"date\"", "\"when\"")
+        assertNull(Schedules.parse(Teams.OHIO_STATE, espnDate, Instant.parse("2026-09-04T12:00:00Z")))
+        // Legit empties stay non-null: no rows, rows that are valid but outside the window, other teams on a scoreboard.
+        assertEquals(emptyList<GameInfo>(), Schedules.parse(Teams.PREDATORS, """{"games":[]}""", now0))
+        assertEquals(emptyList<GameInfo>(), Schedules.parseSeason(Teams.PREDATORS, nhlDoc("2026-03-04T01:00:00Z"), now0))
+    }
+
+    @Test fun rowShapeDriftInTheLiveDocFallsBackAndNeverOverwritesTheCachedSeason() {
+        for (team in listOf(Teams.PREDATORS)) {
+            val f = Scripted().apply { week = nhlDoc("2026-11-04T01:00:00Z"); season = nhlDoc("2026-11-04T01:00:00Z", "2026-11-06T02:30:00Z") }
+            val disk = Mem()
+            val s = source(f, disk, team)
+            runSuspend { s.games(now) }
+            val saved = disk.text
+            now = now.plus(Duration.ofHours(30))
+            f.week = nhlDoc("2026-11-04T01:00:00Z").replace("startTimeUTC", "startTime")
+            f.season = f.week
+            val r = runSuspend { s.games(now) }!!
+            assertTrue(r.fromFallback); assertEquals(2, r.games.size)
+            assertEquals(saved, disk.text, "a drifted season document did not touch the cache")
+        }
+        // ESPN: live doc drifted in every row after a good fetch: cache kept, fallback used.
+        val good = Fixtures.text("espn-team-194.json")
+        val f = Scripted().apply { week = good }
+        val disk = Mem(); val sep = Instant.parse("2026-09-04T12:00:00Z")
+        val s = source(f, disk, Teams.OHIO_STATE)
+        runSuspend { s.games(sep) }
+        val saved = disk.text
+        f.week = good.replace("\"competitors\"", "\"teams\"")
+        val r = runSuspend { s.games(sep.plus(Duration.ofHours(2))) }!!
+        assertTrue(r.fromFallback); assertEquals(2, r.games.size)
+        assertEquals(saved, disk.text)
+    }
+
+    @Test fun anEmptySeasonNeverReplacesANonEmptyOne() {
+        val f = Scripted().apply { week = nhlDoc("2026-11-04T01:00:00Z"); season = nhlDoc("2026-11-04T01:00:00Z") }
+        val disk = Mem(); val s = source(f, disk)
+        runSuspend { s.games(now) }
+        val saved = disk.text
+        now = now.plus(Duration.ofHours(25)); f.season = """{"games":[]}"""
+        runSuspend { s.games(now) }
+        assertEquals(saved, disk.text)
+    }
+
+    @Test fun fallbackGamesCarryTheCachesOwnStampNotTheClock() {
+        val f = Scripted().apply { week = nhlDoc("2026-11-04T01:00:00Z"); season = nhlDoc("2026-11-04T01:00:00Z") }
+        val s = source(f, Mem())
+        runSuspend { s.games(now) }
+        val fetched = now
+        now = now.plus(Duration.ofHours(30)); f.week = "{"; f.season = null
+        assertEquals(fetched, runSuspend { s.games(now) }!!.at)
+        // And LiveFeeds stamps with it.
+        val lf = LiveFeeds(f, { null }, teams = listOf(Teams.PREDATORS), clock = { now }, io = Dispatchers.Unconfined)
+        f.week = nhlDoc("2026-11-04T01:00:00Z"); runSuspend { lf.refreshSchedules() }
+        val goodAt = lf.snapshot.value.games!!.at
+        now = now.plus(Duration.ofHours(2)); f.week = "{"
+        runSuspend { lf.refreshSchedules() }
+        assertEquals(goodAt, lf.snapshot.value.games!!.at, "a fallback refresh does not re-stamp the games as fresh")
+    }
+
+    @Test fun theEspnSeasonFileIsWrittenOnChangeOrOncePerDayNotEveryPoll() {
+        val doc = Fixtures.text("espn-team-194.json")
+        val f = Scripted().apply { week = doc }
+        val disk = Mem(); val s = source(f, disk, Teams.OHIO_STATE)
+        var t = Instant.parse("2026-09-04T12:00:00Z")
+        repeat(6) { runSuspend { s.games(t) }; t = t.plus(Duration.ofHours(1)) }
+        assertEquals(1, disk.writes, "six hourly polls, unchanged: one write")
+        t = t.plus(Duration.ofHours(20)); runSuspend { s.games(t) }
+        assertEquals(2, disk.writes, "a day later it is refreshed")
+        f.week = doc.replace("\"Ball State\"", "\"Ball Stat\"").replace("\"shortDisplayName\":\"Ball State\"", "\"shortDisplayName\":\"Ball Stat\"")
+        t = t.plus(Duration.ofHours(1)); runSuspend { s.games(t) }
+        assertTrue(disk.writes >= 2)
+    }
+
+    @Test fun hostileDepthIsRefusedByEveryFeedParser() {
+        val deep = "[".repeat(5000) + "]".repeat(5000)
+        assertNull(Schedules.parse(Teams.PREDATORS, """{"games":$deep}""", now0))
+        assertNull(Schedules.parseSeason(Teams.OHIO_STATE, """{"events":$deep}""", now0))
+        assertNull(WeatherFeed.parse("""{"current":{"time":"2026-11-01T14:15","temperature_2m":50,"weather_code":0},"x":$deep}"""))
+    }
+
+    @Test fun aFullSeasonFitsTheBodyCapOnlyBecauseTheEspnPathIsRaised() {
+        // NHL: scale the real fixture's rows up to a 100-game season.
+        val nhlRows = Regex("""\{"id":2026\d+,"season".*?"gameCenterLink":"[^"]*"\}""").findAll(Fixtures.text("nhl-season.json")).map { it.value }.toList()
+        assertTrue(nhlRows.isNotEmpty())
+        val perRow = nhlRows.sumOf { it.length } / nhlRows.size
+        assertTrue(perRow * 100 < HttpFeedFetcher.MAX_BODY / 2, "100 NHL rows of $perRow bytes fit with room to spare")
+        // ESPN: about 50 KB per event, 13+ events is over 512 KB.
+        val espn = Fixtures.text("espn-team-194.json")
+        assertTrue(espn.length / 2 * 13 > HttpFeedFetcher.MAX_BODY, "a 13-game ESPN season is over the default cap")
+        val u = Teams.OHIO_STATE.scheduleUrl(now0)
+        assertEquals(HttpFeedFetcher.ESPN_SCHEDULE_MAX_BODY, HttpFeedFetcher.maxBodyFor(u))
+        assertEquals(HttpFeedFetcher.MAX_BODY, HttpFeedFetcher.maxBodyFor(Teams.PREDATORS.scheduleUrl(now0)))
+        assertEquals(HttpFeedFetcher.MAX_BODY, HttpFeedFetcher.maxBodyFor(Teams.PREDATORS.seasonUrl(now0)))
+        assertEquals(HttpFeedFetcher.MAX_BODY, HttpFeedFetcher.maxBodyFor("https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard".toHttpUrl()))
+        assertEquals(HttpFeedFetcher.MAX_BODY, HttpFeedFetcher.maxBodyFor("https://api.weather.gov/apis/site/v2/sports/football/college-football/teams/194/schedule".toHttpUrl()))
     }
 }

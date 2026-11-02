@@ -122,4 +122,15 @@ class HttpFeedFetcherTest {
         assertEquals("https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/194/schedule", Teams.OHIO_STATE.scheduleUrl(now).toString())
         for (t in Teams.ALL) assertFalse(t.scheduleUrl(now).encodedPath.endsWith("/now"), t.key)
     }
+
+    @Test fun aRaisedCapAppliesOnlyToTheUrlsThatAskForIt() {
+        val big = HttpFeedFetcher.MAX_BODY.toInt() + 1000
+        val f = HttpFeedFetcher({ it.isHttps }, 5_000, trust, maxBody = { if (it.encodedPath == "/big") HttpFeedFetcher.ESPN_SCHEDULE_MAX_BODY else HttpFeedFetcher.MAX_BODY })
+        server.enqueue(MockResponse().setBody("x".repeat(big)))
+        assertEquals(big, get(f, "/big")!!.length)
+        server.enqueue(MockResponse().setBody("x".repeat(big)))
+        assertNull(get(f, "/other"))
+        server.enqueue(MockResponse().setBody("x".repeat(HttpFeedFetcher.ESPN_SCHEDULE_MAX_BODY.toInt() + 1)))
+        assertNull(get(f, "/big"), "even the raised cap is a cap")
+    }
 }

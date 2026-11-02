@@ -243,7 +243,7 @@ As Brian, I want one line that sums up my day ("Rain after 4, Preds at 7 on ESPN
 #### M7-7: Quiet / guest mode
 As Brian, I want one press to hide my event titles when guests are over.
 1. One action toggles Quiet mode (a button last in focus order, R1, plus a remote key chord); state survives restart and a visible "Quiet" marker shows.
-2. In Quiet mode event titles and locations are hidden everywhere on the home screen (Now/Next, brief, agenda tile), replaced by times and "Busy". Weather, game card and apps are unaffected. A JVM test shows no event title reaches any rendered text while Quiet is on.
+2. In Quiet mode event titles and locations are hidden everywhere on the home screen (Now/Next, brief, agenda tile), replaced by times and "Busy". The full-screen calendar (AgendaActivity) is covered too, and titles stay hidden until the stored Quiet value has loaded. Weather, game card and apps are unaffected. A JVM test shows no event title reaches any rendered text while Quiet is on.
 3. Quiet mode stops the brief using titles (M7-6.5) and discards a cached brief that contained them.
 4. The toggle takes effect on the next redraw and never blocks the apps row.
 

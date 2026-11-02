@@ -69,6 +69,7 @@ object WeatherFeed {
     fun parse(raw: String): WeatherNow? = runCatching { parseUnsafe(raw) }.getOrNull()
 
     private fun parseUnsafe(raw: String): WeatherNow? {
+        if (NwsAlerts.depthOver(raw, MAX_DEPTH)) return null
         val root = json.parseToJsonElement(raw) as? JsonObject ?: return null
         val current = root["current"] as? JsonObject ?: return null
         val temp = current.number("temperature_2m") ?: return null
@@ -142,6 +143,7 @@ object WeatherFeed {
     }.getOrDefault(Extra(null, null, null, null))
 
     private const val MAX_DAYS = 16
+    private const val MAX_DEPTH = 32
     private const val NIGHT_START = 19
     private const val NIGHT_END = 7
 

@@ -85,8 +85,9 @@ class SchedulesTest {
 
     @Test fun espnOtherTeamsGameAndBadFieldsAreSkipped() {
         assertEquals(0, parse(Teams.OHIO_STATE.copy(feedId = "99"), espn("pre"))!!.size)
-        assertEquals(0, parse(osu, espn("pre", date = "soon"))!!.size)
-        assertEquals(0, parse(osu, espn("weird"))!!.size)
+        // Every row malformed is a changed shape (null, so the caller falls back), not "no games".
+        assertNull(parse(osu, espn("pre", date = "soon")))
+        assertNull(parse(osu, espn("weird")))
     }
 
     @Test fun hostileStartTimesAreSkippedAndNeverThrowDownstream() {

@@ -15,8 +15,11 @@ fun interface ScheduleSource {
     suspend fun games(now: Instant): ScheduleResult?
 }
 
-/** [fromFallback] is true when the live document gave nothing usable and [games] came from the season cache. */
-data class ScheduleResult(val games: List<GameInfo>, val fromFallback: Boolean = false)
+/**
+ * [fromFallback] is true when the live document gave nothing usable and [games] came from the season cache; [at] is then
+ * the cache's own fetch time, so the games are not stamped as fresh. Null for live games (stamp with the clock).
+ */
+data class ScheduleResult(val games: List<GameInfo>, val fromFallback: Boolean = false, val at: Instant? = null)
 
 /**
  * The adapter for one team. The live document is read first (NHL: the week with scores; ESPN: the team schedule, which
@@ -36,6 +39,7 @@ class LeagueSchedule(
     private val serializer = PanelCaches.games(listOf(team))
     private var season: Stamped<List<GameInfo>>? = null
     private var seasonLoaded = false
+    private var lastSeasonAttempt: Instant? = null
 
     override suspend fun games(now: Instant): ScheduleResult? {
         val liveUrl = team.scheduleUrl(now)
@@ -45,26 +49,28 @@ class LeagueSchedule(
         val live = raw?.let { withContext(io) { Schedules.parse(team, it, now) } }
         if (live != null) {
             // ESPN: the live document is the season, so keep it. NHL: top the season up once a day.
-            if (sameDocument) keep(withContext(io) { Schedules.parseSeason(team, raw, now) }, now)
+            if (sameDocument) keep(withContext(io) { Schedules.parseSeason(team, raw, now) }, now, onlyIfChangedOrDue = true)
             else refreshSeasonIfDue(seasonUrl, now)
             return ScheduleResult(live)
         }
         if (!sameDocument) refreshSeasonIfDue(seasonUrl, now)
-        return fallback(now)?.let { ScheduleResult(it, fromFallback = true) }
+        return fallback(now)?.let { ScheduleResult(it.value, fromFallback = true, at = it.at) }
     }
 
     private suspend fun refreshSeasonIfDue(url: okhttp3.HttpUrl, now: Instant) {
         val held = loadSeason(now)
-        if (held != null && Duration.between(held.at, now) < SEASON_REFRESH && !held.at.isAfter(now)) return
+        val last = listOfNotNull(held?.at, lastSeasonAttempt).maxOrNull()
+        if (last != null && Duration.between(last, now) < SEASON_REFRESH && !last.isAfter(now)) return
+        lastSeasonAttempt = now
         val parsed = fetcher.fetch(url)?.let { raw -> withContext(io) { Schedules.parseSeason(team, raw, now) } }
         keep(parsed, now)
     }
 
     /** The cached season, windowed to [now], or null when there is none or it is too old to trust. */
-    private suspend fun fallback(now: Instant): List<GameInfo>? {
+    private suspend fun fallback(now: Instant): Stamped<List<GameInfo>>? {
         val held = loadSeason(now) ?: return null
         if (held.at.isAfter(now.plus(PanelPolicies.MAX_FUTURE_SKEW)) || Duration.between(held.at, now) > SEASON_MAX_AGE) return null
-        return held.value.filter { it.start >= now.minus(Schedules.SEASON_BEFORE) && it.start <= now.plus(Schedules.SEASON_AFTER) }
+        return Stamped(held.value.filter { it.start >= now.minus(Schedules.SEASON_BEFORE) && it.start <= now.plus(Schedules.SEASON_AFTER) }, held.at)
     }
 
     private suspend fun loadSeason(now: Instant): Stamped<List<GameInfo>>? {
@@ -80,11 +86,17 @@ class LeagueSchedule(
         return season
     }
 
-    /** A season that parsed replaces the held one in memory and on disk; null (a failed fetch) keeps what is held. */
-    private suspend fun keep(parsed: List<GameInfo>?, now: Instant) {
+    /**
+     * A season that parsed replaces the held one in memory and on disk; null (a failed fetch or a wrong shape) keeps what
+     * is held, and an empty season never replaces a non-empty one. With [onlyIfChangedOrDue] (ESPN, polled hourly) the
+     * file is written when the content changed or the held copy is a day old, not on every poll.
+     */
+    private suspend fun keep(parsed: List<GameInfo>?, now: Instant, onlyIfChangedOrDue: Boolean = false) {
         parsed ?: return
-        val stamped = Stamped(parsed, now)
-        season = stamped
+        val held = loadSeason(now)
+        if (parsed.isEmpty() && held != null && held.value.isNotEmpty()) return
+        if (onlyIfChangedOrDue && held != null && held.value == parsed && Duration.between(held.at, now) < SEASON_REFRESH && !held.at.isAfter(now)) return
+        season = Stamped(parsed, now)
         seasonLoaded = true
         val file = cache ?: return
         withContext(io) { PanelCacheCodec.save(file, Stamped(parsed.map { TeamGame(team, it) }, now), serializer) }

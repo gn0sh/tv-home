@@ -130,4 +130,15 @@ class ContextCardTest {
         for (h in listOf(5, 11)) assertNotNull(timeOfDayCard(weather, AgendaState.NotSetUp, local(h, 10), zone, false, false), "hour $h")
         for (h in listOf(17, 23)) assertNotNull(timeOfDayCard(weather, AgendaState.NotSetUp, local(h, 10), zone, false, false), "hour $h")
     }
+
+    @Test fun theCardNamesTheNetworkOfThePillWhenThereIsOne() {
+        // Feed lists two mapped networks; only the second app is installed: the pill opens Peacock, so the card says Peacock.
+        val both = WatchMap.parse("ESPN+=com.espn.gtv;Peacock=com.peacock.app", null)
+        val g = gameAt(GamePhase.UPCOMING, nets = listOf("ESPN+", "Peacock"))
+        val watch = both.watch(g, { it == "com.peacock.app" })
+        val c = contextCard(null, g, now, zone, false, null, both, watch) as ContextCard.Game
+        assertEquals("Peacock", c.network); assertTrue(c.line.endsWith(" · Peacock"))
+        val none = contextCard(null, g, now, zone, false, null, both, null) as ContextCard.Game
+        assertEquals("ESPN+", none.network, "no pill (uninstalled): the card still names the first mapped network")
+    }
 }

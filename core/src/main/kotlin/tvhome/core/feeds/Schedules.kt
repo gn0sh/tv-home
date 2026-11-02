@@ -16,6 +16,7 @@ import java.time.OffsetDateTime
 object Schedules {
     private val json = Json { ignoreUnknownKeys = true }
     private const val MAX_GAMES = 64
+    private const val MAX_DEPTH = 32
 
     /** A season document lists 80+ games; a window filter runs before the [MAX_GAMES] cap, over at most this many raw rows. */
     private const val MAX_SEASON_ROWS = 256
@@ -25,11 +26,18 @@ object Schedules {
     val SEASON_AFTER: java.time.Duration = java.time.Duration.ofDays(21)
     private val MAX_SKEW = java.time.Duration.ofDays(366)
 
+    /** One feed row: a game, or a row that is fine but not ours or not plausible ([Skip]). A row of the wrong shape is null. */
+    private sealed interface Row {
+        class Game(val g: GameInfo) : Row
+        object Skip : Row
+    }
+
     private fun plausible(start: Instant, now: Instant): Boolean =
         java.time.Duration.between(now, start).abs() <= MAX_SKEW
 
     /** [now] bounds plausible start times to within [MAX_SKEW] (feed-date-range: hostile dates are skipped). */
     fun parse(team: TeamConfig, raw: String, now: Instant = Instant.now()): List<GameInfo>? = runCatching {
+        if (NwsAlerts.depthOver(raw, MAX_DEPTH)) return@runCatching null
         val root = json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching null
         when (team.league) {
             League.NHL -> nhl(team, root, now, null)
@@ -43,6 +51,7 @@ object Schedules {
      * season is not cut off at its start. Same null rules as [parse].
      */
     fun parseSeason(team: TeamConfig, raw: String, now: Instant): List<GameInfo>? = runCatching {
+        if (NwsAlerts.depthOver(raw, MAX_DEPTH)) return@runCatching null
         val root = json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching null
         val window: (GameInfo) -> Boolean = { it.start >= now.minus(SEASON_BEFORE) && it.start <= now.plus(SEASON_AFTER) }
         when (team.league) {
@@ -51,9 +60,17 @@ object Schedules {
         }
     }.getOrNull()
 
-    private fun rows(arr: JsonArray, window: ((GameInfo) -> Boolean)?, one: (JsonObject?) -> GameInfo?): List<GameInfo> =
-        if (window == null) arr.take(MAX_GAMES).mapNotNull { runCatching { one(it as? JsonObject) }.getOrNull() }
-        else arr.take(MAX_SEASON_ROWS).mapNotNull { runCatching { one(it as? JsonObject) }.getOrNull() }.filter(window).take(MAX_GAMES)
+    /**
+     * Rows are counted before the plausibility and window filters: a non-empty array in which no row has the expected
+     * shape (a renamed field in every row) is null, so the caller falls back, and is never an empty list that would
+     * overwrite a good cached season. A valid season with no game in the window is an empty list.
+     */
+    private fun rows(arr: JsonArray, window: ((GameInfo) -> Boolean)?, one: (JsonObject?) -> Row?): List<GameInfo>? {
+        val parsed = arr.take(if (window == null) MAX_GAMES else MAX_SEASON_ROWS).map { runCatching { one(it as? JsonObject) }.getOrNull() }
+        if (parsed.isNotEmpty() && parsed.all { it == null }) return null
+        val games = parsed.mapNotNull { (it as? Row.Game)?.g }
+        return if (window == null) games else games.filter(window).take(MAX_GAMES)
+    }
 
     // --- NHL: api-web.nhle.com/v1/club-schedule/{abbrev}/week/{YYYY-MM-DD} -> {"games":[{...}]} -----------------------------
 
@@ -70,9 +87,9 @@ object Schedules {
             .mapNotNull { Feeds.clean(it["network"].str()) }
             .distinct().take(GameInfo.MAX_NETWORKS).toList()
 
-    private fun nhlGame(team: TeamConfig, g: JsonObject?, now: Instant): GameInfo? {
+    private fun nhlGame(team: TeamConfig, g: JsonObject?, now: Instant): Row? {
         g ?: return null
-        val start = Instant.parse(g["startTimeUTC"].str() ?: return null).takeIf { plausible(it, now) } ?: return null
+        val start = Instant.parse(g["startTimeUTC"].str() ?: return null)
         val home = g["homeTeam"] as? JsonObject ?: return null
         val away = g["awayTeam"] as? JsonObject ?: return null
         val isHome = when (team.feedId) {
@@ -101,8 +118,9 @@ object Schedules {
             }
             GamePhase.FINAL -> when (type) { "OT" -> "OT"; "SO" -> "SO"; else -> null }
         }
+        if (!plausible(start, now)) return Row.Skip
         val scored = phase != GamePhase.UPCOMING
-        return GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period, nhlNetworks(g))
+        return Row.Game(GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period, nhlNetworks(g)))
     }
 
     private fun name(e: JsonElement?): String? = (e as? JsonObject)?.get("default").str()
@@ -130,13 +148,13 @@ object Schedules {
             .mapNotNull { Feeds.clean(it) }
             .distinct().take(GameInfo.MAX_NETWORKS).toList()
 
-    private fun espnGame(team: TeamConfig, e: JsonObject?, now: Instant): GameInfo? {
+    private fun espnGame(team: TeamConfig, e: JsonObject?, now: Instant): Row? {
         e ?: return null
         val comp = (e["competitions"] as? JsonArray)?.firstOrNull() as? JsonObject ?: return null
         // ESPN dates have no seconds ("2026-11-01T17:00Z"); OffsetDateTime accepts that, Instant.parse may not.
-        val start = OffsetDateTime.parse((comp["date"].str() ?: e["date"].str()) ?: return null).toInstant().takeIf { plausible(it, now) } ?: return null
+        val start = OffsetDateTime.parse((comp["date"].str() ?: e["date"].str()) ?: return null).toInstant()
         val competitors = (comp["competitors"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: return null
-        val own = competitors.firstOrNull { teamId(it) == team.feedId } ?: return null
+        val own = competitors.firstOrNull { teamId(it) == team.feedId } ?: return Row.Skip // another team's game on a scoreboard
         val opp = competitors.firstOrNull { it !== own } ?: return null
         val oppTeam = opp["team"] as? JsonObject
         val opponent = Feeds.clean(oppTeam?.get("shortDisplayName").str() ?: oppTeam?.get("displayName").str()) ?: return null
@@ -149,16 +167,17 @@ object Schedules {
             "post" -> GamePhase.FINAL
             else -> return null
         }
+        if (!plausible(start, now)) return Row.Skip
         val scored = phase != GamePhase.UPCOMING
         val period = when (phase) {
             GamePhase.UPCOMING -> null
             GamePhase.LIVE -> espnLive(type, status)
             GamePhase.FINAL -> status["period"].int()?.takeIf { it > 4 }?.let { "OT" }
         }
-        return GameInfo(
+        return Row.Game(GameInfo(
             start, opponent, own["homeAway"].str() == "home", phase,
             if (scored) score(own["score"]) else null, if (scored) score(opp["score"]) else null, period, espnNetworks(comp),
-        )
+        ))
     }
 
     private fun teamId(c: JsonObject): String? = ((c["team"] as? JsonObject)?.get("id") ?: c["id"]).str()

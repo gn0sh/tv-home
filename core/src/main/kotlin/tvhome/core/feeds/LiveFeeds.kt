@@ -171,7 +171,7 @@ class LiveFeeds(
         for (team in teams) {
             val result = try { sourceFor(team).games(clock()) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Throwable) { null }
             // Games from the season fallback are shown, but the refresh counts as failed so the back-off applies.
-            if (result != null) { perTeam[team.key] = Stamped(result.games, clock()); anyOk = true; if (result.fromFallback) allOk = false } else allOk = false
+            if (result != null) { perTeam[team.key] = Stamped(result.games, result.at ?: clock()); anyOk = true; if (result.fromFallback) allOk = false } else allOk = false
         }
         val held = teams.mapNotNull { t -> perTeam[t.key]?.let { t to it } }
         if (held.isEmpty()) return allOk

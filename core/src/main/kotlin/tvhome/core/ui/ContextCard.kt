@@ -10,6 +10,7 @@ import tvhome.core.feeds.PanelView
 import tvhome.core.feeds.Stamped
 import tvhome.core.feeds.TeamGame
 import tvhome.core.feeds.WatchMap
+import tvhome.core.feeds.WatchTarget
 import tvhome.core.feeds.WeatherNow
 import tvhome.core.feeds.view
 import tvhome.core.state.AgendaState
@@ -44,7 +45,7 @@ sealed interface ContextCard {
  * The context card, by priority (spec M7-4.5, tested as a table): a severe alert, then a live game, then an upcoming game
  * today, then (an ended game's final, until local midnight, the M2f rule), then the [timeOfDay] card. [alerts] must
  * already be the set that applies now (see [activeAlerts]); [game] is [GameDay.select]'s pick, which already ranks live
- * over upcoming over final. [watchMap] only supplies the carrying network's name for the game line.
+ * over upcoming over final. The game line names [watch]'s network when a Watch target exists, else [watchMap]'s.
  */
 fun contextCard(
     alerts: AlertSet?,
@@ -54,10 +55,12 @@ fun contextCard(
     is24h: Boolean,
     timeOfDay: ContextCard.TimeOfDay? = null,
     watchMap: WatchMap = WatchMap.EMPTY,
+    watch: WatchTarget? = null,
 ): ContextCard? {
     alerts?.override?.let { a -> return ContextCard.Alert(a.event, a.until?.let { untilText(it, now, zone, is24h) }) }
     if (game != null) {
-        val network = if (game.game.phase == GamePhase.FINAL) null else watchMap.network(game)
+        // The pill's network when there is a pill, so the card and the pill always name the same one.
+        val network = if (game.game.phase == GamePhase.FINAL) null else watch?.network ?: watchMap.network(game)
         val line = GameDay.line(game, now, zone).let { if (network != null) "$it · $network" else it }
         return ContextCard.Game(line, game.team.key, game.game.phase, network)
     }

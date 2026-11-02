@@ -67,6 +67,12 @@ class QuietModeTest {
         g.watch?.let { add(it.network) }
     }
 
+    private fun modelStrings(m: ScreenModel): List<String> = when (m) {
+        is ScreenModel.Message -> listOfNotNull(m.title, m.detail)
+        is ScreenModel.Agenda -> listOfNotNull(m.age.text, m.age.liveDescription, m.footer) +
+            listOf(m.today, m.tomorrow).flatMap { d -> listOf(d.heading, d.date, d.headingDescription) + d.rows.flatMap { listOf(it.time, it.title, it.description) } }
+    }
+
     private fun tileStrings(t: CalendarTile): List<String> = listOfNotNull(t.date, t.time, t.text, t.note, t.description)
 
     @Test fun noFixtureTitleSubstringReachesHomeGlanceOrCalendarTileWithQuietOn() {
@@ -171,5 +177,24 @@ class QuietModeTest {
         assertTrue(g.card is ContextCard.TimeOfDay)
         assertTrue(GlanceItem.CARD in g.items)
         assertTrue(g.items.size <= GlanceBudget.MAX)
+    }
+
+    @Test fun noFixtureTitleReachesTheFullScreenCalendarWithQuietOn() {
+        for (h in listOf(7, 16, 23)) {
+            val now = at(h, 50)
+            for (state in states(now)) {
+                for (s in modelStrings(screenModel(state, now, zone, false, hideTitles = true))) for (t in titles) {
+                    assertFalse(s.contains(t, ignoreCase = true), "title $t leaked in \"$s\" at $h state ${state.javaClass.simpleName}")
+                }
+            }
+        }
+        val now = at(16, 50)
+        val m = screenModel(states(now).first(), now, zone, false, hideTitles = true) as ScreenModel.Agenda
+        assertEquals(4, m.today.rows.size, "rows and times stay")
+        assertTrue(m.today.rows.all { it.title == "Busy" && it.description == "${it.time}, Busy" })
+        assertEquals(m.initialFocus, (screenModel(states(now).first(), now, zone, false) as ScreenModel.Agenda).initialFocus)
+        // Control: with titles shown, they are there.
+        val loud = screenModel(states(now).first(), now, zone, false) as ScreenModel.Agenda
+        assertTrue(loud.today.rows.any { it.title == titles[1] })
     }
 }
