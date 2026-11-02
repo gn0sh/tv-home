@@ -19,7 +19,10 @@ internal object PanelCaches {
 
     private const val MAX_GAMES = 64
 
-    @Serializable class WeatherDto(val tempF: Int, val condition: String, val precipNow: String? = null, val nextPrecip: String? = null)
+    @Serializable class WeatherDto(
+        val tempF: Int, val condition: String, val precipNow: String? = null, val nextPrecip: String? = null,
+        val highF: Int? = null, val lowF: Int? = null, val highHour: Int? = null, val overnightLowF: Int? = null,
+    )
     @Serializable class GameDto(
         val team: String, val start: String, val opponent: String, val home: Boolean, val phase: String,
         val ownScore: Int? = null, val oppScore: Int? = null, val period: String? = null,
@@ -27,12 +30,14 @@ internal object PanelCaches {
     )
 
     val weather: KSerializer<WeatherNow> = mapped(WeatherDto.serializer(),
-        { WeatherDto(it.tempF, it.condition, it.precipNow?.name, it.nextPrecip) },
+        { WeatherDto(it.tempF, it.condition, it.precipNow?.name, it.nextPrecip, it.highF, it.lowF, it.highHour, it.overnightLowF) },
         { d ->
             require(d.tempF in -100..150)
+            for (t in listOf(d.highF, d.lowF, d.overnightLowF)) require(t == null || t in -100..150)
+            require(d.highHour == null || d.highHour in 0..23)
             val precip = d.precipNow?.let { p -> Precip.entries.first { it.name == p } }
             val cond = if (d.condition.isEmpty()) "" else requireNotNull(Feeds.clean(d.condition))
-            WeatherNow(d.tempF, cond, precip, d.nextPrecip?.let { requireNotNull(Feeds.clean(it)) })
+            WeatherNow(d.tempF, cond, precip, d.nextPrecip?.let { requireNotNull(Feeds.clean(it)) }, d.highF, d.lowF, d.highHour, d.overnightLowF)
         })
 
     val alerts: KSerializer<AlertSet> = mapped(NwsAlerts.AlertSetDto.serializer(), NwsAlerts::toDto) {
