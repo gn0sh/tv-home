@@ -154,6 +154,10 @@ fun HomeScreen(
     var pendingFocus by remember { mutableStateOf<String?>(null) }
     fun visiblePkgs() = appList.map { it.app.packageName }
     fun commit(next: SavedLayout, focusKey: String?) {
+        // Keep the row where it is (move-scroll-anchor): a LazyRow keeps its first visible item's key in place when
+        // the data changes, so moving the first tile right would scroll the row along with it and look like nothing
+        // moved. This position is used instead on the next measure; pendingFocus then brings the tile into view.
+        rowState.requestScrollToItem(rowState.firstVisibleItemIndex, rowState.firstVisibleItemScrollOffset)
         onLayoutChange(next)
         pendingFocus = focusKey
     }
