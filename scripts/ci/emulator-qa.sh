@@ -19,6 +19,8 @@ MAIN="$PKG/.AgendaActivity"
 PROVISION_ACT="$PKG/.ProvisionActivity"
 URI="content://$PKG.provision/calendar_url"
 MAX_COLD_MS=${MAX_COLD_MS:-2000}   # AC8
+MAX_REGRESSION_MS=${MAX_REGRESSION_MS:-300}   # AC8 baseline: PR median may exceed the merge base's by at most this
+BASE_APK=${BASE_APK:-}   # merge base's APK, same throwaway signer (pull requests); empty or missing = no comparison
 # Fake value that passes the validator. Built from parts so the full string is not in this file's text either.
 DUMMY_TOKEN="private-$(printf 'f%.0s' $(seq 1 32))"
 DUMMY_URL="https://calendar.google.com/calendar/ical/x%40example.com/$DUMMY_TOKEN/basic.ics"
@@ -102,7 +104,8 @@ network() { # on|off
 # Each prints TotalTime and WaitTime. The limit (MAX_COLD_MS) is unchanged; 5 samples make the median robust to the
 # swiftshader runner's noise (same code measured 979-4180 ms across runs with 3 samples).
 COLD_RUNS=5
-cold_start() { # $1 = label
+COLD_MEDIAN=""
+cold_start() { # $1 = label, $2 = "nolimit" to skip the MAX_COLD_MS check (the baseline); sets COLD_MEDIAN
   local out t w times=() i
   for ((i = 0; i <= COLD_RUNS; i++)); do
     sh_ am force-stop "$PKG"; sleep 1
@@ -120,6 +123,8 @@ cold_start() { # $1 = label
   local median; median=$(printf '%s\n' "${times[@]}" | sort -n | sed -n "$(( (COLD_RUNS + 1) / 2 ))p")
   echo "$1 cold start TotalTime ms: ${times[*]} (median $median, limit $MAX_COLD_MS)"
   echo "$1 ${times[*]} median=$median" >> "$OUT/cold-start.txt"
+  COLD_MEDIAN=$median
+  [[ ${2:-} == nolimit ]] && return 0
   (( median < MAX_COLD_MS )) || fail "$1: median cold start ${median} ms is not under ${MAX_COLD_MS} ms (AC8)"
   if [[ $OFFLINE_VERIFIED == yes ]]; then pass "$1: cold start median ${median} ms, app offline (AC8-offline VERIFIED)"
   else warn "$1: cold start median ${median} ms, but the app was NOT offline (AC8-offline NOT VERIFIED)"; fi
@@ -182,6 +187,27 @@ step "AC8 cold start, network off, no cache, not set up"
 sh_ pm clear "$PKG" >/dev/null || true
 network off
 cold_start "offline-not-set-up"
+pr_median=$COLD_MEDIAN
+# AC8 before/after (spec M7-1.5): the merge base's APK, same state (pm clear, network off), same method. The PR is
+# measured first, on the freshly booted emulator, so any warm-up advantage goes to the base, not the PR.
+if [[ -n $BASE_APK && -f $BASE_APK ]]; then
+  a install --no-incremental -r -g "$BASE_APK" 2>&1 | tr -d '\r' | grep -q Success || fail "AC8 baseline: base APK install failed"
+  sh_ pm clear "$PKG" >/dev/null || true
+  network off
+  cold_start "base-offline-not-set-up" nolimit
+  base_median=$COLD_MEDIAN
+  a install --no-incremental -r -g "$APK" 2>&1 | tr -d '\r' | grep -q Success || fail "AC8 baseline: reinstalling the PR APK failed"
+  sh_ pm clear "$PKG" >/dev/null || true
+  network off
+  delta=$(( pr_median - base_median ))
+  echo "AC8 before/after: base median ${base_median} ms, PR median ${pr_median} ms, delta ${delta} ms (max +${MAX_REGRESSION_MS})"
+  echo "baseline base=$base_median pr=$pr_median delta=$delta" >> "$OUT/cold-start.txt"
+  (( delta <= MAX_REGRESSION_MS )) || fail "AC8: PR cold start median ${pr_median} ms is ${delta} ms over the base's ${base_median} ms (max ${MAX_REGRESSION_MS})"
+  pass "AC8: PR cold start within ${MAX_REGRESSION_MS} ms of the merge base (delta ${delta} ms)"
+  sh_ am start -W -n "$MAIN" >/dev/null; sleep 3   # the screen checks below expect the PR app up
+else
+  note "AC8 baseline NOT COMPARED: no base APK (not a pull request, or the merge base has no app)"
+fi
 expect_text "offline-not-set-up" "Calendar not set up"
 a exec-out screencap -p > "$SHOT_DIR/tv-home-home.png"
 sig=$(head -c 8 "$SHOT_DIR/tv-home-home.png" | od -An -tx1 | tr -d ' \n')

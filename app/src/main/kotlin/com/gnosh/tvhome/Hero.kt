@@ -70,7 +70,10 @@ import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import tvhome.core.feeds.FeedsSnapshot
 import tvhome.core.feeds.GameDay
+import tvhome.core.feeds.LiveFeeds
 import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelView
 import tvhome.core.feeds.view
@@ -121,19 +124,22 @@ fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modif
     val context = LocalContext.current
     val now by rememberMinuteClock()
     val graph = remember(context) { (context.applicationContext as TvHomeApp).graph }
-    val feeds = graph.feeds
-    // Feed work starts only after the first frame is on screen and a short settle, never on the startup path (AC8). It
-    // runs on Default, only while the activity is STARTED (ADR 0008 section 1: nothing polls while Brian watches another
-    // app); returning restarts it, and LiveFeeds fetches only what is due. It stops when the hero leaves the composition.
+    // LiveFeeds is built (AppGraph's lazy) on Default after the first frame, never on the main thread (AC8). Feed work
+    // then starts after a short settle, only while the activity is STARTED (ADR 0008 section 1: nothing polls while
+    // Brian watches another app); returning restarts it, and LiveFeeds fetches only what is due. It stops when the hero
+    // leaves the composition. Until it exists the hero draws an empty snapshot.
+    var feeds by remember { mutableStateOf<LiveFeeds?>(null) }
     val owner = LocalLifecycleOwner.current
-    LaunchedEffect(feeds, owner) {
+    LaunchedEffect(graph, owner) {
         withFrameNanos { }
+        val f = feeds ?: withContext(Dispatchers.Default) { graph.feeds }.also { feeds = it }
         owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             delay(FEEDS_START_DELAY_MS)
-            withContext(Dispatchers.Default) { feeds.run() }
+            withContext(Dispatchers.Default) { f.run() }
         }
     }
-    val snap by feeds.snapshot.collectAsState()
+    val emptyFeeds = remember { MutableStateFlow(FeedsSnapshot()) }
+    val snap by (feeds?.snapshot ?: emptyFeeds).collectAsState()
     val agenda by graph.session.state.collectAsState()
     // The adb-set settings, read off the main thread once a minute (SharedPreferences: memory after the first read).
     val settings by produceState(HeroSettings.NONE, now) {
