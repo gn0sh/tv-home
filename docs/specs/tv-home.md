@@ -165,3 +165,105 @@ Acceptance: Brian says "play the next episode of <show>" and "hide Music from th
 
 ### Public release idea (Brian 2026-11-01 15:43-15:45Z; not committed, his call later)
 Free Play Store app; each user links their own AI provider (Claude, OpenAI, Gemini, local). Design M1b with a swappable provider interface. Public version needs phone/QR setup for keys and no personal data in repo or history. Advice given: finish for Brian first, use ~2 weeks, then a cheap test (public GitHub, bring-your-own key) before the Play Store.
+
+### M7: Now / Next home screen (requested 2026-11-02 21:00Z; panel: docs/reviews/dashboard-info-panels.md)
+Brian: "pack that screen with useful, relevant information... more than just a place where I go to find something to watch."
+Primary user: Brian (confirmed by CEO, 2026-11-02). Internal; no public surface.
+
+**Goal line.** Brian turns on the TV and, without pressing anything, sees what is next on his calendar, what the weather will do to his day, and whether the Predators or Ohio State play today, with the apps row still one press away.
+Example: at 4:50 pm the hero reads "Dentist in 42 min" and "Leave by 5:40", the side card says "Predators 7:00 PM, ESPN+", and the weather chip says "Rain after 6 PM".
+
+**Hard rules (apply to every M7 story; each has a test).**
+- R1. The apps row keeps first focus. Home to Netflix stays 2 presses. No M7 element is focusable ahead of the apps row or sits between Brian and a tile.
+- R2. At most about 6 glance items on the home screen, enforced in code: one `GlanceBudget` caps the count (6); a 7th must replace the lowest-priority item rather than stack; a JVM test covers every combination of panels on. Items: clock, weather chip, Now/Next line 1, line 2, context card, daily brief.
+- R3. Text meant to be read is at least 32 px (56-72 px for hero text and the clock) and contrast is at least 7:1, checked by a JVM test on the theme tokens (including dimmed states) plus screenshots.
+- R4. No news tickers, social feeds, ads, auto-scrolling text, tiny text, or fixed bright borders.
+- R5. Every panel shows its data age ("updated 12 min ago") or hides itself when stale (story 1).
+
+**Build order:** 1 (shared data layer), then 2, 3, 4, 5, 6, 7. Story 5 (OLED) ships with the first new panel, not last.
+
+#### M7-1: Shared panel data layer
+As Brian, I want every panel to show fresh data or say it is old, so I trust the screen.
+1. Each panel has a last-good cache on disk (app-private); a failed refresh keeps the last good value and never shows an empty or error box in its place.
+2. Each panel exposes an "updated" stamp ("updated 12 min ago", minute resolution) at 32 px or more; JVM test with a fake clock.
+3. Each panel has a stale threshold; past it the panel shows "stale" or hides itself (per panel, stated in its story), JVM-tested at threshold -1 s, 0 s and +1 s.
+4. Each panel has an off switch in on-device settings, set over adb like the existing location setting; off means no request is made (fake fetcher counts calls).
+5. Cold start (AC8): panel loops start after the first frame plus a short settle, on a background dispatcher. The home screen with the apps row draws with all panels empty, offline, and with every panel off. Emulator cold-start comparison before and after M7, method in the PR.
+6. Builds on the existing `LiveFeeds`, `FeedTiming` (backoff), `FeedFetcher` and its host allowlist (ADR 0005); extends them rather than adding a second fetch path. The new host `api.weather.gov` is added to the allowlist, with a test that other hosts still fail.
+7. Network off: every panel falls back to cache or hides; the apps row is unaffected (test).
+
+#### M7-2: Weather and NWS severe alerts (ZIP 37042)
+As Brian, I want the rain window and any severe-weather alert on the home screen, because tornado season makes alerts a safety item.
+Existing, build on it: `WeatherFeed` (Open-Meteo: temp, condition, "rain after 9 PM"), `Location` and `FeedSettings` (lat/lon at two decimals, set over adb through `ProvisionProvider`), the hero weather chip.
+1. The location for ZIP 37042 is set once through the existing `FeedSettings` provisioning (lat/lon); the ZIP is not geocoded at runtime. The chip keeps today's behavior.
+2. NWS alerts: `https://api.weather.gov/alerts/active?point=<lat>,<lon>` with a descriptive `User-Agent` (NWS requires one; the fetcher sends `tvhome-hero/1` today, so the NWS call uses its own contact-style constant with no personal data). Fixture-tested parse (event, severity, headline, ends).
+3. An active Severe or Extreme alert (Tornado Warning, Severe Thunderstorm Warning, etc.) overrides the context card with the event name and "until <time>" at 56 px or more. Watches and Advisories show as a chip suffix, not an override. Table-driven JVM test over event types.
+4. Alerts refresh every 5 min while one is active, else every 15 min; stale after 30 min. A stale alert is dropped and the chip says "alerts unknown" in text, never silence.
+5. A cleared or expired alert disappears on its own; no manual dismiss.
+6. Weather stale after 2 h (existing rule); data age shown per story 1.
+7. Feed down or location unset: no weather, no alerts, no crash, apps row untouched.
+
+#### M7-3: Now / Next calendar hero with countdown
+As Brian, I want my next event in large type with how long until it, so I do not open the calendar to know.
+1. Hero left 60% shows the next event title, start time, "in 42 min", and the one after it, from the existing calendar source and agenda cache (no new calendar access).
+2. Within 60 minutes of the next event with a configured travel time the line becomes "Leave by 5:40"; without one it stays "in 42 min". Pure JVM function with a fake clock, tested at 61, 60, 1 and 0 minutes and after start.
+3. All-day events show "Today: <title>" and never drive a countdown. An event in progress shows "now, until <end>".
+4. No events left today: tomorrow's first event, or "Nothing on today" in text, never blank.
+5. Backdrop stays, dimmed to about 35%; contrast at least 7:1 against it (R3).
+6. Calendar stale or unavailable: last good with its data age; past the stale threshold it hides and says so.
+7. OK on the hero opens the existing full calendar screen. The hero is not ahead of the apps row in focus order (R1).
+
+#### M7-4: Game-day card (Predators, Ohio State) with Watch link
+As Brian, I want to see whether my teams play today, when, and where to watch, with one press to open it.
+Existing, build on it: `GameDay`, `Schedules`, `Teams` (NHL api-web `NSH`, ESPN team `194`), `LiveFeeds` polling (60 min; 60 s live) and the hero game-day theme (ADR 0005).
+1. The right 40% context card on game day shows opponent, local start time and the carrying app ("ESPN+"); during the game it adds live score and clock; afterward the final until local midnight (existing rule).
+2. The carrying app comes from a small configured team-to-app map in settings, not scraped. A game with no mapping shows no Watch button, never a wrong one.
+3. A Watch button opens that app's launch intent (same path as the app tiles); an app that is not installed hides the button. A deep link to the specific game is not required.
+4. Both sports sources are unofficial and sit behind an adapter interface, with a cached season schedule as the fallback. JVM test that a shape change gives "no game" from the fallback, not a crash. Real response shapes are captured once from the TV (ADR 0005: current fixtures are unverified).
+5. Context card priority: severe alert, then live game, then upcoming game today, then the time-of-day card (morning weather arc; evening tomorrow's first event and overnight low). JVM table test.
+6. The card counts as one glance item (R2).
+
+#### M7-5: OLED protection (LG and Vizio profiles)
+As Brian, I want the screen to survive being left on, because the LG is OLED and burn-in is permanent.
+1. Slow pixel drift (a few px over minutes, no visible jump) on the top strip and any static element; no fixed bright borders (R4). JVM test of the drift bounds.
+2. Dim to about 50% after about 10 minutes without a key press; near-black with a drifting clock after about 30 minutes. Any key restores full brightness and is not swallowed from focus handling. Thresholds are constants tested with a fake clock.
+3. Two profiles: LG (OLED: drift and dim on) and Vizio (LED: drift off, dim later). Default is the LG profile (safer). Which applies comes from the existing TV-toggle work in tv-remote if it can tell, else an adb-set setting; verified on device (A-M7-6).
+4. Idle states do not interfere with the M3 Home redirect (emulator check; noted for the real TV).
+5. Ships with the first new panel, before the M7-3 hero lands on his TV.
+
+#### M7-6: Claude one-line daily brief
+As Brian, I want one line that sums up my day ("Rain after 4, Preds at 7 on ESPN+, dentist tomorrow 9am").
+1. Generated from the other panels' cached data (weather, calendar, game), not the open web, using the existing Ask Claude key and client. Shown only once that key is provisioned.
+2. Cached; regenerated at most twice a day (about 07:00 and 16:00 local) plus an explicit refresh at most once an hour. JVM test with a fake clock and a counting client proves the cap.
+3. A hard spend cap: a monthly request/token budget stored on device; at the cap it stops generating and shows the cached line with its age, then hides when stale. The dedicated key's own limit stays the backstop. No new key or spend (hard stop 3): this reuses the key and limit Brian already set.
+4. Degrades gracefully: no key, no network, API error or empty reply all fall back to a local template line built from the same data ("Rain after 4 · Preds 7:00 PM · Dentist tomorrow 9 AM"). No error text is ever shown.
+5. One line, length-capped for 32 px or more, control characters removed; the prompt holds no secrets, and no event titles when Quiet mode is on (story 7).
+6. Counts as one glance item (R2).
+
+#### M7-7: Quiet / guest mode
+As Brian, I want one press to hide my event titles when guests are over.
+1. One action toggles Quiet mode (a button last in focus order, R1, plus a remote key chord); state survives restart and a visible "Quiet" marker shows.
+2. In Quiet mode event titles and locations are hidden everywhere on the home screen (Now/Next, brief, agenda tile), replaced by times and "Busy". Weather, game card and apps are unaffected. A JVM test shows no event title reaches any rendered text while Quiet is on.
+3. Quiet mode stops the brief using titles (M7-6.5) and discards a cached brief that contained them.
+4. The toggle takes effect on the next redraw and never blocks the apps row.
+
+**Assumptions (M7).**
+| # | Assumption | Status |
+|---|---|---|
+| A-M7-1 | Primary user is Brian; no outside viewers | Verified (confirmed by CEO, 2026-11-02) |
+| A-M7-2 | Open-Meteo, the location setting, the hero weather chip and `LiveFeeds` exist and work | Verified in repo (ADR 0005, `core/.../feeds/`); installed on his TV 2026-11-02 01:39Z per `docs/status.md` |
+| A-M7-3 | NWS `api.weather.gov` is free, keyless, public domain, and needs a descriptive `User-Agent` header | Unverified: our sandbox proxy blocks the host; from NWS docs. Check from the TV or a PC |
+| A-M7-4 | The `alerts/active?point=` response matches our fixture | Unverified (no captured response) |
+| A-M7-5 | NHL api-web and ESPN endpoints are unofficial and can change or block without notice | Verified that they are unofficial (ADR 0005); response shapes unverified |
+| A-M7-6 | The app can tell LG from Vizio (or a setting can) | Unverified: depends on the tv-remote TV-toggle work |
+| A-M7-7 | ZIP 37042 maps to one lat/lon (two decimals, about 1 km) good for NWS and Open-Meteo | Unverified: set over adb |
+| A-M7-8 | The feeds do not say which app carries a game | Unverified: configured map (story 4) |
+| A-M7-9 | Watch Next / Continue watching works only for apps that publish to it, so it is deferred | Unverified: needs a spike; not in M7 |
+| A-M7-10 | The existing Ask Claude key and limit can fund a once-or-twice-a-day brief at pennies a day | Unverified: the cap amount is Brian's |
+| A-M7-11 | ICS calendar lag can make "in 42 min" wrong by hours | Verified (A5); handled by the staleness rule in story 3 |
+
+**Out of scope (M7).** News headlines, commute/traffic (needs a paid key), smart home (no Home Assistant), social feeds, ads, anything for outside viewers.
+
+**Later.** Ambient idle mode (dimmed drifting photos after about 60 s idle, off on any key; a good second step on the OLED work); Large-text mode (for low-vision viewers); Continue watching (needs a Watch Next spike first); Google Tasks reminders.
+
+**Brian's steps (M7).** Approve each install (hard stop 1); confirm the ZIP-37042 location and the team-to-app map once (about 5 minutes); confirm the brief's monthly cap if it differs from his existing key limit.
