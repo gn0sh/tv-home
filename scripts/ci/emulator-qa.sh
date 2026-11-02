@@ -598,13 +598,13 @@ m3_dirty=1
 m3_cleanup() {
   [[ -n ${m3_dirty:-} ]] || return 0
   sh_ cmd package set-home-activity "$stock_home" >/dev/null 2>&1 || true
-  sh_ pm disable "$PKG/.HomeEntry" >/dev/null 2>&1 || true
+  sh_ content delete --uri content://com.gnosh.tvhome.provision/home_entry >/dev/null 2>&1 || true
   sh_ settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
   sh_ settings put secure accessibility_enabled 0 >/dev/null 2>&1 || true
 }
 [[ -n $stock_home && $stock_home != "$PKG/"* ]] || fail "m3: home is '$stock_home' before the takeover (HomeEntry must be off as installed)"
 pass "m3: as installed, Home is still the TV's own ($stock_home)"
-sh_ pm enable "$PKG/.HomeEntry" >/dev/null
+sh_ content insert --uri content://com.gnosh.tvhome.provision/home_entry --bind on:i:1 >/dev/null   # pm enable is refused for a release app
 sh_ cmd package set-home-activity "$PKG/.HomeEntry" >/dev/null
 [[ $(home_now) == "$PKG/.HomeEntry" ]] || fail "m3: after set-home-activity, home is '$(home_now)'"
 other_app
@@ -627,7 +627,7 @@ in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
 pass "m3: Home from the full-screen calendar returns to the home row"
 sh_ cmd package set-home-activity "$stock_home" >/dev/null
-sh_ pm disable "$PKG/.HomeEntry" >/dev/null
+sh_ content delete --uri content://com.gnosh.tvhome.provision/home_entry >/dev/null
 [[ $(home_now) == "$stock_home" ]] || fail "m3: rollback left home at '$(home_now)', expected '$stock_home'"
 other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front && fail "m3: after rollback, Home still opens the dashboard"

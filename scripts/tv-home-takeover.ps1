@@ -3,14 +3,15 @@
   Makes the dashboard the Google TV's Home (-SetHome) and the remote's mic button open Ask Claude (-SetMic), or undoes
   both (-Rollback). Run it yourself in your own PowerShell window; it changes settings on the TV.
 .DESCRIPTION
-  -SetHome: turns on the app's HomeEntry (off as installed), makes it the default home with
+  -SetHome: asks the app to turn on its HomeEntry (off as installed), makes it the default home with
          "cmd package set-home-activity", and saves the TV's own home to a rollback file first.
   -SetMic:  turns on the app's mic key service in the TV's accessibility settings. It appends to the list already
          there (saved to the rollback file first), so nothing else is switched off. Google Assistant stays
          installed; the service only takes the mic, voice and search keys.
   -Rollback: puts back the home the rollback file saved, turns HomeEntry off, and takes only the mic service out of
          the accessibility list (other services stay on). See docs/user/tv-home-setup.md for doing it by hand.
-  "pm enable" and "pm disable" restart the dashboard app; that is expected.
+  HomeEntry is switched by the app itself (a shell-only provider path): Android does not let adb change a release
+  app's components directly.
   It asks you to type YES before changing anything, and prints each adb command it runs.
   A Google TV system update can undo -SetHome; run it again after one.
 .PARAMETER SetHome   make the dashboard the TV's Home
@@ -110,7 +111,7 @@ if ($Rollback) {
     # Each part runs even if another fails, so a failed home restore cannot leave the mic service on.
     # Turning HomeEntry off alone gives the TV its own home back, so it runs even if the restore fails
     # (rollback-home-blocks-disable).
-    try { Adb @('shell', 'pm', 'disable', $HomeComponent) | Out-Null } catch { $problems += "Home entry: $($_.Exception.Message)" }
+    try { Adb @('shell', 'content', 'delete', '--uri', 'content://com.gnosh.tvhome.provision/home_entry') | Out-Null } catch { $problems += "Home entry: $($_.Exception.Message)" }
     try {
         if ($saved.home) {
             if ($saved.home -notmatch $ComponentRe) { throw 'the rollback file has an unexpected home' }
@@ -151,7 +152,7 @@ if ($SetHome) {
     if (-not $saved.home -and $before -and $before -notlike "$Pkg/*" -and $before -notlike 'android/*') { $saved.home = $before }
     if (-not $saved.home) { throw "Couldn't read the TV's current home app, so there would be nothing to roll back to; stopping." }
     Save-Rollback $saved
-    Adb @('shell', 'pm', 'enable', $HomeComponent) | Out-Null
+    Adb @('shell', 'content', 'insert', '--uri', 'content://com.gnosh.tvhome.provision/home_entry', '--bind', 'on:i:1') | Out-Null
     Adb @('shell', 'cmd', 'package', 'set-home-activity', $HomeComponent) | Out-Null
     $now = Get-TvHome
     if ($now -ne $HomeComponent) { Write-Warning "Home now resolves to '$now', not the dashboard. Run -Rollback and tell Claude." }

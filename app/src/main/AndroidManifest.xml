@@ -42,7 +42,7 @@
         </activity>
 
         <!-- M3 Home: OFF as installed (android:enabled="false"), so installing changes nothing about Home.
-             scripts/tv-home-takeover.ps1 -Home, run by Brian himself, turns it on with `pm enable` and makes it the
+             scripts/tv-home-takeover.ps1 -Home, run by Brian himself, asks the app to turn it on (ProvisionProvider /home_entry; adb may not) and makes it the
              default home; -Rollback restores the TV's own home. Like any launcher it only brings the dashboard to
              the front, so it has no permission guard. -->
         <activity-alias

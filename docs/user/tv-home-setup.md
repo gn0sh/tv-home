@@ -103,6 +103,6 @@ folder (it shows what it will change and asks you to type YES):
 To undo both: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
 By hand, without the script (adb from `%LOCALAPPDATA%\tv-home-tools`):
 1. `adb shell cmd package set-home-activity <the TV's own home, saved in %LOCALAPPDATA%\tv-home-tools\takeover-rollback.json>`
-2. `adb shell pm disable com.gnosh.tvhome/.HomeEntry`
+2. `adb shell content delete --uri content://com.gnosh.tvhome.provision/home_entry`
 3. Open the TV's Settings > System > Accessibility and turn off "Dashboard mic button". Or uninstall the dashboard,
    which removes both.

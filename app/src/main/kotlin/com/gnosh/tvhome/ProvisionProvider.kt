@@ -1,7 +1,9 @@
 package com.gnosh.tvhome
 
 import android.content.ContentProvider
+import android.content.ComponentName
 import android.content.ContentValues
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -60,6 +62,7 @@ class ProvisionProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
         enforceShell()
         if (uri.pathSegments == listOf("location")) { FeedSettings.clearLocation(context!!.applicationContext); return 1 }
+        if (uri.pathSegments == listOf(HOME_ENTRY)) { setHomeEntry(false); return 1 }
         val key = keyOf(uri) ?: throw FileNotFoundException()
         last[key] = Provision.apply(secrets(), ProvisionCommand.Clear(key))
         return 1
@@ -71,6 +74,7 @@ class ProvisionProvider : ContentProvider() {
      */
     override fun insert(uri: Uri, values: ContentValues?): Uri? {
         enforceShell()
+        if (uri.pathSegments == listOf(HOME_ENTRY)) { setHomeEntry(true); return uri }
         if (uri.pathSegments != listOf("location")) throw UnsupportedOperationException()
         val v = values ?: throw IllegalArgumentException("values")
         val lat = v.getAsDouble("lat") ?: throw IllegalArgumentException("lat")
@@ -88,6 +92,20 @@ class ProvisionProvider : ContentProvider() {
     private fun keyOf(uri: Uri): SecretKey? =
         if (uri.pathSegments.size == 1) Provision.keyOf(uri.pathSegments[0]) else null
 
+    /**
+     * M3: `content insert --uri content://com.gnosh.tvhome.provision/home_entry --bind on:i:1` turns the `.HomeEntry`
+     * alias on, `content delete` on the same URI turns it off (scripts/tv-home-takeover.ps1). Since Android 13 the shell
+     * may not change a release app's component state with `pm enable`, but the app may change its own.
+     */
+    private fun setHomeEntry(on: Boolean) {
+        val ctx = context!!.applicationContext
+        ctx.packageManager.setComponentEnabledSetting(
+            ComponentName(ctx.packageName, "${ctx.packageName}.HomeEntry"),
+            if (on) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            PackageManager.DONT_KILL_APP,
+        )
+    }
+
     private fun enforceShell() {
         val uid = Binder.getCallingUid()
         // 2000 = shell, 0 = root (adb root on an emulator), own uid for in-process calls.
@@ -96,6 +114,7 @@ class ProvisionProvider : ContentProvider() {
 
     private companion object {
         const val SHELL_UID = 2000
+        const val HOME_ENTRY = "home_entry"
         val last = java.util.concurrent.ConcurrentHashMap<SecretKey, ProvisionOutcome>()
     }
 }
