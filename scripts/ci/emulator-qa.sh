@@ -106,22 +106,25 @@ network() { # on|off
 COLD_RUNS=5
 COLD_MEDIAN=""; COLD_TIMES=()
 median_of() { sort -n | awk '{a[NR]=$1} END {if (NR % 2) print a[(NR+1)/2]; else print int((a[NR/2]+a[NR/2+1])/2)}'; }
-cold_start() { # $1 = label, $2 = "nolimit" to skip the MAX_COLD_MS check, $3 = "soft": a launch failure warns and
-  # returns 1 instead of failing the job (the baseline APK: its crash means "not compared"); sets COLD_MEDIAN
+COLD_FAILED=""
+cold_start() { # $1 = label, $2 = "nolimit" to skip the MAX_COLD_MS check, $3 = "soft": a launch failure warns, sets
+  # COLD_FAILED and returns 0 instead of failing the job (the baseline APK: its failure means "not compared"). Always
+  # called outside a conditional, so set -e stays on inside it (ac8-errexit-off). Sets COLD_MEDIAN.
   local out t w times=() i soft=${3:-}
-  cs_fail() { if [[ $soft == soft ]]; then warn "$1"; return 1; fi; fail "$1"; }
+  COLD_FAILED=""
+  cs_fail() { if [[ $soft == soft ]]; then warn "$1"; COLD_FAILED=1; return 0; fi; fail "$1"; }
   for ((i = 0; i <= COLD_RUNS; i++)); do
     sh_ am force-stop "$PKG"; sleep 1
     out=$(sh_ am start -W -n "$MAIN" | tr -d '\r')
-    grep -q '^Status: ok' <<<"$out" || { echo "$out"; cs_fail "$1: am start -W did not report Status: ok" || return 1; }
+    grep -q '^Status: ok' <<<"$out" || { echo "$out"; cs_fail "$1: am start -W did not report Status: ok"; return 0; }
     t=$(sed -n 's/^TotalTime: *\([0-9]*\).*/\1/p' <<<"$out")
     w=$(sed -n 's/^WaitTime: *\([0-9]*\).*/\1/p' <<<"$out")
-    [[ -n $t ]] || { echo "$out"; cs_fail "$1: no TotalTime in am start -W output" || return 1; }
+    [[ -n $t ]] || { echo "$out"; cs_fail "$1: no TotalTime in am start -W output"; return 0; }
     if (( i == 0 )); then echo "$1 warm-up (not counted): TotalTime=$t WaitTime=${w:-?}"
     else echo "$1 run $i: TotalTime=$t WaitTime=${w:-?}"; times+=("$t"); fi
     sleep 2
-    [[ -n $(pid_of) ]] || { cs_fail "$1: process died after launch" || return 1; }
-    in_front || { cs_fail "$1: AgendaActivity is not in front after launch" || return 1; }
+    [[ -n $(pid_of) ]] || { cs_fail "$1: process died after launch"; return 0; }
+    in_front || { cs_fail "$1: AgendaActivity is not in front after launch"; return 0; }
   done
   local median; median=$(printf '%s\n' "${times[@]}" | sort -n | sed -n "$(( (COLD_RUNS + 1) / 2 ))p")
   echo "$1 cold start TotalTime ms: ${times[*]} (median $median, limit $MAX_COLD_MS)"
@@ -195,18 +198,37 @@ cold_start "offline-not-set-up"
 # emulator drift during the job hits both sides. The PR goes first in each pair (strict). If the gate trips, one more
 # PR/base pair is measured and pooled before failing. Every number is printed.
 pr_times=("${COLD_TIMES[@]}"); base_times=()
-use_apk() { # $1 = apk, $2 = label; a failed base install returns 1 ("not compared"), a failed PR install fails
-  if ! a install --no-incremental -r -g "$1" 2>&1 | tr -d '\r' | grep -q Success; then
-    [[ $2 == base ]] && { warn "AC8 baseline: installing the base APK failed"; return 1; }
+use_apk() { # $1 = apk, $2 = label; a failed base install sets AC8_STATUS ("not compared"), a failed PR install fails
+  local out; out=$(a install --no-incremental -r -g "$1" 2>&1 | tr -d '\r' || true)
+  if ! grep -q Success <<<"$out"; then
+    if [[ $2 == base ]]; then warn "AC8 baseline: installing the base APK failed"; AC8_STATUS=not_compared; return 0; fi
     fail "AC8 baseline: installing the $2 APK failed"
   fi
   sh_ pm clear "$PKG" >/dev/null || true
   network off
 }
-ac8_pair() { # $1 = round; a PR block then a base block (the first round's PR block is the one above)
+# ac8-clear-hides-pr-crash: the crash buffer is checked (hard) for PR crashes right before the base is installed, so
+# anything in it after the base block was written by the base: saved, judged soft, then cleared.
+base_crash_check() { # $1 = round
+  local c; c=$(a logcat -d -b crash | tr -d '\r' | grep -c "$PKG" || true)
+  if [[ $c -gt 0 ]]; then
+    a logcat -d -b crash > "$OUT/crash-base-baseline-$1.txt" 2>/dev/null || true
+    warn "AC8 baseline: the base APK wrote $c crash line(s) in round $1"
+    AC8_STATUS=not_compared
+  fi
+  a logcat -b crash -c >/dev/null 2>&1 || true
+}
+ac8_pair() { # $1 = round; a PR block then a base block (the first round's PR block is the one above). No return codes:
+  # the soft result is AC8_STATUS, so this is never called inside a conditional (ac8-errexit-off).
+  [[ $AC8_STATUS == ok ]] || return 0
   if (( $1 > 1 )); then use_apk "$APK" PR; cold_start "pr-offline-not-set-up-$1" nolimit; pr_times+=("${COLD_TIMES[@]}"); fi
-  use_apk "$BASE_APK" base || return 1
-  cold_start "base-offline-not-set-up-$1" nolimit soft || return 1
+  no_app_crash_yet "AC8 PR block $1"
+  use_apk "$BASE_APK" base
+  [[ $AC8_STATUS == ok ]] || return 0
+  cold_start "base-offline-not-set-up-$1" nolimit soft
+  [[ -z $COLD_FAILED ]] || AC8_STATUS=not_compared
+  base_crash_check "$1"
+  [[ $AC8_STATUS == ok ]] || return 0
   base_times+=("${COLD_TIMES[@]}")
 }
 ac8_compare() { # sets delta; prints everything
@@ -215,30 +237,26 @@ ac8_compare() { # sets delta; prints everything
   echo "AC8 before/after: PR runs ${pr_times[*]} (median $pr_pooled); base runs ${base_times[*]} (median $base_pooled); delta ${delta} ms (max +${MAX_REGRESSION_MS})"
   echo "baseline pr=[${pr_times[*]}] base=[${base_times[*]}] pr_median=$pr_pooled base_median=$base_pooled delta=$delta" >> "$OUT/cold-start.txt"
 }
-ac8_base_failed() { # the base crashed or did not come to the front: "not compared", and its crash lines are not ours
-  warn "AC8 baseline NOT COMPARED: the base APK failed during the baseline (base-crash-fails-pr)"
-  a logcat -d -b crash > "$OUT/crash-base-baseline.txt" 2>/dev/null || true
-  a logcat -b crash -c >/dev/null 2>&1 || true
-  use_apk "$APK" PR
-  sh_ am start -W -n "$MAIN" >/dev/null; sleep 3
-}
 if [[ -n $BASE_APK && -f $BASE_APK ]]; then
-  if ! { ac8_pair 1 && ac8_pair 2; }; then ac8_base_failed
-  else
-  ac8_compare
-  base_ok=1
-  if (( delta > MAX_REGRESSION_MS )); then
-    warn "AC8: delta ${delta} ms over ${MAX_REGRESSION_MS}; measuring one more PR/base pair before deciding"
-    if ac8_pair 3; then ac8_compare; else base_ok=""; fi
+  AC8_STATUS=ok
+  ac8_pair 1
+  ac8_pair 2
+  if [[ $AC8_STATUS == ok ]]; then
+    ac8_compare
+    if (( delta > MAX_REGRESSION_MS )); then
+      warn "AC8: delta ${delta} ms over ${MAX_REGRESSION_MS}; measuring one more PR/base pair before deciding"
+      ac8_pair 3
+      if [[ $AC8_STATUS == ok ]]; then ac8_compare; fi
+    fi
   fi
-  if [[ -z $base_ok ]]; then ac8_base_failed
-  else
   use_apk "$APK" PR
-  (( delta <= MAX_REGRESSION_MS )) || fail "AC8: PR cold start median ${pr_pooled} ms is ${delta} ms over the base's ${base_pooled} ms (max ${MAX_REGRESSION_MS})"
-  pass "AC8: PR cold start within ${MAX_REGRESSION_MS} ms of the merge base (delta ${delta} ms)"
+  if [[ $AC8_STATUS == ok ]]; then
+    (( delta <= MAX_REGRESSION_MS )) || fail "AC8: PR cold start median ${pr_pooled} ms is ${delta} ms over the base's ${base_pooled} ms (max ${MAX_REGRESSION_MS})"
+    pass "AC8: PR cold start within ${MAX_REGRESSION_MS} ms of the merge base (delta ${delta} ms)"
+  else
+    warn "AC8 baseline NOT COMPARED: the base APK failed during the baseline (base-crash-fails-pr)"
+  fi
   sh_ am start -W -n "$MAIN" >/dev/null; sleep 3   # the screen checks below expect the PR app up
-  fi
-  fi
 else
   note "AC8 baseline NOT COMPARED: no base APK (not a PR against main, or the base did not build)"
 fi
