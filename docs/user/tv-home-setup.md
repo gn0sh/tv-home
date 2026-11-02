@@ -97,7 +97,8 @@ folder (it shows what it will change and asks you to type YES):
   the line again after one.
 - **Mic:** the remote's mic button opens Ask Claude, listening. This turns on "Dashboard mic button" in the TV's
   accessibility settings; it reads no screen content and passes every other key on. Google Assistant stays installed
-  (Ask Claude uses its speech recognition), but the mic button no longer opens it.
+  (Ask Claude uses its speech recognition), but the mic button no longer opens it. If you ever "Force stop" the
+  dashboard in the TV's app settings, Android switches this off too; run `.\scripts\tv-home-takeover.ps1 -SetMic` again.
 
 To undo both: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
 By hand, without the script (adb from `%LOCALAPPDATA%\tv-home-tools`):

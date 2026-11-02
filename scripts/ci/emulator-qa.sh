@@ -653,7 +653,9 @@ for k in ASSIST VOICE_ASSIST SEARCH; do
 done
 # Other keys pass through untouched while the service is on: Right still moves focus on the dashboard's row.
 if (( napps >= 2 )); then
-  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  # No force-stop here: it would also switch the accessibility service off (a11y drops a force-stopped package).
+  sh_ am start -W -n "$MAIN" >/dev/null; sleep 3   # an existing task: onNewIntent shows the row, focus on the first tile
+  sh_ settings get secure enabled_accessibility_services | grep -q "$svc" || fail "m3: the mic service is no longer enabled (test setup)"
   a=$(focus_after m3-pass); key DPAD_RIGHT; b=$(focus_after m3-pass)
   [[ -n ${a%%|*} && ${b%%|*} != "${a%%|*}" ]] || fail "m3: with the mic service on, Right did not move focus ('${a%%|*}' -> '${b%%|*}')"
   pass "m3: other keys pass through the mic service (Right moved '${a%%|*}' -> '${b%%|*}')"
