@@ -75,8 +75,11 @@ To remove it: `.\scripts\provision.ps1 -Key anthropic_api_key -Clear`.
 - `The TV did not accept it`: the stored link is unchanged; check you copied the whole link and the TV is awake.
 
 ## On-screen remote for the PC
-A big-button remote window for the PC's touchscreen or mouse: arrows and OK, Back, Home, Power, play/pause, volume,
-mute, shortcuts to the dashboard, YouTube and the Play Store, and a box that types text into a search field on the TV.
+A big-button remote window for the PC's touchscreen or mouse, laid out like a Google TV remote: Power, Input,
+Settings, Assistant, Home, Back, arrows and OK, rewind, play/pause, fast forward, volume, mute, channel and guide.
+Below them are hotkeys for the dashboard, YouTube, Netflix, Prime Video, Disney+, Max, Hulu, Peacock, Paramount+,
+Apple TV, YouTube TV and Spotify (greyed out if the TV does not have the app), and a box that types text into a search
+field on the TV.
 The keyboard works too: arrow keys, Enter (OK), Backspace (Back) and Escape (Home).
 
 In PowerShell, from the tv-home folder:
@@ -84,6 +87,13 @@ In PowerShell, from the tv-home folder:
 git pull
 .\scripts\tv-remote-pc.ps1
 ```
+**As an icon** (no PowerShell window each time): run this once, from the tv-home folder:
+```
+.\scripts\install-remote-shortcut.ps1
+```
+It puts "TV Remote" on the desktop and in the Start menu (right-click it there > Pin to taskbar). `-Remove` takes both
+away. It changes only the PC.
+
 It uses the adb in `%LOCALAPPDATA%\tv-home-tools`, opens no port and sends only the fixed commands its buttons name.
 Typed text may use letters, numbers, spaces and `. , - _ @`. For another TV address: `-Serial 192.168.68.71:5555`.
 
