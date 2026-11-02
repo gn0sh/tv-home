@@ -39,6 +39,19 @@ def _clean(text: str, limit: int = 40) -> str:
     return re.sub(r"[^\w .,()+-]", "", text)[:limit].strip()
 
 
+def _safe(text: object, limit: int = 160) -> str:
+    """Error text for the terminal: printable characters only, so nothing from the network can send escapes
+    (vizio-cli-terminal-escape)."""
+    return "".join(c for c in str(text) if c.isprintable())[:limit]
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx from the description URL is an error, never followed elsewhere (ssdp-describe-redirect)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
 def parse_ssdp(packet: bytes) -> str | None:
     """The LOCATION URL of one M-SEARCH answer, or None."""
     try:
@@ -58,7 +71,7 @@ def describe(ip: str, location: str, opener=None) -> str | None:
     m = re.match(r"\Ahttp://([0-9.]+)(:\d{1,5})?/", location or "")
     if not m or m.group(1) != ip or not _private(ip):
         return None
-    opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
         with opener.open(location, timeout=2) as resp:
             body = resp.read(DESCRIPTION_MAX).decode("utf-8", "replace")
@@ -101,22 +114,28 @@ def discover(wait: float = SSDP_WAIT, sock_factory=None, describer=describe) -> 
 
 
 def _add_host_to_config(path: Path, host: str) -> str:
-    """Adds a [vizio] section when there is none. An existing one is left as it is (Brian's file)."""
-    from .config import ConfigError, load_config
+    """Adds a [vizio] section when there is none. An existing one is left as it is (Brian's file), and a file that does
+    not parse is not touched (vizio-config-append-dup). The write is atomic."""
+    import tomllib
 
+    from .googletv import _write_atomic
+
+    by_hand = f"Add these two lines to {path} yourself:\n[vizio]\nhost = \"{host}\""
     try:
-        current = load_config(path)
-    except ConfigError:
-        current = None
-    if current is not None and current.vizio is not None:
-        if current.vizio.host == host:
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        data = tomllib.loads(existing)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return "config.toml could not be read, so it was not changed. " + by_hand
+    current = data.get("vizio")
+    if current is not None:
+        have = current.get("host") if isinstance(current, dict) else None
+        if have == host:
             return f"config.toml already has [vizio] host = \"{host}\"."
-        return (f"config.toml has [vizio] host = \"{current.vizio.host}\"; this run used {host}. "
+        return (f"config.toml already has a [vizio] section; this run used {host}. "
                 "Edit config.toml if the TV's address changed.")
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
     sep = "" if not existing or existing.endswith("\n") else "\n"
-    path.write_text(existing + sep + f"\n[vizio]\nhost = \"{host}\"\n", encoding="utf-8")
+    _write_atomic(path, (existing + sep + f"\n[vizio]\nhost = \"{host}\"\n").encode("utf-8"))
     return f"Added [vizio] host = \"{host}\" to {path}."
 
 
@@ -128,15 +147,20 @@ def _pick_host(args, config_host: str | None, ask=input, finder=discover) -> str
         return config_host
     print("Looking for a Vizio on the home network...")
     found = finder()
+    check = ("Check the address against the Vizio's own screen (Settings > Network > Network Information) "
+             "before you say yes: any device on the network can answer this search.")
     if len(found) == 1:
         ip, name = found[0]
-        answer = ask(f"Found {name} at {ip}. Use it? [Y/n] ").strip().lower()
-        if answer in ("", "y", "yes"):
+        print(f"Found a device calling itself {name} at {ip}.")
+        print(check)
+        answer = ask(f"Is {ip} the address the Vizio shows? [y/N] ").strip().lower()
+        if answer in ("y", "yes"):
             return ip
     elif found:
         for i, (ip, name) in enumerate(found, 1):
             print(f"  {i}. {name} at {ip}")
-        answer = ask("Which one? Type its number: ").strip()
+        print(check)
+        answer = ask("Type the number of the one whose address the Vizio shows (or press Enter for none): ").strip()
         if answer.isdigit() and 1 <= int(answer) <= len(found):
             return found[int(answer) - 1][0]
     else:
@@ -157,9 +181,19 @@ def main(argv: list[str] | None = None, *, ask=input, finder=discover, remote_fa
     try:
         folder = config_dir()
     except ConfigError as exc:
-        print(f"Error: {exc}")
+        print(f"Error: {_safe(exc)}")
         return 2
     cfg_path = config_path or folder / CONFIG_FILE
+    if args.forget:  # needs no DPAPI: it only deletes files (vizio-forget-not-revoke)
+        from .vizio import VizioVault
+
+        removed = (vault_factory(folder) if vault_factory else VizioVault(folder, None)).forget()
+        print("Removed " + ", ".join(removed) + " from this PC." if removed
+              else "Nothing to remove: the Vizio was not paired.")
+        if removed:
+            print("The Vizio may still list this PC as paired; see the setup guide to remove it there too.")
+        return 0
+
     if vault_factory is None:
         from .secretstore import SecretStoreError, default_protector
         from .vizio import VizioVault
@@ -167,15 +201,10 @@ def main(argv: list[str] | None = None, *, ask=input, finder=discover, remote_fa
         try:
             vault = VizioVault(folder, default_protector())
         except SecretStoreError as exc:
-            print(f"Error: {exc}")
+            print(f"Error: {_safe(exc)}")
             return 2
     else:
         vault = vault_factory(folder)
-
-    if args.forget:
-        removed = vault.forget()
-        print("Removed " + ", ".join(removed) + "." if removed else "Nothing to remove: the Vizio was not paired.")
-        return 0
 
     try:
         config_host = load_config(cfg_path).vizio
@@ -189,7 +218,7 @@ def main(argv: list[str] | None = None, *, ask=input, finder=discover, remote_fa
     try:
         host = check_private_host(host, "Vizio address")
     except ConfigError as exc:
-        print(f"Error: {exc}")
+        print(f"Error: {_safe(exc)}")
         return 2
 
     if remote_factory is None:
@@ -206,12 +235,12 @@ def _pair(remote, host: str, cfg_path: Path, ask) -> int:
     from .devices import CertificateChanged, DeviceRefused, DeviceUnreachable, NotPaired
 
     try:
-        print(asyncio.run(remote.start_pairing()))
+        print(_safe(asyncio.run(remote.start_pairing())))
     except DeviceUnreachable:
         print(f"The Vizio at {host} did not answer on port 7345 or 9000. Is it on, and is the address right?")
         return 1
     except (DeviceRefused, NotPaired) as exc:
-        print(f"Error: {exc}")
+        print(f"Error: {_safe(exc)}")
         return 1
     try:
         pin = ask("Type the PIN shown on the Vizio: ")
@@ -225,10 +254,15 @@ def _pair(remote, host: str, cfg_path: Path, ask) -> int:
         asyncio.run(remote.cancel_pairing())
         print("Error: a different device answered for the PIN than the one that showed it. Nothing was stored.")
         return 1
+    except NotPaired:  # pair-notpaired-uncaught
+        asyncio.run(remote.cancel_pairing())
+        print("The Vizio did not accept that PIN. Run tv-remote-vizio-pair again for a new PIN.")
+        return 1
     except (DeviceUnreachable, DeviceRefused, NotImplementedError) as exc:
         asyncio.run(remote.cancel_pairing())
-        print(f"Error: {exc}")
+        print(f"Error: {_safe(exc)}")
         return 1
+    message = _safe(message)
     print(message)
     if message != "Vizio paired.":
         asyncio.run(remote.cancel_pairing())

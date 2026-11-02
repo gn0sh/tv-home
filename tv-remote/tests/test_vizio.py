@@ -590,6 +590,107 @@ def test_cli_forget(tmp_path, monkeypatch, capsys):
     assert code == 0 and not vault.paired() and "vizio-auth.sealed" in out and TOKEN not in out
 
 
+def test_cli_found_device_defaults_to_no(tmp_path, monkeypatch, capsys):
+    """vizio-ssdp-rogue-relay: Enter does not accept a found device; Brian is told to check the address on the TV."""
+    code, remote, vault = cli(tmp_path, monkeypatch, [], ["", ""], found=[("192.168.68.90", "Living Room")])
+    out = capsys.readouterr().out
+    assert code == 1 and remote.calls == []
+    assert "192.168.68.90" in out and "Settings > Network" in out
+
+
+def test_cli_forget_needs_no_dpapi(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TV_REMOTE_CONFIG_DIR", str(tmp_path))
+    VizioVault(tmp_path, FakeProtector()).save(TOKEN, 7345, "a" * 64)
+
+    def no_dpapi():
+        raise AssertionError("--forget must not need DPAPI")
+
+    monkeypatch.setattr("tv_remote.secretstore.default_protector", no_dpapi)
+    assert vizio_pair.main(["--forget"]) == 0
+    assert not (tmp_path / vz.TOKEN_FILE).exists() and not (tmp_path / vz.PIN_FILE).exists()
+    assert "this PC" in capsys.readouterr().out
+
+
+class RaisingPairRemote(FakePairRemote):
+    def __init__(self, exc, start="The Vizio should now show a 4-digit PIN (port 7345)."):
+        super().__init__()
+        self.exc, self.start = exc, start
+
+    async def start_pairing(self):
+        self.calls.append("start")
+        return self.start
+
+    async def finish_pairing(self, pin):
+        self.calls.append(("finish", pin))
+        raise self.exc
+
+
+def test_cli_not_paired_answer_is_a_refused_pin(tmp_path, monkeypatch, capsys):
+    remote = RaisingPairRemote(NotPaired("vizio"))
+    code, remote, vault = cli(tmp_path, monkeypatch, ["--host", "192.168.68.90"], ["1357"], remote=remote)
+    out = capsys.readouterr().out
+    assert code == 1 and remote.calls[-1] == "cancel" and "did not accept that PIN" in out
+
+
+def test_cli_strips_terminal_escapes(tmp_path, monkeypatch, capsys):
+    remote = RaisingPairRemote(DeviceRefused("The Vizio answered \x1b]0;owned\x07\x1b[2J."), start="hi\x1b[31m")
+    code, remote, vault = cli(tmp_path, monkeypatch, ["--host", "192.168.68.90"], ["1357"], remote=remote)
+    out = capsys.readouterr().out
+    assert code == 1 and "\x1b" not in out and "\x07" not in out and "The Vizio answered" in out
+
+
+def test_cli_leaves_a_broken_config_alone(tmp_path, monkeypatch, capsys):
+    (tmp_path / "cfg").mkdir()
+    broken = '[lg]\nhost = "192.168.68.61\n'
+    (tmp_path / "cfg" / "config.toml").write_text(broken)
+    code, remote, vault = cli(tmp_path, monkeypatch, ["--host", "192.168.68.90"], ["1357"])
+    out = capsys.readouterr().out
+    assert code == 0 and (tmp_path / "cfg" / "config.toml").read_text() == broken
+    assert 'host = "192.168.68.90"' in out and "yourself" in out
+
+
+def test_cli_never_adds_a_second_vizio_section(tmp_path, monkeypatch, capsys):
+    (tmp_path / "cfg").mkdir()
+    text = '[lg]\nhost = "192.168.68.61"\nmac = "A8:23:FE:01:02:03"\n\n[vizio]\nhost = "not an ip"\n'
+    (tmp_path / "cfg" / "config.toml").write_text(text)
+    code, remote, vault = cli(tmp_path, monkeypatch, ["--host", "192.168.68.90"], ["1357"])
+    assert code == 0 and (tmp_path / "cfg" / "config.toml").read_text() == text
+
+
+def test_describe_does_not_follow_redirects():
+    """ssdp-describe-redirect: the default opener turns a 3xx into an error."""
+    import http.server
+    import threading
+
+    hits = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            hits.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:%d/elsewhere" % self.server.server_port)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=srv.handle_request, daemon=True)
+    t.start()
+    try:
+        port = srv.server_port
+        orig = vizio_pair._private
+        vizio_pair._private = lambda ip: True  # 127.0.0.1 stands in for a LAN address here
+        try:
+            assert vizio_pair.describe("127.0.0.1", f"http://127.0.0.1:{port}/d.xml") is None
+        finally:
+            vizio_pair._private = orig
+    finally:
+        t.join(2)
+        srv.server_close()
+    assert hits == ["/d.xml"]
+
+
 def test_ssdp_parsing_and_vizio_check():
     pkt = b"HTTP/1.1 200 OK\r\nLOCATION: http://192.168.68.90:8008/ssdp/device-desc.xml\r\nST: x\r\n\r\n"
     assert vizio_pair.parse_ssdp(pkt) == "http://192.168.68.90:8008/ssdp/device-desc.xml"
