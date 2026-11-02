@@ -624,12 +624,6 @@ if ! in_front; then
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
 fi
 pass "m3: Home from another app opens the dashboard"
-# Diagnostics (temporary): the first UI dump after the redirect failed on 3dd4656.
-sleep 3
-echo "m3 diag dump: $(sh_ uiautomator dump /sdcard/qa-diag.xml 2>&1 | tr -d '\r' | tail -2)"
-echo "m3 diag focus: $(sh_ dumpsys window | tr -d '\r' | grep -E 'mCurrentFocus|mFocusedApp' | head -2)"
-echo "m3 diag tasks: $(sh_ dumpsys activity activities | tr -d '\r' | grep -E 'topResumedActivity|\* Task\{' | head -6)"
-sleep 2; echo "m3 diag tasks later: $(resumed | head -1)"
 if (( napps >= 2 )); then
   start=$(focus_after m3); start_name=${start%%|*}
   key DPAD_RIGHT; key DPAD_RIGHT
