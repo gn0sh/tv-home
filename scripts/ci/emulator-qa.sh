@@ -611,10 +611,19 @@ if [[ -z $a11y_before || $a11y_before == null ]]; then list="$svc"; else list="$
 sh_ settings put secure enabled_accessibility_services "$list"
 sh_ settings put secure accessibility_enabled 1
 sleep 3
+# The service must be bound before any key reaches it.
+for _ in $(seq 1 10); do sh_ dumpsys accessibility | tr -d '\r' | grep -q "MicKeyService" && break; sleep 1; done
+a11y_state() { sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services|Enabled services|MicKeyService|isKeyEventFilter|filter' | head -12; }
+sh_ dumpsys accessibility | tr -d '\r' | grep -q "MicKeyService" || { a11y_state; fail "m3: the key service was not bound after turning it on"; }
 other_app
 in_front && fail "m3: Settings did not come to the front (test setup)"
 sh_ input keyevent KEYCODE_HOME; sleep 3
-in_front || fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
+if ! in_front; then
+  a11y_state
+  sh_ input keyevent KEYCODE_SEARCH; sleep 3
+  echo "after SEARCH: $(resumed | head -1)"
+  fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
+fi
 pass "m3: Home from another app opens the dashboard"
 if (( napps >= 2 )); then
   start=$(focus_after m3); start_name=${start%%|*}
