@@ -22,15 +22,16 @@ interface CacheFile {
 }
 
 /** java.io implementation: write to a sibling temp file, then atomic rename. */
-class JvmCacheFile(private val file: File) : CacheFile {
-    /** A file over [CachedAgenda.MAX_FILE_BYTES] is read as no cache; at most that many plus one byte are read. */
+class JvmCacheFile(private val file: File, private val maxBytes: Int = CachedAgenda.MAX_FILE_BYTES) : CacheFile {
+    /** A file over [maxBytes] is read as no cache; at most that many plus one byte are read. */
     override fun read(): String? {
         if (!file.isFile) return null
-        val bytes = file.inputStream().use { it.readUpTo(CachedAgenda.MAX_FILE_BYTES + 1) }
-        return if (bytes.size > CachedAgenda.MAX_FILE_BYTES) null else String(bytes, Charsets.UTF_8)
+        val bytes = file.inputStream().use { it.readUpTo(maxBytes + 1) }
+        return if (bytes.size > maxBytes) null else String(bytes, Charsets.UTF_8)
     }
 
     override fun writeAtomic(text: String) {
+        file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, file.name + ".tmp")
         try {
             FileOutputStream(tmp).use { out ->
