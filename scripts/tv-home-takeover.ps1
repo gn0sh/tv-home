@@ -139,7 +139,7 @@ if ($Rollback) {
         exit 1
     }
     Remove-Item $RollbackFile -ErrorAction SilentlyContinue
-    Write-Host "Done. Home is now: $(Get-TvHome)"
+    Write-Host "Done. The Home role is now held by: $(Adb @('shell', 'cmd', 'role', 'get-role-holders', 'android.app.role.HOME'))"
     exit 0
 }
 
@@ -156,8 +156,10 @@ if ($SetHome) {
     Save-Rollback $saved
     Adb @('shell', 'content', 'insert', '--uri', 'content://com.gnosh.tvhome.provision/home_entry', '--bind', 'on:i:1') | Out-Null
     Adb @('shell', 'cmd', 'package', 'set-home-activity', $HomeComponent) | Out-Null
-    $now = Get-TvHome
-    if ($now -ne $HomeComponent) { Write-Warning "Home now resolves to '$now', not the dashboard. Run -Rollback and tell Claude." }
+    # set-home-activity makes the app the HOME role holder; resolve-activity keeps listing the system launcher, so the
+    # role is what is checked.
+    $now = Adb @('shell', 'cmd', 'role', 'get-role-holders', 'android.app.role.HOME')
+    if ($now -ne $Pkg) { Write-Warning "The Home role is held by '$now', not the dashboard. Run -Rollback and tell Claude." }
     else { Write-Host 'Home: done. Press Home on the remote to check.' }
 }
 

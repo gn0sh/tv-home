@@ -590,6 +590,7 @@ fi
 
 step "M3 Home and mic: off as installed; the takeover commands make Home and the mic open the dashboard; rollback restores"
 # The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV.
+home_role() { sh_ cmd role get-role-holders android.app.role.HOME | tr -d '\r' | head -1; }
 home_now() { sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tr -d '\r' | grep / | tail -1 || true; }
 other_app() { sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true; sleep 3; }
 stock_home=$(home_now)
@@ -604,18 +605,11 @@ m3_cleanup() {
 }
 [[ -n $stock_home && $stock_home != "$PKG/"* ]] || fail "m3: home is '$stock_home' before the takeover (HomeEntry must be off as installed)"
 pass "m3: as installed, Home is still the TV's own ($stock_home)"
-echo "content insert: $(sh_ content insert --uri content://com.gnosh.tvhome.provision/home_entry --bind on:i:1 2>&1 | tr -d '\r' | head -3)"   # pm enable is refused for a release app
-echo "HomeEntry state: $(sh_ dumpsys package "$PKG" | tr -d '\r' | grep -A3 -E 'enabledComponents|disabledComponents' | tr '\n' ' ')"
-echo "set-home-activity: $(sh_ cmd package set-home-activity "$PKG/.HomeEntry" 2>&1 | tr -d '\r' | head -3)"
-echo "home role holders: $(sh_ cmd role get-role-holders android.app.role.HOME 2>&1 | tr -d '\r')"
-echo "resolve (full): $(sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1 | tr -d '\r' | tr '\n' ' ')"
-if [[ $(home_now) != "$PKG/.HomeEntry" ]]; then
-  echo "role add: $(sh_ cmd role add-role-holder --user 0 android.app.role.HOME "$PKG" 2>&1 | tr -d '\r' | head -3)"
-  sleep 2
-  echo "home role holders now: $(sh_ cmd role get-role-holders android.app.role.HOME 2>&1 | tr -d '\r')"
-  echo "resolve now: $(sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1 | tr -d '\r' | tr '\n' ' ')"
-fi
-[[ $(home_now) == "$PKG/.HomeEntry" ]] || fail "m3: after set-home-activity, home is '$(home_now)'"
+sh_ content insert --uri content://com.gnosh.tvhome.provision/home_entry --bind on:i:1 >/dev/null   # pm enable is refused for a release app
+sh_ cmd package set-home-activity "$PKG/.HomeEntry" >/dev/null
+# set-home-activity makes us the HOME role holder; resolve-activity keeps listing the priority-2 system launcher, so
+# the role (and the Home key itself, below) is what is checked.
+[[ $(home_role) == "$PKG" ]] || fail "m3: after set-home-activity, the HOME role holder is '$(home_role)'"
 other_app
 in_front && fail "m3: Settings did not come to the front (test setup)"
 sh_ input keyevent KEYCODE_HOME; sleep 3
@@ -637,7 +631,7 @@ ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from t
 pass "m3: Home from the full-screen calendar returns to the home row"
 sh_ cmd package set-home-activity "$stock_home" >/dev/null
 sh_ content delete --uri content://com.gnosh.tvhome.provision/home_entry >/dev/null
-[[ $(home_now) == "$stock_home" ]] || fail "m3: rollback left home at '$(home_now)', expected '$stock_home'"
+[[ $(home_role) == "${stock_home%%/*}" ]] || fail "m3: rollback left the HOME role with '$(home_role)', expected '${stock_home%%/*}'"
 other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front && fail "m3: after rollback, Home still opens the dashboard"
 pass "m3: rollback (set-home-activity back, HomeEntry off) restores the TV's own Home"
