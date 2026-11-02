@@ -25,7 +25,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); touch-action: none; } /* no pinch-zoom or pan on the touchscreen */
 body {
   font-family: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
   color: var(--ink);
@@ -65,7 +65,7 @@ body {
 .cap { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 76px; }
 .cap span { font-size: 11px; color: var(--ink-3); letter-spacing: .3px; }
 button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; background: none; cursor: pointer;
-  touch-action: manipulation; outline: none; }
+  touch-action: none; outline: none; }
 .key {
   display: grid; place-items: center;
   background: linear-gradient(180deg, var(--key-top), var(--key-bot));
@@ -396,6 +396,10 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
   window.addEventListener("blur", release);
   document.addEventListener("pointerout", function (e) { if (held && e.target === held && !held.contains(e.relatedTarget)) release(); });
   document.addEventListener("contextmenu", function (e) { e.preventDefault(); }); // long-press on a touchscreen
+  // Nothing dragged onto the window (a link, a file) may navigate it: another page here would get the bridge.
+  ["dragenter", "dragover", "drop"].forEach(function (t) {
+    window.addEventListener(t, function (e) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "none"; }, true);
+  });
 
   // ---- keyboard: arrows, Enter = OK, Backspace = Back, Escape = Home (not while typing) ----
   var KEYMAP = { ArrowUp: "DPAD_UP", ArrowDown: "DPAD_DOWN", ArrowLeft: "DPAD_LEFT", ArrowRight: "DPAD_RIGHT",

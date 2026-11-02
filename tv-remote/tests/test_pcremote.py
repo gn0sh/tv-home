@@ -9,10 +9,18 @@ import pytest
 
 from tv_remote import pcremote
 from tv_remote.devices import DeviceUnreachable, LgStatus, NotPaired
-from tv_remote.pcremote import AdbShell, LgVolume, RemoteApi
+from tv_remote.pcremote import SEALED, AdbShell, LgVolume, make_bridge
 
 SERIAL = "192.168.68.71:5555"
 LG_HOST = "192.168.68.61"
+
+
+class RemoteApi:
+    """Test adapter: the five bridge functions as attributes, as the page sees them."""
+
+    def __init__(self, tv, lg):
+        for f in make_bridge(tv, lg):
+            setattr(self, f.__name__, f)
 
 
 class FakeStdin:
@@ -173,11 +181,91 @@ def test_serial_must_be_ip_port():
         AdbShell("adb", "192.168.68.71:5555 && calc")
 
 
-def test_only_the_five_bridge_methods_are_public():
-    public = {n for n, _ in inspect.getmembers(RemoteApi, inspect.isfunction) if not n.startswith("_")}
-    assert public == {"start", "key", "app", "text", "volume"}
-    api = RemoteApi(shell()[0], None)
-    assert all(n.startswith("_") for n in vars(api))  # pywebview exposes public attributes too
+def test_the_bridge_is_five_named_functions_and_a_sealed_api_object():
+    names = [f.__name__ for f in make_bridge(shell()[0], None)]
+    assert names == ["start", "key", "app", "text", "volume"]
+    assert dir(SEALED) == []
+    for attr in ("__class__", "__dict__", "_tv", "start", "__init__"):
+        assert getattr(SEALED, attr, None) is None
+
+
+class BridgeWindow:
+    """The parts of a pywebview Window that webview.util.js_bridge_call uses."""
+
+    def __init__(self, functions, js_api):
+        import threading
+
+        self._functions = {f.__name__: f for f in functions}
+        self._js_api = js_api
+        self.results, self.answered = [], threading.Event()
+
+    def evaluate_js(self, script):
+        self.results.append(script)
+        self.answered.set()
+
+
+ATTACK_PATHS = [
+    ("_tv.send", ["rm -rf /sdcard; reboot"]),
+    ("_tv._popen", [["calc.exe"]]),
+    ("_tv._run", [["calc.exe"]]),
+    ("_tv._start", []),
+    ("_lg", ["up"]),
+    ("_lg._handle", [None, "up"]),
+    ("__class__.__init__", [None, None, None]),
+    ("__init__", [None, None]),
+    ("key.__globals__.update", [{"KEYS": ["HOME; reboot"]}]),
+    ("key.__closure__", []),
+    ("start.__globals__.clear", []),
+    ("volume.__wrapped__", ["up"]),
+    ("__getattribute__", ["_tv"]),
+    ("__setattr__", ["_tv", None]),
+    ("__class__.__subclasses__", []),
+    ("constructor", []),
+]
+
+
+def test_page_script_cannot_reach_past_the_five_functions():
+    """Drives pywebview's real dispatcher (jsapi-private-dispatch): private, dunder and dotted names reach nothing."""
+    import time
+
+    from webview.util import js_bridge_call
+
+    lg = FakeLg(10)
+    lg_calls = []
+    sh, fake = shell()
+    window = BridgeWindow(make_bridge(sh, lambda cmd: lg_calls.append(cmd) or "ok 11"), SEALED)
+    keys_before = pcremote.KEYS
+    for i, (name, params) in enumerate(ATTACK_PATHS):
+        js_bridge_call(window, name, params, str(i))
+    time.sleep(0.3)  # any call that did resolve runs on its own thread
+    assert window.results == []
+    assert fake.procs == [] and fake.runs == [] and lg_calls == [] and lg.calls == []
+    assert pcremote.KEYS is keys_before and "HOME; reboot" not in pcremote.KEYS
+    # control: the real names do work through the same dispatcher
+    js_bridge_call(window, "key", ["HOME"], "ok")
+    assert window.answered.wait(5)
+    assert fake.lines == ["input keyevent KEYCODE_HOME"]
+    js_bridge_call(window, "volume", ["up"], "ok2")
+    for _ in range(50):
+        if lg_calls:
+            break
+        time.sleep(0.05)
+    assert lg_calls == ["up"]
+
+
+def test_a_plain_js_api_object_would_be_reachable():
+    """Why SEALED exists: with an ordinary object, pywebview 6.2.1 walks straight to private attributes."""
+    from webview.util import js_bridge_call
+
+    hit = []
+
+    class Plain:
+        def __init__(self):
+            self._secret = type("S", (), {"send": staticmethod(lambda x: hit.append(x))})()
+
+    window = BridgeWindow([], Plain())
+    js_bridge_call(window, "_secret.send", ["boom"], "1")
+    assert window.answered.wait(5) and hit == ["boom"]
 
 
 # ---- adb shell ----
@@ -427,3 +515,73 @@ def test_window_size_tall_or_wide():
     w, h = pcremote.window_size(1093, 574)  # 1366x768 at 125%
     assert h <= 574 and w <= 1093
     assert pcremote.window_size(None, None) == (420, 900)
+
+
+def test_work_area_from_pywebview_screens():
+    class Frame:
+        Width, Height = 1366, 728
+
+    class Screen:
+        width, height, frame = 1366, 768, Frame()
+
+    class Wv:
+        screens = [Screen()]
+
+    assert pcremote._work_area(Wv()) == (1366, 728)
+    Screen.frame = None
+    assert pcremote._work_area(Wv()) == (1366, 720)
+
+    class Broken:
+        @property
+        def screens(self):
+            raise RuntimeError("no gui")
+
+    assert pcremote._work_area(Broken()) == (None, None)
+
+
+def test_close_is_prompt_cancels_waiting_presses_and_closes_the_lg():
+    import asyncio
+    import threading
+    import time
+
+    class SlowLg(FakeLg):
+        closed = False
+
+        async def status(self):
+            await asyncio.sleep(30)
+
+        async def close(self):
+            SlowLg.closed = True
+
+    lg = SlowLg()
+    vol = LgVolume(lg, timeout=30)
+    out = []
+    t = threading.Thread(target=lambda: out.append(vol("up")))
+    t.start()
+    time.sleep(0.2)
+    began = time.monotonic()
+    vol.close()
+    t.join(5)
+    assert time.monotonic() - began < 3
+    assert out == ["error the remote is closing"]
+    assert SlowLg.closed
+    assert vol("up") == "error the remote is closing"
+    assert not vol._thread.is_alive()
+
+
+def test_lg_remote_close_closes_its_link():
+    import asyncio
+
+    from tv_remote.lg import LgRemote
+
+    closed = []
+
+    class Link:
+        async def close(self):
+            closed.append(True)
+
+    remote = LgRemote(LG_HOST, "AA:BB:CC:DD:EE:FF", vault=None)
+    remote._link = Link()
+    asyncio.run(remote.close())
+    assert closed == [True] and remote._link is None
+    asyncio.run(remote.close())  # closing twice is fine

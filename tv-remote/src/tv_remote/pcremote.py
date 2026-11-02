@@ -1,5 +1,6 @@
-"""The PC on-screen remote (ADR 0006): a pywebview window whose page talks to this module only through pywebview's
-``js_api`` bridge. No HTTP server, no listening port.
+"""The PC on-screen remote (ADR 0006): a pywebview window whose page talks to this module only through the five
+functions of make_bridge, registered with ``window.expose``; the ``js_api`` object is SEALED, so page script cannot
+walk to anything else. No HTTP server, no listening port.
 
 Google TV keys, app launches and typed text go over one long-lived ``adb -s <serial> shell``, exactly as the classic
 PowerShell remote (scripts/tv-remote-pc.ps1) does. Volume and mute go to the paired LG directly (lgpipe.handle, cap 60,
@@ -13,7 +14,6 @@ never carry the LG's address, client key, certificate or any exception text.
 from __future__ import annotations
 
 import asyncio
-import functools
 import os
 import re
 import subprocess
@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any
@@ -212,33 +213,55 @@ class LgVolume:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name="lg-volume", daemon=True)
         self._thread.start()
-        self._pending = 0
+        self._pending: set[Any] = set()
         self._failed_at: float | None = None
+        self._closed = False
         self._lock = threading.Lock()
 
     def __call__(self, cmd: str) -> str:
         """lgpipe's reply: ``ok <level|muted|unmuted|->`` or ``error <reason>``; ``busy`` when presses pile up."""
         with self._lock:
+            if self._closed:
+                return "error the remote is closing"
             if self._failed_at is not None and self._clock() - self._failed_at < RETRY_AFTER:
                 return "error the LG did not answer"
-            if self._pending >= LG_MAX_PENDING:
+            if len(self._pending) >= LG_MAX_PENDING:
                 return "busy"
-            self._pending += 1
-        fut = asyncio.run_coroutine_threadsafe(self._handle(self._lg, cmd), self._loop)
+            fut = asyncio.run_coroutine_threadsafe(self._handle(self._lg, cmd), self._loop)
+            self._pending.add(fut)
         try:
             reply = fut.result(timeout=self._timeout)
         except FutureTimeout:
             fut.cancel()
             reply = "error the LG did not answer"
+        except CancelledError:
+            reply = "error the remote is closing"
         except Exception as exc:  # noqa: BLE001  handle() already turns errors into text; this is a backstop
             reply = "error " + type(exc).__name__
         with self._lock:
-            self._pending -= 1
-            self._failed_at = self._clock() if reply == "error the LG did not answer" else None
+            self._pending.discard(fut)
+            if not self._closed:
+                self._failed_at = self._clock() if reply == "error the LG did not answer" else None
         return reply
 
-    def close(self) -> None:
+    def close(self, wait: float = 1.5) -> None:
+        """Shutdown (shutdown-linger): refuse new presses, cancel waiting ones at once, close the LG's websocket and
+        HTTP session (lg-session-leak), then stop the loop. Bounded by ``wait`` seconds."""
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            pending, self._pending = list(self._pending), set()
+        for fut in pending:
+            fut.cancel()
+        closer = getattr(self._lg, "close", None)
+        if closer is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(closer(), self._loop).result(timeout=wait)
+            except Exception:  # noqa: BLE001  a TV that does not answer must not hold the exit
+                pass
         self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=wait)
 
 
 def load_lg() -> LgVolume | None:
@@ -262,89 +285,124 @@ def _reply(ok: bool, status: str, **extra: Any) -> dict[str, Any]:
     return {"ok": ok, "status": status, **extra}
 
 
-def _safe(method):
+def _guard(fn: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]:
     """No exception text (which could name a host or a file) ever reaches the page: pywebview would send it."""
-
-    @functools.wraps(method)
-    def wrapper(self, *args):
-        try:
-            return method(self, *args)
-        except Exception as exc:  # noqa: BLE001
-            return _reply(False, "Something went wrong (" + type(exc).__name__ + "). Try again.")
-
-    return wrapper
+    try:
+        return fn(*args)
+    except Exception as exc:  # noqa: BLE001
+        return _reply(False, "Something went wrong (" + type(exc).__name__ + "). Try again.")
 
 
-class RemoteApi:
-    """Public methods are exposed to JavaScript; everything else is private (pywebview skips names starting with _)."""
+def _start(tv: AdbShell, lg: Any) -> dict[str, Any]:
+    apps = [{"name": n, "pkg": p, "installed": None} for n, p in APPS]
+    if not tv.connect():
+        return _reply(False, tv.offline_message, apps=apps, lg=lg is not None, serial=tv.serial)
+    have = tv.packages()
+    status = f"Ready: {tv.serial}."
+    if have is not None:
+        for a in apps:
+            a["installed"] = a["pkg"] in have
+        status += " Dimmed apps are not on the TV."
+    return _reply(True, status, apps=apps, lg=lg is not None, serial=tv.serial)
 
-    def __init__(self, tv: AdbShell, lg: Callable[[str], str] | None):
-        self._tv, self._lg = tv, lg
 
-    @_safe
-    def start(self) -> dict[str, Any]:
-        apps = [{"name": n, "pkg": p, "installed": None} for n, p in APPS]
-        if not self._tv.connect():
-            return _reply(False, self._tv.offline_message, apps=apps, lg=self._lg is not None, serial=self._tv.serial)
-        have = self._tv.packages()
-        status = f"Ready: {self._tv.serial}."
-        if have is not None:
-            for a in apps:
-                a["installed"] = a["pkg"] in have
-            status += " Dimmed apps are not on the TV."
-        return _reply(True, status, apps=apps, lg=self._lg is not None, serial=self._tv.serial)
+def _key(tv: AdbShell, code: object) -> dict[str, Any]:
+    line = key_line(code)
+    if line is None:
+        return _reply(False, "That button is not on this remote.")
+    return _reply(*tv.send(line))
 
-    @_safe
-    def key(self, code: object) -> dict[str, Any]:
-        line = key_line(code)
-        if line is None:
-            return _reply(False, "That button is not on this remote.")
-        return _reply(*self._tv.send(line))
 
-    @_safe
-    def app(self, pkg: object) -> dict[str, Any]:
-        line = app_line(pkg)
-        if line is None:
-            return _reply(False, "That app is not on this remote.")
-        return _reply(*self._tv.send(line))
+def _app(tv: AdbShell, pkg: object) -> dict[str, Any]:
+    line = app_line(pkg)
+    if line is None:
+        return _reply(False, "That app is not on this remote.")
+    return _reply(*tv.send(line))
 
-    @_safe
-    def text(self, text: object) -> dict[str, Any]:
-        if isinstance(text, str) and not text.strip():
-            return _reply(False, "Type something first.")
-        line = text_line(text)
-        if line is None:
-            return _reply(False, TEXT_HELP)
-        return _reply(*self._tv.send(line))
 
-    @_safe
-    def volume(self, cmd: object) -> dict[str, Any]:
-        if not isinstance(cmd, str) or cmd not in VOLUME_KEYS:
-            return _reply(False, "That button is not on this remote.")
-        if self._lg is None:
-            ok, status = self._tv.send(volume_key_line(cmd))
-            return _reply(ok, "Volume sent to the Google TV (the LG is not set up)." if ok else status, via="googletv")
-        reply = self._lg(cmd)
-        if reply == "busy":
-            return _reply(False, "Still changing the volume...", via="lg")
-        if reply.startswith("ok "):
-            value = reply[3:].strip()
-            if value in ("muted", "unmuted"):
-                return _reply(True, "Muted" if value == "muted" else "Sound on", via="lg", muted=value == "muted")
-            if value.isdigit():
-                limit = " (the most this remote allows)" if int(value) >= VOLUME_CAP else ""
-                return _reply(True, f"Volume {value}{limit}", via="lg", level=int(value))
-            return _reply(True, "Volume changed", via="lg")
-        reason = reply[6:] if reply.startswith("error ") else ""
-        if reason == "the LG did not report its volume":
-            # lgpipe refused to raise an unknown level (volume-step-cap); the adb key must not get round that.
-            return _reply(False, "The LG did not report its volume, so it was not raised.", via="lg")
-        reason = reason if LG_REASON_RE.match(reason) else "did not work"
-        lg_said = "The LG" + reason[6:] if reason.startswith("the LG") else "The LG: " + reason
-        ok, status = self._tv.send(volume_key_line(cmd))
-        if ok:
-            return _reply(True, f"{lg_said}. Sent to the Google TV instead.", via="googletv")
-        return _reply(False, f"{lg_said}. {status}", via="none")
+def _text(tv: AdbShell, text: object) -> dict[str, Any]:
+    if isinstance(text, str) and not text.strip():
+        return _reply(False, "Type something first.")
+    line = text_line(text)
+    if line is None:
+        return _reply(False, TEXT_HELP)
+    return _reply(*tv.send(line))
+
+
+def _volume(tv: AdbShell, lg: Callable[[str], str] | None, cmd: object) -> dict[str, Any]:
+    if not isinstance(cmd, str) or cmd not in VOLUME_KEYS:
+        return _reply(False, "That button is not on this remote.")
+    if lg is None:
+        ok, status = tv.send(volume_key_line(cmd))
+        return _reply(ok, "Volume sent to the Google TV (the LG is not set up)." if ok else status, via="googletv")
+    reply = lg(cmd)
+    if reply == "busy":
+        return _reply(False, "Still changing the volume...", via="lg")
+    if reply.startswith("ok "):
+        value = reply[3:].strip()
+        if value in ("muted", "unmuted"):
+            return _reply(True, "Muted" if value == "muted" else "Sound on", via="lg", muted=value == "muted")
+        if value.isdigit():
+            limit = " (the most this remote allows)" if int(value) >= VOLUME_CAP else ""
+            return _reply(True, f"Volume {value}{limit}", via="lg", level=int(value))
+        return _reply(True, "Volume changed", via="lg")
+    reason = reply[6:] if reply.startswith("error ") else ""
+    if reason == "the LG did not report its volume":
+        # lgpipe refused to raise an unknown level (volume-step-cap); the adb key must not get round that.
+        return _reply(False, "The LG did not report its volume, so it was not raised.", via="lg")
+    reason = reason if LG_REASON_RE.match(reason) else "did not work"
+    lg_said = "The LG" + reason[6:] if reason.startswith("the LG") else "The LG: " + reason
+    ok, status = tv.send(volume_key_line(cmd))
+    if ok:
+        return _reply(True, f"{lg_said}. Sent to the Google TV instead.", via="googletv")
+    return _reply(False, f"{lg_said}. {status}", via="none")
+
+
+class _Sealed:
+    """Passed as pywebview's ``js_api``: an object with no attributes at all, not even ``__class__``.
+
+    pywebview 6.2.1 (util.js_bridge_call) resolves a call by exact name in the exposed-function table, and otherwise
+    walks the dotted name from ``js_api`` with ``getattr(obj, part, None)``, private and dunder names included. A
+    real js_api object (or None) would let page script walk to ``_tv._popen`` or ``key.__globals__``. Every lookup
+    on this one raises AttributeError, which that getattr turns into None, so the walk ends at the first step.
+    """
+
+    __slots__ = ()
+
+    def __getattribute__(self, name: str) -> Any:
+        raise AttributeError(name)
+
+    def __dir__(self) -> list[str]:
+        return []
+
+
+SEALED = _Sealed()
+
+
+def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None) -> tuple[Callable[..., dict[str, Any]], ...]:
+    """The five functions the page may call, registered with ``window.expose`` (finding jsapi-private-dispatch).
+
+    The backends live only in these closures. The page reaches a function only by its exact name in the exposed
+    table; a dotted name such as ``key.__globals__`` is not in the table and falls through to the walk from
+    SEALED, which finds nothing.
+    """
+
+    def start():
+        return _guard(_start, tv, lg)
+
+    def key(code):
+        return _guard(_key, tv, code)
+
+    def app(pkg):
+        return _guard(_app, tv, pkg)
+
+    def text(value):
+        return _guard(_text, tv, value)
+
+    def volume(cmd):
+        return _guard(_volume, tv, lg, cmd)
+
+    return start, key, app, text, volume
 
 
 # ---- the window ----
@@ -369,24 +427,41 @@ def window_size(work_w: int | None, work_h: int | None) -> tuple[int, int]:
     return min(820, max(560, work_w - 40)), max(420, min(600, work_h - 16))
 
 
-def _work_area() -> tuple[int | None, int | None]:
-    """The primary screen's work area in logical (96 dpi) pixels, on Windows; (None, None) elsewhere."""
-    if sys.platform != "win32":
-        return None, None
+def _work_area(webview: Any) -> tuple[int | None, int | None]:
+    """The primary screen's work area in logical pixels, from pywebview (dpi-mode: this process never changes its own
+    DPI awareness; pywebview does that when the window starts, and sizes the window from logical pixels itself).
+    Asked before webview.start, so Windows reports logical sizes. (None, None) when unknown."""
     try:
-        import ctypes
-        from ctypes import wintypes
-
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # pywebview does the same; a second call is a no-op
-        except Exception:  # noqa: BLE001
-            pass
-        rect = wintypes.RECT()
-        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)  # SPI_GETWORKAREA
-        scale = ctypes.windll.user32.GetDpiForSystem() / 96 or 1
-        return int((rect.right - rect.left) / scale), int((rect.bottom - rect.top) / scale)
+        screen = webview.screens[0]
+        frame = getattr(screen, "frame", None)
+        width = int(getattr(frame, "Width", 0) or screen.width)
+        height = int(getattr(frame, "Height", 0) or screen.height - 48)  # 48: a typical taskbar
+        return (width, height) if width > 0 and height > 0 else (None, None)
     except Exception:  # noqa: BLE001
         return None, None
+
+
+def _lock_down(window: Any) -> None:
+    """Windows: nothing dragged onto the window can navigate it, and once the page has loaded no navigation away from
+    it is allowed (jsapi-private-dispatch: another page in this window would get the bridge too)."""
+    if sys.platform != "win32" or getattr(window, "_tv_locked", False):
+        return
+    window._tv_locked = True
+    try:
+        from System import Action
+
+        form = window.native
+
+        def deny(_sender, args):
+            args.Cancel = True
+
+        def apply():
+            form.webview.AllowExternalDrop = False
+            form.webview.CoreWebView2.NavigationStarting += deny
+
+        form.Invoke(Action(apply))
+    except Exception:  # noqa: BLE001  the page's own drop handlers still stop drops
+        pass
 
 
 def _single_instance():
@@ -397,10 +472,25 @@ def _single_instance():
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateMutexW.restype = ctypes.c_void_p
-    handle = kernel32.CreateMutexW(None, False, MUTEX_NAME)
-    if handle and ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+    # Owned from the start (mutex-one-way): the classic remote's WaitOne(0) then fails and it exits.
+    handle = kernel32.CreateMutexW(None, True, MUTEX_NAME)
+    if handle and ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS: not ours, so not owned
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
         return None
     return handle or True
+
+
+def _release(mutex: Any) -> None:
+    if sys.platform != "win32" or mutex is True:
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.ReleaseMutex(ctypes.c_void_p(mutex))
+        kernel32.CloseHandle(ctypes.c_void_p(mutex))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _show_error(message: str) -> None:
@@ -442,17 +532,19 @@ def main(argv: list[str] | None = None) -> None:
                 pass
         tv = AdbShell(adb, args.serial)
         lg = load_lg()
-        api = RemoteApi(tv, lg)
-        width, height = window_size(*_work_area())
-        webview.create_window("TV Remote", html=ui_html(), js_api=api, width=width, height=height,
-                              min_size=(340, 400), background_color="#0B0D12", text_select=False)
+        width, height = window_size(*_work_area(webview))
+        window = webview.create_window("TV Remote", html=ui_html(), js_api=SEALED,
+                                       width=width, height=height, min_size=(340, 400),
+                                       background_color="#0B0D12", text_select=False)
+        window.expose(*make_bridge(tv, lg))
+        window.events.loaded += lambda: _lock_down(window)
         try:
             webview.start(private_mode=True, icon=icon_path())
         finally:
             tv.close()
             if lg is not None:
                 lg.close()
-        del mutex
+            _release(mutex)
     except Exception as exc:  # noqa: BLE001  started from an icon there is no console, so show it in a box
         _show_error(f"TV remote could not start: {exc}")
         sys.exit(1)
