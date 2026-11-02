@@ -130,9 +130,10 @@ class AgendaActivity : ComponentActivity() {
                     value = Instant.now().epochSecond / 60
                 }
             }
-            val model = remember(state, is24h, minute) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h) }
-            // Titles stay hidden until the stored Quiet value has loaded (null), so a guest never sees one flash.
+            // Titles stay hidden until the stored Quiet value has loaded (null), so a guest never sees one flash. The same
+            // value covers the tile and the full-screen calendar (quiet-calendar-fullscreen).
             val hideTitles = quiet != false
+            val model = remember(state, is24h, minute, hideTitles) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h, hideTitles) }
             val tile = remember(state, is24h, minute, hideTitles) { calendarTile(state, Instant.now(), ZoneId.systemDefault(), is24h, hideTitles) }
             HomeScreen(
                 apps = apps,

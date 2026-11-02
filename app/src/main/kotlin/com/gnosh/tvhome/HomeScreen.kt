@@ -267,6 +267,14 @@ fun HomeScreen(
     var watch by remember { mutableStateOf<WatchTarget?>(null) }
     val watchPill = remember { FocusRequester() }
     val quietPill = remember { FocusRequester() }
+    // watch-pill-focus-loss: the pill can vanish while focused (the game ended); focus moves on to Quiet, else Ask.
+    var watchFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(watch == null) {
+        if (watch == null && watchFocused) {
+            watchFocused = false
+            if (!focusSoon(quietPill)) focusSoon(askTile)
+        }
+    }
     val context = LocalContext.current
     val shown = if (idleState == IdleState.DIM) theme.dimmed() else theme
     Box(
@@ -318,6 +326,8 @@ fun HomeScreen(
                     DockPill(
                         shown, label = "Watch ${w.network}", description = WATCH_DESC_PREFIX + w.network,
                         requester = watchPill, up = calendar, maxWidthDp = WATCH_PILL_MAX_DP, active = false,
+                        // The focus loss that comes with the pill's removal (watch already null) must not clear the flag.
+                        onFocus = { f -> if (f) watchFocused = true else if (watch != null) watchFocused = false },
                     ) { InstalledApps.launchPackage(context, w.packageName) }
                 }
                 val on = quiet == true
@@ -682,6 +692,7 @@ private fun DockPill(
     up: FocusRequester,
     maxWidthDp: Int,
     active: Boolean,
+    onFocus: (Boolean) -> Unit = {},
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -699,7 +710,7 @@ private fun DockPill(
             .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
             .focusRequester(requester)
             .focusProperties { this.up = up }
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
             .semantics(mergeDescendants = true) { contentDescription = description }
             .clickable(onClick = onClick)
             .padding(horizontal = 24.dp),

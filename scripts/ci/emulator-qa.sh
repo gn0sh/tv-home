@@ -941,7 +941,18 @@ else
     key DPAD_DOWN; cur=$(focus_after q2)
     [[ ${cur%%|*} == Calendar,* ]] || fail "q2: Down from the first tile reached '${cur%%|*}', not the Calendar tile"
     key DPAD_DOWN; cur=$(focus_after q2)
-    case ${cur%%|*} in ""|"${ASK_DESC_PREFIX}"*) ;; *) fail "q2: Down from Calendar reached '${cur%%|*}', not the Ask pill" ;; esac
+    # The Ask pill hides its focused node from uiautomator (it clears its semantics), so an empty node is confirmed by
+    # behaviour: OK opens the Ask view, and Back returns focus to the pill.
+    case ${cur%%|*} in
+      "${ASK_DESC_PREFIX}"*) ;;
+      "")
+        key DPAD_CENTER; sleep 1
+        expect_text "q2-ask" "Ask Claude full screen"
+        key BACK; sleep 1
+        in_front || fail "q2: Back from the Ask view left the app" ;;
+      *) fail "q2: Down from Calendar reached '${cur%%|*}', not the Ask pill" ;;
+    esac
+    pass "q2: Down from Calendar reached the Ask pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
     [[ ${cur%%|*} == "Watch the game on YouTube" ]] || fail "q2: Right from Ask reached '${cur%%|*}', not the Watch pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
@@ -957,6 +968,17 @@ else
     grep -qF 'resource-id="hero_quiet"' <<<"$ui" || fail "q2: no visible Quiet marker with Quiet on"
     grep -qF 'Quiet mode, on' <<<"$ui" || fail "q2: the Quiet pill does not say on"
     pass "q2: Quiet hides event titles on the next redraw and shows the marker"
+    # quiet-calendar-fullscreen: OK on the Calendar tile opens the full screen, which hides the title too.
+    key DPAD_UP   # Quiet pill -> Calendar (Up from a pill is set to Calendar)
+    cur=$(focus_after q2)
+    [[ ${cur%%|*} == Calendar,* ]] || fail "q2: could not reach the Calendar tile from the Quiet pill (now '${cur%%|*}')"
+    key DPAD_CENTER; sleep 2
+    ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-q2-quiet-calendar.xml"
+    grep -qF 'content-desc="Calendar full screen"' <<<"$ui" || fail "q2: OK on the Calendar tile did not open the full screen"
+    grep -qF 'QA Dentist' <<<"$ui" && fail "q2: the full-screen calendar shows an event title with Quiet on"
+    pass "q2: the full-screen calendar hides event titles with Quiet on"
+    key BACK; sleep 1
+    in_front || fail "q2: Back from the full-screen calendar left the app"
     q2_restart
     ui=$(ui_text)
     grep -qF 'resource-id="hero_quiet"' <<<"$ui" && ! grep -qF 'QA Dentist' <<<"$ui" || fail "q2: Quiet did not survive a restart"
