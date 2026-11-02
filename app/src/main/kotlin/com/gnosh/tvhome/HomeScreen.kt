@@ -39,7 +39,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -89,10 +88,12 @@ const val CALENDAR_FULL_SCREEN = "Calendar full screen"
  * the activity with one press. Colours and tile size come from [theme].
  *
  * Focus: on launch the first app tile, or the Calendar tile while there are no apps; if apps arrive before the user
- * has pressed a key, focus moves to the first app tile. Down from the app row reaches the dock and Down again the Ask
- * button (2D focus search; Up from the button goes to the Calendar tile, set explicitly); Up from the dock
- * returns to the app tile that last had focus (focusRestorer on the row, falling back to the remembered tile, then the
- * first). The row's scroll position and last-focused tile live above the full-screen switch, so they survive it.
+ * has pressed a key, focus moves to the first app tile. Down from an app tile goes to the dock (2D search: the Calendar
+ * tile, or the Ask button from a tile far right; an explicit down from a scrolled lazy item lost focus on Android, see
+ * fix-app-row-scroll); Up from the button goes to the Calendar tile (set explicitly). Up from
+ * the dock returns to the app tile that last had focus if it is on screen, else to the tile above (a custom enter on
+ * the row, not focusRestorer: see [AppFocus.enterTarget]). The row's scroll position and last-focused tile live above
+ * the full-screen switch, so they survive it.
  */
 @Composable
 fun HomeScreen(
@@ -176,10 +177,19 @@ private class AppFocus {
 
     fun requester(pkg: String): FocusRequester = requesters.getOrPut(pkg) { FocusRequester() }
 
-    /** Fallback when focusRestorer has nothing saved (e.g. the row was recomposed): the last app if listed, else the first. */
-    fun fallback(apps: List<TileApp>): FocusRequester? {
-        val pkg = lastFocused?.takeIf { p -> apps.any { it.app.packageName == p } } ?: apps.firstOrNull()?.app?.packageName
-        return pkg?.let(::requester)
+    /**
+     * Where focus goes when it enters the row from outside (Up from the dock): the tile that last had focus, if it is
+     * still listed and on screen; otherwise null, and the 2D search picks the tile above the dock.
+     *
+     * Not focusRestorer (fix-app-row-scroll): it saves the focus group's direct child focus target, which for a LazyRow
+     * is the row's own scrollable container, not the tile. Entering the row then gave focus to that invisible container,
+     * and Right/Left had nothing to move to, so the row could not be scrolled until focus left it.
+     */
+    fun enterTarget(apps: List<TileApp>, row: LazyListState): FocusRequester? {
+        val pkg = lastFocused ?: return null
+        val index = apps.indexOfFirst { it.app.packageName == pkg }
+        if (index < 0 || row.layoutInfo.visibleItemsInfo.none { it.index == index }) return null
+        return requester(pkg)
     }
 
     fun forget(keep: Set<String>) { requesters.keys.retainAll(keep) }
@@ -233,14 +243,13 @@ private fun AppRow(
         return
     }
     LaunchedEffect(apps) { appFocus.forget(apps.mapTo(HashSet()) { it.app.packageName }) }
-    // A lazy row clips to its bounds; the content padding leaves room for the focus scale. focusRestorer only sets
-    // enter/exit focus properties and focusGroup cannot take focus itself, so Back still finds no focusable ancestor
-    // (home-back-twice).
+    // A lazy row clips to its bounds; the content padding leaves room for the focus scale. The enter property and
+    // focusGroup cannot take focus themselves, so Back still finds no focusable ancestor (home-back-twice).
     LazyRow(
         state = rowState,
         modifier = Modifier
             .fillMaxWidth()
-            .focusRestorer { appFocus.fallback(apps) ?: FocusRequester.Default }
+            .focusProperties { enter = { appFocus.enterTarget(apps, rowState) ?: FocusRequester.Default } }
             .focusGroup(),
         contentPadding = rowPadding(theme),
         horizontalArrangement = Arrangement.spacedBy(TILE_GAP_DP.dp),
@@ -278,6 +287,7 @@ private fun TileFrame(
     requester: FocusRequester?,
     onClick: () -> Unit,
     onFocused: () -> Unit = {},
+    down: FocusRequester? = null,
     content: @Composable BoxScope.(focused: Boolean) -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -294,6 +304,7 @@ private fun TileFrame(
                 .background(color(if (focused) theme.focusFill else theme.tile), shape)
                 .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
                 .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
+                .then(if (down != null) Modifier.focusProperties { this.down = down } else Modifier)
                 .onFocusChanged {
                     focused = it.isFocused
                     if (it.isFocused) onFocused()

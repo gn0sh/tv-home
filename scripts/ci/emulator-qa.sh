@@ -334,13 +334,144 @@ else
   sh_ input keyevent KEYCODE_DPAD_UP; sleep 1
   sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 5
   expect_app_opened "M2c"
-  pass "M2c: Down then Up returned focus to the app row (OK opened $LAUNCHED)"
+  pass "M2c: Down then Up returned focus to the app row (OK opened $LAUNCHED; OK alone can re-enter the row, so the re-entry step below checks the focused tile)"
   return_home "M2c" "$LAUNCHED"
   # Focus is now on an app tile inside the carousel: one Back must leave the app (home-back-twice).
   sh_ input keyevent KEYCODE_BACK; sleep 2
   in_front && fail "M2c: one Back with focus on an app tile does not leave the app (now: $(resumed | head -1 | sed 's/^ *//'))"
   pass "M2c: one Back with focus on an app tile leaves the app"
   no_app_crash_yet "M2 launch"
+fi
+
+# The focused node in the UI dump, as "content-desc|x1|x2" (empty when nothing on screen holds input focus).
+focused_node() {
+  local xml node
+  xml=$(ui_text)
+  # An empty dump is a failed dump (ui_text retried already), not "nothing has focus": say so, so a flaky uiautomator
+  # is not read as a focus bug (reentry-qa-flaky-dump). Runs in a $(...) subshell, so the error goes to stderr (which
+  # is the log too) and the non-zero exit makes the caller's assignment fail under set -e.
+  if [[ -z $xml ]]; then
+    echo "::error::UI dump failed: uiautomator gave no hierarchy after its retries, so focus cannot be read" >&2
+    exit 1
+  fi
+  printf '%s\n' "$xml" > "$OUT/ui-focus-last.xml"
+  node=$(grep -oE '<node [^>]*focused="true"[^>]*>' <<<"$xml" | head -1 || true)
+  [[ -n $node ]] || return 0
+  local desc b fx1 fy1 fx2 fy2 n nx1 ny1 nx2 ny2
+  desc=$(sed -E 's/.*content-desc="([^"]*)".*/\1/' <<<"$node")
+  b=$(sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' <<<"$node")
+  read -r fx1 fy1 fx2 fy2 <<<"$b"
+  # Compose can report the description on a node inside the focused one (the Calendar tile does): then use the first
+  # described node whose bounds lie within the focused node's bounds.
+  if [[ -z $desc ]]; then
+    while IFS= read -r n; do
+      read -r nx1 ny1 nx2 ny2 <<<"$(sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' <<<"$n")"
+      if (( nx1 >= fx1 && ny1 >= fy1 && nx2 <= fx2 && ny2 <= fy2 )); then
+        desc=$(sed -E 's/.*content-desc="([^"]*)".*/\1/' <<<"$n"); break
+      fi
+    done < <(grep -oE '<node [^>]*content-desc="[^"]+"[^>]*>' <<<"$xml" || true)
+  fi
+  printf '%s|%s|%s\n' "$desc" "$fx1" "$fx2"
+}
+SCREEN_W=$(sh_ wm size | tr -d '\r' | grep -oE '[0-9]+x[0-9]+' | tail -1 | cut -dx -f1)
+on_screen() { # $1 = focused_node output: the node lies inside the screen horizontally (the row scrolled to it)
+  local x1 x2
+  IFS='|' read -r _ x1 x2 <<<"$1"
+  [[ -n $x1 && -n $x2 && $x1 -ge 0 && $x2 -le ${SCREEN_W:-1920} && $x2 -gt $x1 ]]
+}
+key() { sh_ input keyevent "KEYCODE_$1"; sleep 1.2; }
+# After a key: the focused node, read again once after a pause if nothing held focus (a dump taken mid-change);
+# if still nothing, print what the dump does hold (descriptions and focus flags of focusable nodes) for diagnosis.
+focus_after() { # $1 = label
+  local cur
+  cur=$(focused_node) || exit 1   # a failed dump ends the subshell; set -e is not inherited into $(...)
+  if [[ -z $cur ]]; then sleep 2; cur=$(focused_node) || exit 1; fi
+  if [[ -z $cur ]]; then
+    echo "diagnostic: $1: dump OK but no node has focused=true; focusable nodes:" >&2
+    grep -oE '<node [^>]*focusable="true"[^>]*>' "$OUT/ui-focus-last.xml" \
+      | sed -E 's/.*content-desc="([^"]*)".*focused="([a-z]+)".*bounds="([^"]*)".*/  desc=\1 focused=\2 bounds=\3/' >&2 || true
+  fi
+  printf '%s\n' "$cur"
+}
+
+ASK_DESC_PREFIX="Ask Claude"
+step "Row re-entry (fix-app-row-scroll): scroll right, leave the row, come back Up, Right still moves the row"
+# Brian's bug after M2d: the row scrolled on first open, but once focus left it (Down to Calendar or the Ask button)
+# Up put focus on the row's invisible scroll container, and Right did nothing. Checked on the focused node of the UI
+# dump, not by pressing OK: on Android OK (FocusDirection.Enter) re-enters the row by itself and hid the bug.
+napps=$(printf '%s\n' "$others" | grep -c '/' || true)
+if (( napps < 2 )); then
+  warn "Row re-entry NOT VERIFIED: $napps other TV app(s) on this image, the row cannot move"
+else
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  in_front || fail "re-entry: home screen not in front"
+  prev=$(focused_node)
+  [[ -n $prev ]] || fail "re-entry: no focused node on launch (expected the first app tile)"
+  steps=$(( napps - 1 < 4 ? napps - 1 : 4 ))
+  for ((i = 1; i <= steps; i++)); do
+    key DPAD_RIGHT
+    cur=$(focus_after re-entry)
+    [[ -n $cur && ${cur%%|*} != "${prev%%|*}" ]] || fail "re-entry: Right $i did not move focus along the row (was '${prev%%|*}', now '${cur%%|*}')"
+    on_screen "$cur" || fail "re-entry: Right $i focused '${cur%%|*}' off screen ($cur): the row did not scroll"
+    prev=$cur
+  done
+  far=${prev%%|*}
+  pass "re-entry: Right x$steps moved focus to '$far' and kept it on screen"
+  (( napps >= 5 )) || warn "re-entry: only $napps apps, so the row may not overflow the screen; scrolling itself NOT VERIFIED here"
+  key DPAD_DOWN
+  cur=$(focus_after re-entry)
+  # 2D search picks the dock target nearest below: the Calendar tile, or the Ask button from a tile far right.
+  case ${cur%%|*} in
+    Calendar,*) ;;
+    "${ASK_DESC_PREFIX}"*|"")
+      # The Ask button clears its semantics, so uiautomator shows no focused node while it has focus: confirm it with
+      # OK (the Ask view opens) and Back (focus returns to the button, checked in M1b), then go Up to the Calendar tile.
+      if [[ -z ${cur%%|*} ]]; then
+        key DPAD_CENTER; sleep 1
+        expect_text "re-entry-ask" "Ask Claude full screen"
+        key BACK; sleep 1
+        in_front || fail "re-entry: Back from the Ask view left the app"
+      fi
+      pass "re-entry: Down from '$far' reached the Ask button"; key DPAD_UP; cur=$(focus_after re-entry)
+      [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach the Calendar tile (now '$cur')" ;;
+    *) fail "re-entry: Down from '$far' did not reach the dock (focused node: '$cur')" ;;
+  esac
+  key DPAD_UP
+  cur=$(focus_after re-entry)
+  [[ ${cur%%|*} == "$far" ]] || fail "re-entry: Up from Calendar did not return to '$far' (now '${cur%%|*}'; empty means focus went to the row container)"
+  on_screen "$cur" || fail "re-entry: '$far' is off screen after Up ($cur)"
+  key DPAD_LEFT
+  cur=$(focus_after re-entry)
+  [[ -n $cur && ${cur%%|*} != "$far" ]] || fail "re-entry: Left after coming back did not move focus (now '${cur%%|*}')"
+  back=${cur%%|*}
+  pass "re-entry: Down, Up returned to '$far', and Left moved on to '$back'"
+  # Same through the Ask button: Down, Down, Up (to Calendar), Up (to the row), Right moves.
+  key DPAD_DOWN; key DPAD_DOWN
+  cur=$(focus_after re-entry)
+  if [[ -z ${cur%%|*} ]]; then  # the Ask button hides focus from uiautomator: confirm with OK, then Back
+    key DPAD_CENTER; sleep 1
+    expect_text "re-entry-ask-2" "Ask Claude full screen"
+    key BACK; sleep 1
+    in_front || fail "re-entry: Back from the Ask view left the app"
+  else
+    [[ ${cur%%|*} == "Ask Claude. Talk or type a question." ]] || fail "re-entry: Down, Down did not reach the Ask button (now '${cur%%|*}')"
+  fi
+  key DPAD_UP
+  cur=$(focus_after re-entry)
+  [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach Calendar (now '${cur%%|*}')"
+  key DPAD_UP
+  cur=$(focus_after re-entry)
+  [[ ${cur%%|*} == "$back" ]] || fail "re-entry: Up from Calendar (via the Ask button) did not return to '$back' (now '${cur%%|*}')"
+  key DPAD_RIGHT
+  cur=$(focus_after re-entry)
+  if [[ -z $cur || ${cur%%|*} == "$back" ]] || ! on_screen "$cur"; then
+    fail "re-entry: Right after the Ask-button round trip did not move the row (now '${cur%%|*}')"
+  fi
+  pass "re-entry: Ask button -> Calendar -> row, and Right moved to '${cur%%|*}'"
+  sh_ input keyevent KEYCODE_BACK; sleep 2
+  in_front && fail "re-entry: one Back on an app tile after re-entry does not leave the app (home-back-twice)"
+  pass "re-entry: one Back leaves the app"
+  no_app_crash_yet "row re-entry"
 fi
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"
