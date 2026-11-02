@@ -61,6 +61,7 @@ PACKAGES = frozenset(pkg for _, pkg in APPS)
 VOLUME_KEYS = {"up": "VOLUME_UP", "down": "VOLUME_DOWN", "mute": "VOLUME_MUTE"}
 # Which TV the Google TV is plugged into, for volume (ADR 0006 addendum). Everything else goes to the Google TV.
 TV_NAMES = ("lg", "vizio")
+VIZIO_UP_GAP = 0.4  # seconds between Vizio volume ups; faster ones are dropped (nothing caps the Vizio)
 SETTINGS_FILE = "remote-app.json"  # under %LOCALAPPDATA%\tv-remote; holds only {"tv": "lg"|"vizio"}
 # No leading '-', which `input text` would read as an option (input-text-leading-dash).
 TEXT_RE = re.compile(r"\A[A-Za-z0-9 .,@_][A-Za-z0-9 .,@_-]*\Z")
@@ -302,10 +303,20 @@ class TvChoice:
 
     A missing, unreadable or unexpected file means "lg". The file holds nothing secret. path None: memory only."""
 
-    def __init__(self, path: Path | None):
-        self._path = path
+    def __init__(self, path: Path | None, *, clock: Callable[[], float] = time.monotonic):
+        self._path, self._clock = path, clock
         self._lock = threading.Lock()
         self._name = self._load()
+        self._last_vizio_up: float | None = None
+
+    def vizio_up_allowed(self) -> bool:
+        """At most one Vizio volume up per VIZIO_UP_GAP seconds: the Python backstop for one step per tap."""
+        with self._lock:
+            now = self._clock()
+            if self._last_vizio_up is not None and now - self._last_vizio_up < VIZIO_UP_GAP:
+                return False
+            self._last_vizio_up = now
+            return True
 
     def _load(self) -> str:
         if self._path is None:
@@ -336,7 +347,11 @@ class TvChoice:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = self._path.with_suffix(".tmp")
                 tmp.write_text(json.dumps({"tv": name}), encoding="utf-8")
-                os.replace(tmp, self._path)
+                try:
+                    os.replace(tmp, self._path)
+                except PermissionError:  # settings-replace-retry: a scanner or indexer briefly holding the file
+                    time.sleep(0.05)
+                    os.replace(tmp, self._path)
                 return True
             except OSError:
                 return False
@@ -403,7 +418,10 @@ def _volume(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice, cmd
         return _reply(False, "That button is not on this remote.")
     if choice.name == "vizio":
         # No pairing with the Vizio: the adb volume key, which the Google TV passes on over HDMI-CEC. The LG is never
-        # contacted in this mode (it may be off or unplugged). Up is one step per tap; the page does not repeat it.
+        # contacted in this mode (it may be off or unplugged). Up is one step per tap; the page does not repeat it,
+        # and this drops an up that comes too soon after the last one (vizio-one-step-js-only).
+        if cmd == "up" and not choice.vizio_up_allowed():
+            return _reply(False, "One step per tap for Vizio volume up.", via="vizio")
         ok, status = tv.send(volume_key_line(cmd))
         return _reply(ok, f"{VIZIO_SAID[cmd]} sent to the Vizio (via HDMI-CEC)." if ok else status, via="vizio")
     if lg is None:
@@ -430,6 +448,8 @@ def _volume(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice, cmd
     lg_said = "The LG" + reason[6:] if reason.startswith("the LG") else "The LG: " + reason
     if cmd == "up":
         return _reply(False, f"{lg_said}. Volume up was not sent.", via="none")
+    if choice.name != "lg":  # switched to Vizio while the LG was being asked (stale-mode-fallback): send nothing
+        return _reply(False, f"{lg_said}. Not sent: the remote is now on the Vizio.", via="none")
     ok, status = tv.send(volume_key_line(cmd))
     if ok:
         return _reply(True, f"{lg_said}. Sent to the Google TV instead.", via="googletv")

@@ -719,7 +719,8 @@ def test_vizio_mode_does_not_touch_a_real_lg_volume_object():
             api.volume(cmd)
     finally:
         vol.close()
-    assert lg.calls == [] and lg.volume == 10 and len(fake.lines) == 4
+    assert lg.calls == [] and lg.volume == 10
+    assert len(fake.lines) == 3  # the second up came within 400 ms and was dropped
 
 
 def test_lg_mode_is_unchanged_after_switching_back():
@@ -731,3 +732,48 @@ def test_lg_mode_is_unchanged_after_switching_back():
     api.set_tv("lg")
     assert api.volume("up") == {"ok": True, "status": "Volume 11", "via": "lg", "level": 11}
     assert lg_calls == ["up"] and fake.lines == []
+
+
+def test_vizio_up_backstop_drops_a_second_up_within_400_ms():
+    clock = Clock()
+    choice = TvChoice(None, clock=clock)
+    choice.set("vizio")
+    sh, fake = shell()
+    api = RemoteApi(sh, None, choice)
+    assert api.volume("up")["ok"]
+    clock.t += 0.2
+    r = api.volume("up")
+    assert r["ok"] is False and "One step per tap" in r["status"]
+    assert api.volume("down")["ok"] and api.volume("down")["ok"]  # down is not limited
+    clock.t += 0.25
+    assert api.volume("up")["ok"]
+    assert fake.lines.count("input keyevent KEYCODE_VOLUME_UP") == 2
+
+
+def test_no_adb_fallback_if_switched_to_vizio_while_the_lg_was_asked():
+    choice = TvChoice(None)
+    sh, fake = shell()
+
+    def lg(cmd):
+        choice.set("vizio")  # the user switches while the LG call is in flight
+        return "error the LG did not answer"
+
+    r = RemoteApi(sh, lg, choice).volume("down")
+    assert r["ok"] is False and "now on the Vizio" in r["status"]
+    assert fake.lines == []
+
+
+def test_settings_replace_is_retried_once(tmp_path, monkeypatch):
+    real = pcremote.os.replace
+    tries = []
+
+    def flaky(a, b):
+        tries.append(1)
+        if len(tries) == 1:
+            raise PermissionError("held by a scanner")
+        return real(a, b)
+
+    monkeypatch.setattr(pcremote.os, "replace", flaky)
+    choice = TvChoice(tmp_path / "remote-app.json")
+    assert choice.set("vizio") is True and len(tries) == 2
+    assert TvChoice(tmp_path / "remote-app.json").name == "vizio"
