@@ -56,6 +56,7 @@ Another uv version would download the backend unhashed. Bump the range and uv to
 ```
 uv run --locked tv-remote      # the MCP server (stdio)
 uv run --locked pytest         # unit tests, against fake devices
+uv run --locked tv-remote-app  # the PC on-screen remote window (ADR 0006); the "TV Remote" icon runs the same app
 ```
 
 Claude Code registration (on Brian's PC, after his OK): `claude mcp add tv-remote -- uv run --locked --directory

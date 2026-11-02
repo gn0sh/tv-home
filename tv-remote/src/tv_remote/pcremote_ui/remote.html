@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Remote</title>
+<style>
+:root {
+  --bg: #0b0d12;
+  --body-top: #181b23;
+  --body-bot: #111319;
+  --key-top: #2a2f3b;
+  --key-bot: #1d212a;
+  --key-down: #363d4d;
+  --edge: rgba(255,255,255,.07);
+  --ink: #f2f4f8;
+  --ink-2: #9aa3b5;
+  --ink-3: #636b7d;
+  --accent: #ffb81c;
+  --accent-ink: #1a1300;
+  --good: #3ddc84;
+  --warn: #ffb81c;
+  --bad: #ff5d5d;
+  --power: #ff5a4f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); touch-action: none; } /* no pinch-zoom or pan on the touchscreen */
+body {
+  font-family: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
+  color: var(--ink);
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  background: radial-gradient(120% 60% at 50% -10%, #1b2030 0%, var(--bg) 60%);
+}
+#stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+#remote {
+  position: absolute; left: 50%; top: 50%;
+  transform-origin: 50% 50%;
+  display: flex; gap: 28px;
+  padding: 20px 22px 16px;
+  border-radius: 40px;
+  background: linear-gradient(180deg, var(--body-top), var(--body-bot));
+  box-shadow: 0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.07), inset 0 0 0 1px rgba(255,255,255,.035);
+}
+#remote.portrait { flex-direction: column; width: 400px; gap: 12px; padding-top: 16px; }
+#remote.portrait .col { gap: 12px; }
+#remote.landscape { flex-direction: row; width: 800px; }
+.col { display: flex; flex-direction: column; gap: 16px; width: 356px; }
+
+/* header */
+.head { display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 4px; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: 15px; letter-spacing: .2px; color: var(--ink); }
+.brand svg { width: 22px; height: 22px; }
+.pill { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px; border-radius: 14px;
+  background: rgba(255,255,255,.05); border: 1px solid var(--edge); font-size: 12px; color: var(--ink-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px rgba(255,184,28,.15); }
+.pill.ready .dot { background: var(--good); box-shadow: 0 0 0 3px rgba(61,220,132,.15); }
+.pill.offline .dot { background: var(--bad); box-shadow: 0 0 0 3px rgba(255,93,93,.15); }
+.pill.busy .dot { animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* round keys with captions */
+.row { display: flex; justify-content: space-around; align-items: flex-start; }
+.cap { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 76px; }
+.cap span { font-size: 11px; color: var(--ink-3); letter-spacing: .3px; }
+button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; background: none; cursor: pointer;
+  touch-action: none; outline: none; }
+.key {
+  display: grid; place-items: center;
+  background: linear-gradient(180deg, var(--key-top), var(--key-bot));
+  border: 1px solid var(--edge);
+  box-shadow: 0 3px 0 rgba(0,0,0,.35), 0 8px 18px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.07);
+  transition: transform .08s ease, background .12s ease, box-shadow .12s ease, color .12s;
+  color: var(--ink);
+}
+.key svg { width: 24px; height: 24px; }
+.key.down { transform: translateY(2px) scale(.96); background: var(--key-down);
+  box-shadow: 0 1px 0 rgba(0,0,0,.35), 0 0 0 4px rgba(255,184,28,.18), inset 0 1px 0 rgba(255,255,255,.05); }
+.round { width: 58px; height: 58px; border-radius: 50%; }
+.key.power { color: var(--power); }
+.key.power.down { box-shadow: 0 1px 0 rgba(0,0,0,.35), 0 0 0 4px rgba(255,90,79,.22); }
+
+/* d-pad */
+.dpad-wrap { display: grid; place-items: center; height: 236px; }
+.dpad { position: relative; width: 236px; height: 236px; border-radius: 50%; overflow: hidden;
+  background: linear-gradient(180deg, #252a35, #1a1d25);
+  border: 1px solid var(--edge);
+  box-shadow: 0 6px 0 rgba(0,0,0,.35), 0 18px 36px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.08); }
+.wedge { position: absolute; inset: 0; transition: background .12s ease; color: var(--ink-2); }
+.wedge svg { position: absolute; width: 26px; height: 26px; }
+.wedge.up { clip-path: polygon(50% 50%, 0 0, 100% 0); }
+.wedge.down { clip-path: polygon(50% 50%, 0 100%, 100% 100%); }
+.wedge.left { clip-path: polygon(50% 50%, 0 0, 0 100%); }
+.wedge.right { clip-path: polygon(50% 50%, 100% 0, 100% 100%); }
+.wedge.up svg { left: 105px; top: 18px; }
+.wedge.down svg { left: 105px; bottom: 18px; transform: rotate(180deg); }
+.wedge.left svg { left: 18px; top: 105px; transform: rotate(-90deg); }
+.wedge.right svg { right: 18px; top: 105px; transform: rotate(90deg); }
+.wedge.pressed { background: radial-gradient(circle at 50% 50%, transparent 52px, rgba(255,255,255,.10) 53px); color: var(--ink); }
+.wedge.up.pressed { background: radial-gradient(120px 90px at 50% 0%, rgba(255,184,28,.22), rgba(255,255,255,.04)); }
+.wedge.down.pressed { background: radial-gradient(120px 90px at 50% 100%, rgba(255,184,28,.22), rgba(255,255,255,.04)); }
+.wedge.left.pressed { background: radial-gradient(90px 120px at 0% 50%, rgba(255,184,28,.22), rgba(255,255,255,.04)); }
+.wedge.right.pressed { background: radial-gradient(90px 120px at 100% 50%, rgba(255,184,28,.22), rgba(255,255,255,.04)); }
+.seams { position: absolute; inset: 0; pointer-events: none; border-radius: 50%;
+  background:
+    linear-gradient(45deg, transparent calc(50% - .6px), rgba(0,0,0,.45) calc(50% - .6px), rgba(0,0,0,.45) calc(50% + .6px), transparent calc(50% + .6px)),
+    linear-gradient(-45deg, transparent calc(50% - .6px), rgba(0,0,0,.45) calc(50% - .6px), rgba(0,0,0,.45) calc(50% + .6px), transparent calc(50% + .6px)); }
+.ok { position: absolute; left: 50%; top: 50%; width: 104px; height: 104px; margin: -52px 0 0 -52px; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 700; font-size: 18px; letter-spacing: 1px; color: var(--ink);
+  background: linear-gradient(180deg, #343a48, #252a35);
+  border: 1px solid rgba(255,255,255,.09);
+  box-shadow: 0 0 0 7px #171a21, 0 4px 0 7px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.12);
+  transition: transform .08s ease, background .12s; }
+.ok.down { transform: scale(.95); background: linear-gradient(180deg, #ffc443, #f0a400); color: var(--accent-ink); }
+
+/* media bar */
+.media { display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 6px;
+  border-radius: 30px; background: rgba(0,0,0,.22); border: 1px solid var(--edge); }
+.media .key { width: 96px; height: 48px; border-radius: 24px; }
+.media .key.main { width: 120px; }
+.media .key svg { width: 26px; height: 26px; }
+
+/* rockers and the volume card */
+.rock { display: flex; gap: 12px; height: 132px; align-items: stretch; }
+.rocker { width: 70px; display: flex; flex-direction: column; border-radius: 35px; overflow: hidden;
+  background: linear-gradient(180deg, var(--key-top), var(--key-bot)); border: 1px solid var(--edge);
+  box-shadow: 0 3px 0 rgba(0,0,0,.35), 0 8px 18px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.07); position: relative; }
+.rocker button { flex: 1; display: grid; place-items: center; color: var(--ink); transition: background .12s; }
+.rocker button svg { width: 24px; height: 24px; }
+.rocker button.down { background: rgba(255,184,28,.18); }
+.rocker .lab { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px; color: var(--ink-3); pointer-events: none; }
+.mid { flex: 1; display: flex; flex-direction: column; gap: 10px; }
+.vcard { flex: 1; border-radius: 18px; padding: 10px 14px; background: rgba(0,0,0,.25); border: 1px solid var(--edge);
+  display: flex; flex-direction: column; justify-content: center; gap: 7px; }
+.vtop { display: flex; align-items: baseline; justify-content: space-between; }
+.vnum { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1; }
+.vnum small { font-size: 12px; font-weight: 500; color: var(--ink-3); margin-left: 4px; }
+.via { font-size: 10.5px; color: var(--ink-3); letter-spacing: .4px; text-transform: uppercase; }
+.bar { position: relative; height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+.bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 3px;
+  background: linear-gradient(90deg, #ffcf5a, var(--accent)); transition: width .25s ease; }
+.vcard.muted .bar i { background: var(--ink-3); }
+.pair { display: flex; gap: 10px; height: 50px; }
+.pair .key { flex: 1; border-radius: 25px; gap: 8px; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600; color: var(--ink); }
+.pair .key svg { width: 20px; height: 20px; }
+.pair .key.on { color: var(--bad); }
+
+/* apps */
+.section-title { font-size: 11px; color: var(--ink-3); letter-spacing: 1.2px; text-transform: uppercase; margin: 2px 6px -8px; }
+.apps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.tile { height: 48px; border-radius: 14px; font-size: 12.5px; font-weight: 700; letter-spacing: .1px; line-height: 1.1;
+  display: grid; place-items: center; text-align: center; padding: 0 4px;
+  box-shadow: 0 3px 0 rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.14), inset 0 0 0 1px rgba(255,255,255,.05);
+  transition: transform .08s ease, filter .12s, opacity .2s; }
+.tile.down { transform: translateY(2px) scale(.95); filter: brightness(1.18); }
+.tile[aria-disabled="true"] { background: rgba(255,255,255,.03) !important; color: #4a5162 !important; cursor: default;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); font-weight: 600; }
+.tile.long { font-size: 11.5px; }
+
+/* text */
+.type { display: flex; gap: 8px; height: 50px; }
+.type input { flex: 1; min-width: 0; height: 50px; border-radius: 25px; padding: 0 18px; font: inherit; font-size: 15px;
+  color: var(--ink); background: rgba(0,0,0,.28); border: 1px solid var(--edge); outline: none; -webkit-user-select: text; user-select: text; }
+.type input::placeholder { color: var(--ink-3); }
+.type input:focus { border-color: rgba(255,184,28,.55); box-shadow: 0 0 0 3px rgba(255,184,28,.15); }
+.type .key { width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(180deg, #ffc443, #f0a400); color: var(--accent-ink); border: 0; }
+.type .key.down { background: #e09a00; }
+.status { min-height: 24px; font-size: 12px; line-height: 1.35; color: var(--ink-2); padding: 0 8px; text-align: center;
+  display: flex; align-items: center; justify-content: center; transition: color .2s; }
+.status.bad { color: #ff8c8c; }
+#remote.landscape .head { margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="remote" class="portrait" aria-label="TV remote">
+    <div class="col" id="colA">
+      <div class="head">
+        <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2" width="11" height="20" rx="5.5" fill="#2b303c" stroke="#ffb81c" stroke-width="1.6"/><circle cx="12" cy="9" r="2.6" fill="#ffb81c"/><circle cx="12" cy="15.5" r="1.1" fill="#9aa3b5"/><circle cx="12" cy="18.6" r="1.1" fill="#9aa3b5"/></svg>TV Remote</div>
+        <div class="pill busy" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting</span></div>
+      </div>
+      <div class="row">
+        <div class="cap"><button class="key round power" data-key="POWER" aria-label="Power" data-icon="power"></button><span>Power</span></div>
+        <div class="cap"><button class="key round" data-key="TV_INPUT" aria-label="Input" data-icon="input"></button><span>Input</span></div>
+        <div class="cap"><button class="key round" data-key="SETTINGS" aria-label="Settings" data-icon="gear"></button><span>Settings</span></div>
+      </div>
+      <div class="dpad-wrap">
+        <div class="dpad" id="dpad">
+          <button class="wedge up" data-key="DPAD_UP" data-hold aria-label="Up" data-icon="chev"></button>
+          <button class="wedge down" data-key="DPAD_DOWN" data-hold aria-label="Down" data-icon="chev"></button>
+          <button class="wedge left" data-key="DPAD_LEFT" data-hold aria-label="Left" data-icon="chev"></button>
+          <button class="wedge right" data-key="DPAD_RIGHT" data-hold aria-label="Right" data-icon="chev"></button>
+          <div class="seams"></div>
+          <button class="ok" data-key="DPAD_CENTER" aria-label="OK">OK</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="cap"><button class="key round" data-key="BACK" aria-label="Back" data-icon="back"></button><span>Back</span></div>
+        <div class="cap"><button class="key round" data-key="HOME" aria-label="Home" data-icon="home"></button><span>Home</span></div>
+        <div class="cap"><button class="key round" data-key="SEARCH" aria-label="Assistant" data-icon="mic"></button><span>Assistant</span></div>
+      </div>
+    </div>
+    <div class="col" id="colB">
+      <div class="media">
+        <button class="key" data-key="MEDIA_REWIND" aria-label="Rewind" data-icon="rew"></button>
+        <button class="key main" data-key="MEDIA_PLAY_PAUSE" aria-label="Play or pause" data-icon="playpause"></button>
+        <button class="key" data-key="MEDIA_FAST_FORWARD" aria-label="Fast forward" data-icon="fwd"></button>
+      </div>
+      <div class="rock">
+        <div class="rocker">
+          <button data-vol="up" data-hold aria-label="Volume up" data-icon="plus"></button>
+          <button data-vol="down" data-hold aria-label="Volume down" data-icon="minus"></button>
+          <span class="lab">VOL</span>
+        </div>
+        <div class="mid">
+          <div class="vcard" id="vcard">
+            <div class="vtop"><div class="vnum" id="vnum">&ndash;<small>vol</small></div><div class="via" id="via">LG TV</div></div>
+            <div class="bar"><i id="vbar"></i></div>
+          </div>
+          <div class="pair">
+            <button class="key" data-vol="mute" aria-label="Mute" id="muteBtn"><span data-icon="mute"></span>Mute</button>
+            <button class="key" data-key="GUIDE" aria-label="Guide"><span data-icon="guide"></span>Guide</button>
+          </div>
+        </div>
+        <div class="rocker">
+          <button data-key="CHANNEL_UP" data-hold aria-label="Channel up" data-icon="chev"></button>
+          <button data-key="CHANNEL_DOWN" data-hold aria-label="Channel down" data-icon="chevdown"></button>
+          <span class="lab">CH</span>
+        </div>
+      </div>
+      <div class="section-title">Apps</div>
+      <div class="apps" id="apps"></div>
+      <form class="type" id="typeForm" autocomplete="off">
+        <input id="typeBox" maxlength="100" placeholder="Type on the TV" aria-label="Text to type on the TV" spellcheck="false">
+        <button class="key" type="submit" aria-label="Send text" data-icon="send" id="sendBtn"></button>
+      </form>
+      <div class="status" id="status" aria-live="polite">Connecting to the TV...</div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  // ---- icons (drawn here; no fonts or images are fetched) ----
+  function gear() {
+    var d = "", n = 8, ro = 9.2, ri = 6.9;
+    for (var i = 0; i < n; i++) {
+      var a = (i / n) * Math.PI * 2, w = Math.PI / n * 0.55;
+      var pts = [[ri, a - w * 1.6], [ro, a - w], [ro, a + w], [ri, a + w * 1.6]];
+      pts.forEach(function (p, j) {
+        var x = (12 + p[0] * Math.cos(p[1])).toFixed(2), y = (12 + p[0] * Math.sin(p[1])).toFixed(2);
+        d += (i === 0 && j === 0 ? "M" : "L") + x + " " + y + " ";
+      });
+    }
+    return '<path d="' + d + 'Z"/><circle cx="12" cy="12" r="3"/>';
+  }
+  var S = 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  var ICONS = {
+    power: '<g ' + S + '><path d="M12 3.5v8"/><path d="M6.6 6.8a7.5 7.5 0 1 0 10.8 0"/></g>',
+    input: '<g ' + S + '><path d="M13 4h5.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H13"/><path d="M4 12h11"/><path d="M11 8l4 4-4 4"/></g>',
+    gear: '<g ' + S + '>' + gear() + '</g>',
+    chev: '<g ' + S + ' stroke-width="2.4"><path d="M6 15l6-6 6 6"/></g>',
+    chevdown: '<g ' + S + ' stroke-width="2.4"><path d="M6 9l6 6 6-6"/></g>',
+    back: '<g ' + S + '><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></g>',
+    home: '<g ' + S + '><path d="M3.5 11L12 4l8.5 7"/><path d="M6 9.5V19a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1V9.5"/></g>',
+    mic: '<g ' + S + '><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></g>',
+    rew: '<g fill="currentColor"><path d="M11.5 6.2v11.6L3.6 12z"/><path d="M20.5 6.2v11.6L12.6 12z"/></g>',
+    fwd: '<g fill="currentColor"><path d="M3.5 6.2v11.6L11.4 12z"/><path d="M12.5 6.2v11.6l7.9-5.8z"/></g>',
+    playpause: '<path fill="currentColor" d="M3.5 5.5v13l9.5-6.5z"/><g ' + S + ' stroke-width="2.6"><path d="M16.5 6v12"/><path d="M21 6v12"/></g>',
+    plus: '<g ' + S + ' stroke-width="2.4"><path d="M12 6v12"/><path d="M6 12h12"/></g>',
+    minus: '<g ' + S + ' stroke-width="2.4"><path d="M6 12h12"/></g>',
+    mute: '<g ' + S + '><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5"/><path d="M21 9.5l-5 5"/></g>',
+    guide: '<g ' + S + '><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9.5h18"/><path d="M9 9.5V20"/></g>',
+    send: '<g ' + S + ' stroke-width="2.4"><path d="M5 12h13"/><path d="M12.5 6l6 6-6 6"/></g>'
+  };
+  document.querySelectorAll("[data-icon]").forEach(function (el) {
+    var svg = '<svg viewBox="0 0 24 24" aria-hidden="true">' + ICONS[el.getAttribute("data-icon")] + "</svg>";
+    if (el.tagName === "SPAN") el.outerHTML = svg; else el.insertAdjacentHTML("afterbegin", svg);
+  });
+
+  // ---- app tiles: the service name on a brand-like colour (no logos) ----
+  var LOOK = {
+    "Dashboard": ["linear-gradient(135deg,#ffcf5a,#f0a400)", "#1a1300"],
+    "YouTube": ["linear-gradient(135deg,#ff3b3b,#d40000)", "#fff"],
+    "Netflix": ["linear-gradient(135deg,#1a1a1a,#000)", "#e50914"],
+    "Prime Video": ["linear-gradient(135deg,#1a98ff,#0062c4)", "#fff"],
+    "Disney+": ["linear-gradient(135deg,#1c3f9e,#0b1c4e)", "#e9f0ff"],
+    "Max": ["linear-gradient(135deg,#2a5cff,#0028c7)", "#fff"],
+    "Hulu": ["linear-gradient(135deg,#2bf08f,#14b866)", "#06210f"],
+    "Peacock": ["linear-gradient(135deg,#2b2b2b,#0a0a0a)", "#fff"],
+    "Paramount+": ["linear-gradient(135deg,#1f7bff,#0047c2)", "#fff"],
+    "Apple TV": ["linear-gradient(135deg,#3a3a3c,#1c1c1e)", "#fff"],
+    "YouTube TV": ["linear-gradient(135deg,#2a2a2a,#121212)", "#ff4a4a"],
+    "Spotify": ["linear-gradient(135deg,#2ee06b,#169c45)", "#04210e"]
+  };
+  var DEFAULT_APPS = ["Dashboard", "YouTube", "Netflix", "Prime Video", "Disney+", "Max", "Hulu", "Peacock",
+    "Paramount+", "Apple TV", "YouTube TV", "Spotify"].map(function (n) { return { name: n, pkg: "", installed: null }; });
+  var appsEl = document.getElementById("apps");
+  function drawApps(list) {
+    appsEl.innerHTML = "";
+    list.forEach(function (a) {
+      var b = document.createElement("button");
+      b.className = a.name.length > 9 ? "tile long" : "tile";
+      b.textContent = a.name;
+      b.setAttribute("aria-label", "Open " + a.name);
+      var look = LOOK[a.name] || ["#2a2f3b", "#fff"];
+      b.style.background = look[0]; b.style.color = look[1];
+      if (a.pkg) b.setAttribute("data-app", a.pkg);
+      if (a.installed === false || !a.pkg) {
+        b.setAttribute("aria-disabled", "true");
+        b.title = a.pkg ? a.name + " is not on the TV" : "";
+      }
+      appsEl.appendChild(b);
+    });
+  }
+  drawApps(DEFAULT_APPS);
+  // Until the bridge answers, tiles look normal but do nothing.
+  appsEl.querySelectorAll(".tile").forEach(function (t) { t.removeAttribute("aria-disabled"); });
+
+  // ---- status ----
+  var statusEl = document.getElementById("status"), conn = document.getElementById("conn"),
+      connText = document.getElementById("connText");
+  function setConn(state) {
+    conn.className = "pill " + state;
+    connText.textContent = state === "ready" ? "Connected" : state === "offline" ? "Offline" : "Connecting";
+  }
+  function show(r) {
+    if (!r) return;
+    statusEl.textContent = r.status || "";
+    statusEl.classList.toggle("bad", !r.ok);
+    if (r.ok) setConn("ready");
+    else if (/Can't reach the TV/.test(r.status || "")) setConn("offline");
+  }
+  var vnum = document.getElementById("vnum"), vbar = document.getElementById("vbar"),
+      vcard = document.getElementById("vcard"), via = document.getElementById("via"),
+      muteBtn = document.getElementById("muteBtn");
+  function showVolume(r) {
+    if (!r) return;
+    if (typeof r.level === "number") {
+      vnum.innerHTML = r.level + "<small>vol</small>";
+      vbar.style.width = Math.max(0, Math.min(100, r.level)) + "%";
+      vcard.classList.remove("muted"); muteBtn.classList.remove("on");
+    }
+    if (typeof r.muted === "boolean") {
+      vcard.classList.toggle("muted", r.muted); muteBtn.classList.toggle("on", r.muted);
+      if (r.muted) vnum.innerHTML = "Muted";
+    }
+    if (r.via === "googletv") via.textContent = "Google TV";
+    else if (r.via === "lg") via.textContent = "LG TV";
+  }
+
+  // ---- the bridge ----
+  function api() { return window.pywebview && window.pywebview.api; }
+  function call(method, arg) {
+    var a = api();
+    if (!a || !a[method]) { show({ ok: false, status: "Still starting..." }); return Promise.resolve(null); }
+    // No argument for start(): pywebview would pass a JS undefined on as an extra None argument.
+    return Promise.resolve(arg === undefined ? a[method]() : a[method](arg)).catch(function () { return { ok: false, status: "That did not work." }; });
+  }
+  function sendKey(code) { return call("key", code).then(show); }
+  function sendVolume(cmd) { return call("volume", cmd).then(function (r) { show(r); showVolume(r); }); }
+  function sendApp(pkg) { return call("app", pkg).then(show); }
+
+  // ---- presses: pointer events so touch, pen and mouse all act at once; hold to repeat ----
+  function fire(el) {
+    if (el.hasAttribute("data-key")) return sendKey(el.getAttribute("data-key"));
+    if (el.hasAttribute("data-vol")) return sendVolume(el.getAttribute("data-vol"));
+    if (el.hasAttribute("data-app") && el.getAttribute("aria-disabled") !== "true") return sendApp(el.getAttribute("data-app"));
+  }
+  var held = null, holdTimer = null;
+  function pressClass(el) { return el.classList.contains("wedge") ? "pressed" : "down"; }
+  function release() {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (held) { held.classList.remove(pressClass(held)); held = null; }
+  }
+  document.addEventListener("pointerdown", function (e) {
+    var el = e.target.closest("[data-key],[data-vol],[data-app]");
+    if (!el || e.button > 0) return;
+    e.preventDefault();
+    if (document.activeElement && document.activeElement.id === "typeBox") document.activeElement.blur();
+    release();
+    held = el;
+    el.classList.add(pressClass(el));
+    fire(el);
+    if (el.hasAttribute("data-hold")) {
+      var every = el.hasAttribute("data-vol") ? 280 : 160;
+      var again = function () { if (held === el) { fire(el); holdTimer = setTimeout(again, every); } };
+      holdTimer = setTimeout(again, 450);
+    }
+  });
+  document.addEventListener("pointerup", release, true);
+  document.addEventListener("pointercancel", release, true);
+  window.addEventListener("blur", release);
+  document.addEventListener("pointerout", function (e) { if (held && e.target === held && !held.contains(e.relatedTarget)) release(); });
+  document.addEventListener("contextmenu", function (e) { e.preventDefault(); }); // long-press on a touchscreen
+  // Nothing dragged onto the window (a link, a file) may navigate it: another page here would get the bridge.
+  ["dragenter", "dragover", "drop"].forEach(function (t) {
+    window.addEventListener(t, function (e) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "none"; }, true);
+  });
+
+  // ---- keyboard: arrows, Enter = OK, Backspace = Back, Escape = Home (not while typing) ----
+  var KEYMAP = { ArrowUp: "DPAD_UP", ArrowDown: "DPAD_DOWN", ArrowLeft: "DPAD_LEFT", ArrowRight: "DPAD_RIGHT",
+    Enter: "DPAD_CENTER", Backspace: "BACK", Escape: "HOME" };
+  var box = document.getElementById("typeBox");
+  document.addEventListener("keydown", function (e) {
+    if (e.target === box) {
+      if (e.key === "Escape") { box.blur(); e.preventDefault(); }
+      return;
+    }
+    var code = KEYMAP[e.key];
+    if (!code || e.ctrlKey || e.altKey || e.metaKey) return;
+    e.preventDefault();
+    var el = document.querySelector('[data-key="' + code + '"]');
+    if (el) { var c = pressClass(el); el.classList.add(c); setTimeout(function () { el.classList.remove(c); }, 140); }
+    sendKey(code);
+  });
+  document.getElementById("typeForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var t = box.value;
+    call("text", t).then(function (r) { show(r); if (r && r.ok) box.value = ""; });
+  });
+  var sendBtn = document.getElementById("sendBtn");
+  sendBtn.addEventListener("pointerdown", function () { sendBtn.classList.add("down"); });
+  sendBtn.addEventListener("pointerup", function () { sendBtn.classList.remove("down"); });
+  sendBtn.addEventListener("pointerleave", function () { sendBtn.classList.remove("down"); });
+
+  // ---- fit: the remote keeps its proportions and scales to the window, tall or wide, never scrolls ----
+  var remote = document.getElementById("remote");
+  var colA = document.getElementById("colA"), colB = document.getElementById("colB");
+  function measure(mode) {
+    remote.className = mode;
+    remote.style.transform = "none";
+    return { w: remote.offsetWidth, h: remote.offsetHeight };
+  }
+  function fit() {
+    var W = window.innerWidth - 16, H = window.innerHeight - 16;
+    var p = measure("portrait"), l = measure("landscape");
+    var sp = Math.min(W / p.w, H / p.h), sl = Math.min(W / l.w, H / l.h);
+    var mode = sl > sp * 1.05 ? "landscape" : "portrait", s = Math.min(1.3, mode === "landscape" ? sl : sp);
+    remote.className = mode;
+    remote.style.transform = "translate(-50%, -50%) scale(" + s.toFixed(4) + ")";
+  }
+  window.addEventListener("resize", fit);
+  fit();
+
+  // ---- start ----
+  var started = false;
+  function start() {
+    if (started || !api()) return;
+    started = true;
+    setConn("busy");
+    call("start").then(function (r) {
+      if (!r) return;
+      if (r.apps && r.apps.length) drawApps(r.apps);
+      via.textContent = r.lg ? "LG TV" : "Google TV";
+      show(r);
+      setConn(r.ok ? "ready" : "offline");
+    });
+  }
+  window.addEventListener("pywebviewready", start);
+  start();
+})();
+</script>
+</body>
+</html>

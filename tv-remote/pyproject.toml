@@ -9,10 +9,16 @@ dependencies = [
     "androidtvremote2==0.3.2",
     "aiowebostv==0.10.0",
     "aiohttp==3.14.5",  # used directly by lg.py (SSAP websocket); same version aiowebostv already locks
+    "pywebview==6.2.1",  # the PC on-screen remote window (ADR 0006); Edge WebView2 via pythonnet on Windows
 ]
 
 [project.scripts]
 tv-remote = "tv_remote.server:main"
+tv-remote-lg = "tv_remote.lgpipe:main"
+
+[project.gui-scripts]
+# A GUI launcher on Windows (no console window): the "TV Remote" icon points at .venv\Scripts\tv-remote-app.exe
+tv-remote-app = "tv_remote.pcremote:main"
 
 [dependency-groups]
 dev = ["pytest==8.4.2"]

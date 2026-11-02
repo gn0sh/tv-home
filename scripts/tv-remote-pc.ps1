@@ -31,7 +31,9 @@ trap {
 })
 # One window at a time: a second tap on the icon would otherwise open a second remote.
 $single = New-Object System.Threading.Mutex($false, 'Local\gnosh-tv-remote')
-if (-not $single.WaitOne(0)) { exit 0 }
+$owned = $false
+try { $owned = $single.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $owned = $true } # mutex-abandon
+if (-not $owned) { exit 0 }
 
 if ($Serial -notmatch '\A\d{1,3}(\.\d{1,3}){3}:\d{1,5}\z') { throw "Serial must look like 192.168.68.71:5555" }
 
@@ -83,10 +85,11 @@ function Get-TvPackages {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $Adb; $psi.Arguments = "-s $Serial shell pm list packages"
         $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
-        $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $psi.RedirectStandardOutput = $true
         $p = [System.Diagnostics.Process]::Start($psi)
         $out = $p.StandardOutput.ReadToEndAsync()
-        if (-not $p.WaitForExit(5000)) { try { $p.Kill() } catch {}; return $null }
+        # Bounded both ways (readasync-hang): the process, and the read of its output.
+        if (-not $p.WaitForExit(5000) -or -not $out.Wait(2000)) { try { $p.Kill() } catch {}; return $null }
         $set = @{}
         foreach ($line in ($out.Result -split "`r?`n")) { if ($line -match '\Apackage:([A-Za-z0-9_.]+)\s*\z') { $set[$Matches[1]] = $true } }
         if ($set.Count -eq 0) { return $null }
@@ -172,9 +175,7 @@ $form.Text = 'TV remote'
 $form.BackColor = $bg
 $form.ForeColor = [System.Drawing.Color]::White
 $form.ClientSize = New-Object System.Drawing.Size(420, 960)
-# A shorter screen (a small laptop): fit it and scroll.
-$work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-if ($work.Height -lt 1010) { $form.AutoScroll = $true; $form.ClientSize = New-Object System.Drawing.Size(440, ($work.Height - 50)) }
+
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
@@ -262,10 +263,22 @@ $box.Add_KeyDown({
     if ($e.KeyCode -eq 'Enter') { Send-Text $box.Text; $box.Clear(); $e.SuppressKeyPress = $true }
     elseif ($e.KeyCode -eq 'Escape') { $form.ActiveControl = $null; $e.SuppressKeyPress = $true }
 })
+# A shorter screen (a laptop, or display scaling above 100%): shrink everything to fit rather than scroll, since a
+# touchscreen cannot drag-scroll a window (autoscroll-touch).
+$work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$fit = [math]::Max(0.6, [math]::Min(1.0, ($work.Height - 50) / 960.0))
+if ($fit -lt 1.0) {
+    $form.Scale((New-Object System.Drawing.SizeF([single]$fit, [single]$fit)))
+    # Read every size first: a child that inherits the form's font would otherwise shrink twice.
+    $sizes = @{}; foreach ($c in @($form.Controls)) { $sizes[$c] = $c.Font }
+    $formFont = $form.Font
+    $form.Font = New-Object System.Drawing.Font($formFont.FontFamily, [single]($formFont.Size * $fit))
+    foreach ($c in @($form.Controls)) { $f = $sizes[$c]; $c.Font = New-Object System.Drawing.Font($f.FontFamily, [single][math]::Max(8, $f.Size * $fit)) }
+}
 $form.Add_Shown({
     $form.ActiveControl = $null
     try {
-        Start-TvShell; $status.Text = 'Ready: ' + $Serial
+        Start-TvShell; $status.Text = 'Ready: ' + $Serial + '. Checking which apps the TV has...'; $status.Refresh()
         $have = Get-TvPackages
         if ($null -ne $have) {
             $status.Text = 'Ready: ' + $Serial + '. Greyed-out apps are not on the TV.'

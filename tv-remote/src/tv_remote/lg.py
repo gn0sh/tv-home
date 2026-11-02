@@ -185,6 +185,10 @@ class LgRemote:
         self._ids = itertools.count(1)
         self._lock = asyncio.Lock()
 
+    async def close(self) -> None:
+        """Close the websocket and its HTTP session, if open (the PC remote calls this when its window closes)."""
+        await self._drop()
+
     @property
     def url(self) -> str:
         return f"wss://{self.host}:{self._port}"
