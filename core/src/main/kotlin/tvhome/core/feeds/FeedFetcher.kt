@@ -19,7 +19,9 @@ fun interface FeedFetcher {
 /**
  * The live-feeds HTTP client (ADR 0005). Same house rules as the Ask client: a host allowlist checked on every hop,
  * https only, connect/read/call timeouts, no redirects, no retry, a hard response cap, and failures that carry no text.
- * Differences: no secret exists here, and the only header sent is a plain User-Agent (no identifiers, no cookies).
+ * Differences: no secret exists here, and the only headers sent are the fixed per-host set in [HEADERS] (a plain
+ * User-Agent, plus `Accept` for NWS; no identifiers, no cookies). Header values are constants looked up by host, never
+ * built from the URL.
  *
  * The call runs on OkHttp's own dispatcher threads (enqueue), so it never touches the caller's thread, and cancelling
  * the coroutine cancels the call.
@@ -28,6 +30,7 @@ class HttpFeedFetcher internal constructor(
     private val allowed: (HttpUrl) -> Boolean,
     timeoutMs: Long,
     customize: OkHttpClient.Builder.() -> Unit,
+    private val headers: (HttpUrl) -> Map<String, String> = ::headersFor,
 ) : FeedFetcher {
 
     constructor() : this(::isAllowed, TIMEOUT_MS, {})
@@ -50,7 +53,9 @@ class HttpFeedFetcher internal constructor(
     override suspend fun fetch(url: HttpUrl): String? {
         if (!allowed(url)) return null
         val call = try {
-            client.newCall(Request.Builder().url(url).header("User-Agent", USER_AGENT).get().build())
+            val b = Request.Builder().url(url)
+            for ((k, v) in headers(url)) b.header(k, v)
+            client.newCall(b.get().build())
         } catch (_: Throwable) {
             return null
         }
@@ -79,11 +84,27 @@ class HttpFeedFetcher internal constructor(
     override fun toString(): String = "HttpFeedFetcher"
 
     companion object {
-        /** Exactly these three hosts (task M2f): weather, NHL schedule, ESPN schedule. */
-        val HOSTS: Set<String> = setOf("api.open-meteo.com", "api-web.nhle.com", "site.api.espn.com")
+        /** Exactly these four hosts: weather, NHL schedule, ESPN schedule (M2f), NWS alerts (M7-B2). */
+        val HOSTS: Set<String> = setOf("api.open-meteo.com", "api-web.nhle.com", "site.api.espn.com", "api.weather.gov")
         const val MAX_BODY = 512L * 1024
         const val TIMEOUT_MS = 10_000L
         const val USER_AGENT = "tvhome-hero/1"
+
+        /**
+         * NWS requires a User-Agent that identifies the application (weather.gov/documentation/services-web-API). It
+         * names the app and its project page only: no person, email, device or location.
+         */
+        const val NWS_USER_AGENT = "tvhome/1 (+https://github.com/gn0sh/tv-home)"
+        const val NWS_HOST = "api.weather.gov"
+
+        private val DEFAULT_HEADERS: Map<String, String> = mapOf("User-Agent" to USER_AGENT)
+
+        /** Fixed headers per host; any host not listed gets [DEFAULT_HEADERS]. */
+        val HEADERS: Map<String, Map<String, String>> = mapOf(
+            NWS_HOST to mapOf("User-Agent" to NWS_USER_AGENT, "Accept" to "application/geo+json"),
+        )
+
+        internal fun headersFor(url: HttpUrl): Map<String, String> = HEADERS[url.host] ?: DEFAULT_HEADERS
 
         internal fun isAllowed(url: HttpUrl): Boolean = url.isHttps && url.port == 443 && url.host in HOSTS
     }
