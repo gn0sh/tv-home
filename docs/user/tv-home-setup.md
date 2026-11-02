@@ -118,7 +118,7 @@ The remote remembers the choice next time it opens. With Vizio picked:
 If it says the PIN was not accepted, run step 4 again for a new PIN. To unpair, run
 `.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe --forget`. That deletes the pairing from this PC only; to cut
 the PC off on the TV too, remove "TV Remote (PC)" from the Vizio's paired devices (Settings > System > Mobile Devices,
-approximately; the name varies by model), or reset the Vizio to factory settings as a last resort.
+approximately; the name varies by model).
 The key the Vizio hands over is sealed with Windows
 (DPAPI) in `%APPDATA%\tv-remote\vizio-auth.sealed` and never shown. The remote also remembers the Vizio's
 certificate; if a different device answers at that address later, the remote refuses it and says to pair again.
