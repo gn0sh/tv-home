@@ -607,7 +607,9 @@ m3_dirty=1
 m3_cleanup() { [[ -n ${m3_dirty:-} ]] && m3_restore; return 0; }
 other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front && fail "m3: as installed, Home opened the dashboard (the Home watch must be off until turned on)"
-pass "m3: as installed, Home is still the TV's own ($(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1))"
+stock_pkg=$(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1); stock_pkg=${stock_pkg%%/*}
+[[ -n $stock_pkg ]] || fail "m3: could not read the TV's own home package (test setup)"
+pass "m3: as installed, Home is still the TV's own ($stock_pkg)"
 if [[ -z $a11y_before || $a11y_before == null ]]; then list="$svc"; else list="$a11y_before:$svc"; fi
 sh_ settings put secure enabled_accessibility_services "$list"
 sh_ settings put secure accessibility_enabled 1
@@ -626,13 +628,14 @@ fi
 pass "m3: Home from another app opens the dashboard"
 # The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
 # Settings; the next Home press goes back to redirecting.
-sh_ input keyevent KEYCODE_HOME; sleep 3
+# A fresh redirect, then Home again about a second later (inside the 2.5 s window).
+sh_ input keyevent KEYCODE_HOME; sleep 1; sh_ input keyevent KEYCODE_HOME; sleep 4
 in_front && fail "m3: a quick second Home did not leave the TV's own home showing"
-resumed | head -1 | grep -q 'tvlauncher' || fail "m3: a quick second Home did not show the TV's own home ($(resumed | head -1))"
+resumed | head -1 | grep -qF "$stock_pkg/" || fail "m3: a quick second Home did not show the TV's own home ($(resumed | head -1))"
 pass "m3: Home twice quickly leaves the TV's own home (and its Settings) showing"
-sh_ input keyevent KEYCODE_HOME; sleep 3
-in_front || fail "m3: the next Home after the double press did not open the dashboard ($(resumed | head -1))"
-pass "m3: the next Home press opens the dashboard again"
+other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3: after leaving the TV's own home, Home did not open the dashboard again ($(resumed | head -1))"
+pass "m3: once another app has been opened, Home opens the dashboard again"
 if (( napps >= 2 )); then
   start=$(focus_after m3); start_name=${start%%|*}
   key DPAD_RIGHT; key DPAD_RIGHT

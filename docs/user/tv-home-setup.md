@@ -96,8 +96,8 @@ shows what it will change and asks you to type YES):
 The remote's Home button, and turning the TV on, then open the dashboard, with focus on the first tile. You will see
 the TV's own home for a moment first; that is expected. Back on the dashboard's row stays on the dashboard.
 
-**To reach the TV's own home** (its Settings gear, apps and inputs): press Home twice quickly. It stays until the next
-Home press.
+**To reach the TV's own home** (its Settings gear, apps and inputs): press Home twice quickly. It stays until you open
+an app; after that, Home opens the dashboard again.
 
 How it works: "Dashboard Home button" in the TV's accessibility settings notices when the TV's own home comes up and
 opens the dashboard. It is told which app comes to the front, never what is on screen, and keeps nothing. (Google TV does not let

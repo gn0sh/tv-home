@@ -27,6 +27,9 @@ class HomeWatchService : AccessibilityService() {
     private val recent = ArrayDeque<Long>()
     private var pausedUntil = 0L
 
+    /** After a double press: the TV's own home stays, even if it reports itself again, until another app comes up. */
+    private var staying = false
+
     override fun onServiceConnected() {
         val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         // The default home only (home-set-stale): not Settings' FallbackHome or a setup wizard, which also declare HOME.
@@ -39,11 +42,18 @@ class HomeWatchService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val target = home ?: return
-        if (event.packageName?.toString() != target.first || event.className?.toString() != target.second) return
+        val pkg = event.packageName?.toString()
+        if (pkg != target.first) {
+            // Another app came up (not a system overlay such as the volume bar): the next Home redirects again.
+            if (pkg != null && pkg != SYSTEM_UI) staying = false
+            return
+        }
+        if (event.className?.toString() != target.second || staying) return
         val now = SystemClock.elapsedRealtime()
         if (now < pausedUntil) return
-        // A second Home within the window after a redirect: leave the TV's own home showing.
-        if (now - lastRedirect < DOUBLE_PRESS_MS) { lastRedirect = 0L; return }
+        // A second Home within the window after a redirect: leave the TV's own home showing (home-redirect-while-browsing:
+        // it may report itself again while its tabs are browsed, so it stays until another app comes up).
+        if (now - lastRedirect < DOUBLE_PRESS_MS) { lastRedirect = 0L; staying = true; return }
         while (recent.isNotEmpty() && now - recent.first() > BURST_MS) recent.removeFirst()
         if (recent.size >= BURST_MAX) { pausedUntil = now + PAUSE_MS; recent.clear(); return }
         recent.addLast(now)
@@ -67,5 +77,7 @@ class HomeWatchService : AccessibilityService() {
         const val BURST_MAX = 6
         const val BURST_MS = 10_000L
         const val PAUSE_MS = 120_000L
+
+        const val SYSTEM_UI = "com.android.systemui"
     }
 }
