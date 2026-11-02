@@ -477,6 +477,92 @@ else
   no_app_crash_yet "row re-entry"
 fi
 
+hero_text() { # the "Hero title: <label>" description in the UI dump (also defined as hero_title for the Hero step)
+  ui_text | grep -oE 'content-desc="Hero title: [^"]*"' | head -1 | sed -E 's/^content-desc="Hero title: (.*)"$/\1/' || true
+}
+step "Row edit (M2g): long-press OK opens the menu, Move right reorders, Hide hides, the Hidden tile restores"
+# The tile menu (a dialog) opens with focus on its first entry, Cancel; Move left is one Down from there, Move right
+# two, Hide four. The menu entries are plain text nodes, so they are checked with expect_text, and chosen by key count.
+# OK is held with `input keyevent --longpress` (press, a repeat flagged long-press after the timeout, release); API 34's
+# input tool has no --duration, which was silently a short press. The release lands after the menu opened, so the menu
+# must ignore it and choose nothing (menu-held-ok-repeat).
+long_press_ok() { sh_ input keyevent --longpress KEYCODE_DPAD_CENTER; sleep 2; }
+key_trace() { # the dispatcher's recent OK-key events and the input tool's keyevent usage, for a long press that misfired
+  echo "--- recent DPAD_CENTER events (dumpsys input):"; sh_ dumpsys input | tr -d '\r' | grep -E 'KeyEvent.*keyCode=(23|DPAD_CENTER|KEYCODE_DPAD_CENTER)' | tail -20 || true
+  echo "--- input keyevent usage:"; sh_ input 2>&1 | tr -d '\r' | grep -iA2 'keyevent' || true
+}
+if (( napps < 2 )); then
+  warn "Row edit NOT VERIFIED: $napps other TV app(s) on this image, a reorder needs at least 2"
+else
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  in_front || fail "row-edit: home screen not in front"
+  first=$(focus_after row-edit); first_name=${first%%|*}; first_x=$(cut -d'|' -f2 <<<"$first")
+  [[ -n $first_name ]] || fail "row-edit: no focused tile on launch (expected the first app tile)"
+  key DPAD_RIGHT; second=$(focus_after row-edit); second_name=${second%%|*}
+  [[ -n $second_name && $second_name != "$first_name" ]] || fail "row-edit: Right did not reach a second tile (now '$second_name')"
+  key DPAD_LEFT
+  # Long-press OK on the first tile: the menu shows all five entries.
+  long_press_ok
+  in_front || { key_trace; fail "row-edit: the long press left the app (it launched the tile instead of opening the menu)"; }
+  for t in "Cancel" "Move left" "Move right" "Move to front" "Hide"; do expect_text "row-edit-menu" "$t"; done
+  # Back closes the menu and focus returns to the same tile, which did not move during the hold.
+  key BACK
+  cur=$(focus_after row-edit)
+  [[ ${cur%%|*} == "$first_name" ]] || fail "row-edit: after Back from the menu focus is on '${cur%%|*}', not '$first_name'"
+  [[ $(cut -d'|' -f2 <<<"$cur") == "$first_x" ]] || fail "row-edit: the held OK moved '$first_name' without a choice ($cur)"
+  pass "row-edit: Back closed the menu, the hold chose nothing, focus returned to '$first_name'"
+  # Move right: the first tile swaps with the second and focus follows it.
+  long_press_ok; expect_text "row-edit-held" "Move right"   # still open: the hold chose nothing
+  key DPAD_DOWN; key DPAD_DOWN; key DPAD_CENTER; sleep 1
+  cur=$(focus_after row-edit)
+  [[ ${cur%%|*} == "$first_name" ]] || fail "row-edit: after Move right focus is on '${cur%%|*}', not the moved tile '$first_name'"
+  moved_x=$(cut -d'|' -f2 <<<"$cur")
+  (( moved_x > first_x )) || fail "row-edit: '$first_name' did not move right (x $first_x -> $moved_x)"
+  on_screen "$cur" || fail "row-edit: the moved tile is off screen ($cur)"
+  key DPAD_LEFT; cur=$(focus_after row-edit)
+  [[ ${cur%%|*} == "$second_name" ]] || fail "row-edit: Left of the moved tile is '${cur%%|*}', expected '$second_name' (now first)"
+  # The hero title follows the focused tile.
+  [[ $(hero_text) == "$second_name" ]] || fail "row-edit: hero title is '$(hero_text)', expected '$second_name'"
+  pass "row-edit: Move right put '$first_name' after '$second_name', focus followed, hero title updated"
+  # Restore the order: Right back onto the moved tile, long-press, Move left (one Down from Cancel).
+  key DPAD_RIGHT; long_press_ok; key DPAD_DOWN; key DPAD_CENTER; sleep 1
+  cur=$(focus_after row-edit)
+  [[ ${cur%%|*} == "$first_name" && $(cut -d'|' -f2 <<<"$cur") == "$first_x" ]] || fail "row-edit: Move left did not restore '$first_name' to the front ($cur)"
+  pass "row-edit: Move left restored the original order"
+
+  # Hide the first tile: it is gone from the row, and a "Hidden apps (1)" tile is at the end.
+  long_press_ok; key DPAD_DOWN; key DPAD_DOWN; key DPAD_DOWN; key DPAD_DOWN; key DPAD_CENTER; sleep 1
+  ui=$(ui_text); [[ -n $ui ]] || fail "row-edit: uiautomator dump failed after Hide"
+  printf '%s\n' "$ui" > "$OUT/ui-row-edit-hidden.xml"
+  grep -qF "content-desc=\"$first_name\"" <<<"$ui" && fail "row-edit: '$first_name' is still on the row after Hide"
+  pass "row-edit: '$first_name' is gone from the row after Hide"
+  cur=$(focus_after row-edit)
+  [[ -n ${cur%%|*} ]] || fail "row-edit: no tile has focus after Hide"
+  # The Hidden tile is the last one: walk Right until it is focused (it may be scrolled out of the composed items).
+  found=""
+  for _ in $(seq 1 $((napps + 1))); do
+    cur=$(focus_after row-edit)
+    if [[ ${cur%%|*} == "Hidden apps (1)" ]]; then found=1; break; fi
+    key DPAD_RIGHT
+  done
+  [[ -n $found ]] || fail "row-edit: no 'Hidden apps (1)' tile at the end of the row after Hide"
+  on_screen "$cur" || fail "row-edit: the Hidden tile is off screen ($cur)"
+  pass "row-edit: 'Hidden apps (1)' is the last tile"
+  # OK opens the list with the hidden app; OK on it puts it back, and (it was the last one) the list closes.
+  key DPAD_CENTER; sleep 1
+  expect_text "row-edit-hidden-list" "$first_name"
+  key DPAD_CENTER; sleep 2
+  cur=$(focus_after row-edit)
+  [[ ${cur%%|*} == "$first_name" && $(cut -d'|' -f2 <<<"$cur") == "$first_x" ]] || fail "row-edit: after un-hiding, '$first_name' is not first and focused ($cur)"
+  ui=$(ui_text); grep -qF 'content-desc="Hidden apps' <<<"$ui" && fail "row-edit: the Hidden tile is still there with no hidden apps"
+  pass "row-edit: un-hiding restored '$first_name' to the front and removed the Hidden tile (original state)"
+  # One Back from the row still leaves the app (home-back-twice): the menu and list are dialogs, not focus targets.
+  sh_ input keyevent KEYCODE_BACK; sleep 2
+  in_front && fail "row-edit: one Back on the home row after editing does not leave the app (home-back-twice)"
+  pass "row-edit: one Back leaves the app"
+  no_app_crash_yet "row edit"
+fi
+
 step "Hero (M2e): the hero title matches the focused tile after Right x2"
 # The hero title carries the content description "Hero title: <label>"; the focused app tile's description is its label.
 hero_title() {

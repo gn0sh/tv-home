@@ -46,6 +46,8 @@ class AgendaActivity : ComponentActivity() {
     private var apps by mutableStateOf<AppsState>(AppsState.Loading)
     private var theme by mutableStateOf(HomeTheme.DEFAULT)
     private val installed = InstalledApps()
+    private var layout by mutableStateOf(SavedLayout())
+    private val layoutStore by lazy { AppLayoutStore(applicationContext) }
 
     /**
      * Speech for Ask Claude: the system recognizer dialog (RecognizerIntent), so the app needs no RECORD_AUDIO
@@ -89,6 +91,7 @@ class AgendaActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             theme = withContext(Dispatchers.IO) { InstalledApps.loadTheme(applicationContext) }
+            layout = withContext(Dispatchers.IO) { runCatching { layoutStore.load() }.getOrNull() } ?: SavedLayout()
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
                     val density = resources.displayMetrics.density
@@ -130,6 +133,14 @@ class AgendaActivity : ComponentActivity() {
                 tile = tile,
                 agenda = model,
                 ask = askHost,
+                layout = layout,
+                onLayoutChange = { next ->
+                    // Unknown packages stay in the stored order and hidden set (layout-prune-transient): only display
+                    // filters them. apply() updates the in-memory prefs at once and writes in call order, so saves
+                    // cannot land out of order (layout-save-order); it is called on the main thread on purpose.
+                    layout = next
+                    runCatching { layoutStore.save(next) }
+                },
             )
         }
     }

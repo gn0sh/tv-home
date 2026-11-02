@@ -1,6 +1,8 @@
 package com.gnosh.tvhome
 
 import androidx.activity.compose.BackHandler
+import android.os.SystemClock
+import android.view.ViewConfiguration
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,23 +12,28 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -42,7 +49,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -55,7 +66,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Text
+import tvhome.core.apps.AppLayout
 import tvhome.core.apps.LauncherApp
 import tvhome.core.assistant.AskCopy
 import tvhome.core.ui.CALENDAR_TILE_LABEL
@@ -104,6 +117,8 @@ fun HomeScreen(
     tile: CalendarTile,
     agenda: ScreenModel,
     ask: AskHost,
+    layout: SavedLayout,
+    onLayoutChange: (SavedLayout) -> Unit,
 ) {
     // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
     var open by rememberSaveable { mutableStateOf<String?>(null) }
@@ -116,9 +131,72 @@ fun HomeScreen(
         DOCK_CALENDAR -> { CalendarFullScreen(agenda, theme, onClose = ::close); return }
         DOCK_ASK -> { AskFullScreen(ask, theme, onClose = ::close); return }
     }
-    val appList = (apps as? AppsState.Loaded)?.apps.orEmpty()
-    val hasApps = appList.isNotEmpty()
-    val firstApp = appList.firstOrNull()?.let { appFocus.requester(it.app.packageName) }
+    // Everything installed (default order), then the user's order and hidden set applied (M2g, AppLayout in :core).
+    val allApps = (apps as? AppsState.Loaded)?.apps.orEmpty()
+    val installedPkgs = remember(allApps) { allApps.map { it.app.packageName } }
+    val byPkg = remember(allApps) { allApps.associateBy { it.app.packageName } }
+    val appList = remember(allApps, layout) {
+        AppLayout.apply(layout.order, layout.hidden, installedPkgs).mapNotNull { byPkg[it] }
+    }
+    val hiddenList = remember(allApps, layout) {
+        AppLayout.hiddenApps(layout.order, layout.hidden, installedPkgs).mapNotNull { byPkg[it] }
+    }
+    // The row's focus targets in order: the visible apps, then the Hidden tile when there are hidden apps.
+    val rowKeys = remember(appList, hiddenList) {
+        appList.map { it.app.packageName } + if (hiddenList.isNotEmpty()) listOf(HIDDEN_KEY) else emptyList()
+    }
+    val hasApps = rowKeys.isNotEmpty()
+    val firstApp = rowKeys.firstOrNull()?.let { appFocus.requester(it) }
+    // The tile whose menu is open, whether the hidden list is open, and which row tile should get focus (and scroll
+    // into view) once the next composition has the new order.
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    var hiddenOpen by remember { mutableStateOf(false) }
+    var pendingFocus by remember { mutableStateOf<String?>(null) }
+    fun visiblePkgs() = appList.map { it.app.packageName }
+    fun commit(next: SavedLayout, focusKey: String?, keepScroll: Boolean = false) {
+        // A move keeps the row where it is (move-scroll-anchor): a LazyRow keeps its first visible item's key in place
+        // when the data changes, so moving the first tile right would scroll the row along with it and look like
+        // nothing moved. This position is used instead on the next measure; pendingFocus then brings the tile into view.
+        if (keepScroll) rowState.requestScrollToItem(rowState.firstVisibleItemIndex, rowState.firstVisibleItemScrollOffset)
+        onLayoutChange(next)
+        pendingFocus = focusKey
+    }
+    fun onTileAction(pkg: String, action: TileAction) {
+        menuFor = null
+        when (action) {
+            TileAction.Left -> commit(layout.copy(order = AppLayout.moveLeft(layout.order, layout.hidden, installedPkgs, pkg)), pkg, keepScroll = true)
+            TileAction.Right -> commit(layout.copy(order = AppLayout.moveRight(layout.order, layout.hidden, installedPkgs, pkg)), pkg, keepScroll = true)
+            TileAction.Front -> commit(layout.copy(order = AppLayout.moveToFront(layout.order, installedPkgs, pkg)), pkg, keepScroll = true)
+            TileAction.Hide -> {
+                val before = visiblePkgs()
+                val rest = before - pkg
+                // Focus goes to the tile that slides into the hidden one's place, else the one before it, else the Hidden tile.
+                val next = rest.getOrNull(before.indexOf(pkg)) ?: rest.lastOrNull() ?: HIDDEN_KEY
+                commit(layout.copy(order = AppLayout.stored(layout.order, installedPkgs), hidden = AppLayout.hide(layout.hidden, pkg)), next)
+            }
+            TileAction.Cancel -> pendingFocus = pkg
+        }
+    }
+    fun onUnhide(pkg: String) {
+        val last = hiddenList.size <= 1
+        if (last) hiddenOpen = false
+        commit(layout.copy(hidden = AppLayout.unhide(layout.hidden, pkg)), if (last) pkg else null)
+    }
+    LaunchedEffect(pendingFocus) {
+        val key = pendingFocus ?: return@LaunchedEffect
+        // Two frames: frame callbacks run before that frame's layout, so after the second one the row has been measured
+        // with the new layout (and any move-scroll-anchor request applied) and layoutInfo below is not the old one.
+        withFrameNanos { }; withFrameNanos { }
+        val index = rowKeys.indexOf(key)
+        if (index >= 0) {
+            val info = rowState.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+            val whole = item != null && item.offset >= info.viewportStartOffset && item.offset + item.size <= info.viewportEndOffset
+            if (!whole) runCatching { rowState.animateScrollToItem(index) }
+            focusSoon(appFocus.requester(key))
+        }
+        pendingFocus = null
+    }
     val calendar = remember { FocusRequester() }
     val askTile = remember { FocusRequester() }
     // Initial focus is settled once it reached the first app, the user pressed a key, or we came back from a full
@@ -158,7 +236,10 @@ fun HomeScreen(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
         ) {
             Spacer(Modifier.weight(1f))
-            AppRow(apps, appList, theme, rowState, appFocus, onLaunch) { heroLabel.value = it }
+            AppRow(
+                apps, appList, hiddenList.size, rowKeys, theme, rowState, appFocus, onLaunch,
+                onMenu = { menuFor = it }, onOpenHidden = { hiddenOpen = true },
+            ) { heroLabel.value = it }
             Dock(theme) {
                 CalendarTileView(tile, theme, calendar, down = askTile, onFocused = { heroLabel.value = CALENDAR_TILE_LABEL }, onClick = { open = DOCK_CALENDAR })
             }
@@ -171,6 +252,29 @@ fun HomeScreen(
         ) {
             AskButton(theme, askTile, up = calendar, onFocused = { heroLabel.value = AskCopy.TILE_LABEL }, onClick = { open = DOCK_ASK })
         }
+    }
+    // Dialogs are separate windows, so they add no focus target to the home window (home-back-twice). Back closes
+    // them (onDismissRequest) and focus is put back on the tile that opened them.
+    val menuTile = menuFor?.let { byPkg[it] }
+    if (menuTile != null) {
+        val pkg = menuTile.app.packageName
+        TileMenu(
+            theme, menuTile.app.label,
+            onAction = { onTileAction(pkg, it) },
+            onDismiss = { menuFor = null; pendingFocus = pkg },
+        )
+    }
+    if (hiddenOpen && hiddenList.isNotEmpty()) {
+        HiddenAppsDialog(
+            theme, hiddenList,
+            onUnhide = { onUnhide(it.app.packageName) },
+            onDismiss = { hiddenOpen = false; pendingFocus = HIDDEN_KEY },
+        )
+    }
+    // An app that vanished (uninstalled) while its menu or the hidden list was open closes them.
+    LaunchedEffect(menuTile == null, hiddenList.isEmpty()) {
+        if (menuTile == null) menuFor = null
+        if (hiddenList.isEmpty()) hiddenOpen = false
     }
 }
 
@@ -209,9 +313,9 @@ private class AppFocus {
      * is the row's own scrollable container, not the tile. Entering the row then gave focus to that invisible container,
      * and Right/Left had nothing to move to, so the row could not be scrolled until focus left it.
      */
-    fun enterTarget(apps: List<TileApp>, row: LazyListState): FocusRequester? {
+    fun enterTarget(keys: List<String>, row: LazyListState): FocusRequester? {
         val pkg = lastFocused ?: return null
-        val index = apps.indexOfFirst { it.app.packageName == pkg }
+        val index = keys.indexOf(pkg)
         if (index < 0 || row.layoutInfo.visibleItemsInfo.none { it.index == index }) return null
         return requester(pkg)
     }
@@ -246,13 +350,17 @@ private fun CalendarFullScreen(agenda: ScreenModel, theme: HomeTheme, onClose: (
 private fun AppRow(
     state: AppsState,
     apps: List<TileApp>,
+    hiddenCount: Int,
+    rowKeys: List<String>,
     theme: HomeTheme,
     rowState: LazyListState,
     appFocus: AppFocus,
     onLaunch: (LauncherApp) -> Unit,
+    onMenu: (String) -> Unit,
+    onOpenHidden: () -> Unit,
     onHeroLabel: (String) -> Unit,
 ) {
-    if (apps.isEmpty()) {
+    if (apps.isEmpty() && hiddenCount == 0) {
         // The message takes the row's place, at the row's height, so the dock does not jump when apps arrive.
         val msg = when (state) {
             AppsState.Loading -> "Loading apps…"
@@ -267,21 +375,36 @@ private fun AppRow(
         }
         return
     }
-    LaunchedEffect(apps) { appFocus.forget(apps.mapTo(HashSet()) { it.app.packageName }) }
+    LaunchedEffect(rowKeys) { appFocus.forget(rowKeys.toHashSet()) }
     // A lazy row clips to its bounds; the content padding leaves room for the focus scale. The enter property and
     // focusGroup cannot take focus themselves, so Back still finds no focusable ancestor (home-back-twice).
     LazyRow(
         state = rowState,
         modifier = Modifier
             .fillMaxWidth()
-            .focusProperties { enter = { appFocus.enterTarget(apps, rowState) ?: FocusRequester.Default } }
+            .focusProperties { enter = { appFocus.enterTarget(rowKeys, rowState) ?: FocusRequester.Default } }
             .focusGroup(),
         contentPadding = rowPadding(theme),
         horizontalArrangement = Arrangement.spacedBy(TILE_GAP_DP.dp),
     ) {
         items(apps, key = { it.app.packageName }) { t ->
             val pkg = t.app.packageName
-            AppTile(t, theme, appFocus.requester(pkg), onFocused = { appFocus.lastFocused = pkg; onHeroLabel(t.app.label) }) { onLaunch(t.app) }
+            AppTile(
+                t, theme, appFocus.requester(pkg),
+                onFocused = { appFocus.lastFocused = pkg; onHeroLabel(t.app.label) },
+                onLongClick = { onMenu(pkg) },
+            ) { onLaunch(t.app) }
+        }
+        if (hiddenCount > 0) {
+            item(key = HIDDEN_KEY) {
+                val label = "Hidden apps ($hiddenCount)"
+                TileFrame(
+                    theme, label, label, appFocus.requester(HIDDEN_KEY), onOpenHidden,
+                    onFocused = { appFocus.lastFocused = HIDDEN_KEY; onHeroLabel(label) },
+                ) {
+                    Text("$hiddenCount", color = color(theme.text), fontSize = 48.sp)
+                }
+            }
         }
     }
 }
@@ -313,9 +436,18 @@ private fun TileFrame(
     onClick: () -> Unit,
     onFocused: () -> Unit = {},
     down: FocusRequester? = null,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable BoxScope.(focused: Boolean) -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // Holding OK (M2g tile menu). combinedClickable's long click did not fire for a held DPAD_CENTER on the emulator (the
+    // tile launched instead), so OK is handled here: a press shorter than the long-press timeout clicks, a longer one
+    // (a repeat flagged long-press, or held past the timeout) opens the menu once; the release after it does nothing.
+    // Held time is measured on arrival, not from event times: `input keyevent --duration` sends the release with the
+    // press's own event time, so event times read as a short press there.
+    val longTimeout = remember { ViewConfiguration.getLongPressTimeout().toLong() }
+    val downAt = remember { mutableLongStateOf(-1L) }
+    val longFired = remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(10.dp)
     Column(Modifier.width(theme.tileWidthDp.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -335,7 +467,36 @@ private fun TileFrame(
                     if (it.isFocused) onFocused()
                 }
                 .semantics { contentDescription = description }
-                .clickable(onClick = onClick), // focusable on TV; OK/Enter/D-pad centre clicks
+                .then(
+                    if (onLongClick == null) Modifier else Modifier.onPreviewKeyEvent { e ->
+                        if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) {
+                            return@onPreviewKeyEvent false
+                        }
+                        val n = e.nativeKeyEvent
+                        when (e.type) {
+                            KeyEventType.KeyDown -> {
+                                if (n.repeatCount == 0) {
+                                    downAt.longValue = SystemClock.uptimeMillis(); longFired.value = false
+                                } else if (!longFired.value && downAt.longValue >= 0 &&
+                                    (n.isLongPress || SystemClock.uptimeMillis() - downAt.longValue >= longTimeout)
+                                ) {
+                                    longFired.value = true; onLongClick()
+                                }
+                                true
+                            }
+                            KeyEventType.KeyUp -> {
+                                if (downAt.longValue >= 0 && !longFired.value && !n.isCanceled) {
+                                    if (SystemClock.uptimeMillis() - downAt.longValue >= longTimeout) onLongClick() else onClick()
+                                }
+                                downAt.longValue = -1L; longFired.value = false
+                                true
+                            }
+                            else -> false
+                        }
+                    },
+                )
+                // Focusable on TV; OK/Enter/D-pad centre clicks (tiles with a menu handle OK above).
+                .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) { content(focused) }
         Spacer(Modifier.height(12.dp))
@@ -429,9 +590,104 @@ private const val ASK_BUTTON_H_DP = 56
 private const val DOCK_CALENDAR = "calendar"
 private const val DOCK_ASK = "ask"
 
+/** Focus-requester key of the "Hidden apps (N)" tile; cannot clash with a package name. */
+private const val HIDDEN_KEY = "::hidden"
+
+private val OK_KEYS = setOf(Key.Enter, Key.DirectionCenter, Key.NumPadEnter)
+
+/** The tile menu's entries, in the order shown (M2g). */
+private enum class TileAction(val label: String) {
+    Cancel("Cancel"), Left("Move left"), Right("Move right"), Front("Move to front"), Hide("Hide"),
+}
+
+/** The small menu a long press on an app tile opens. The first entry (Cancel, the safe one) has focus; Back closes it. */
 @Composable
-private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, onFocused: () -> Unit, onClick: () -> Unit) {
-    TileFrame(theme, t.app.label, t.app.label, requester, onClick, onFocused) {
+private fun TileMenu(theme: HomeTheme, title: String, onAction: (TileAction) -> Unit, onDismiss: () -> Unit) {
+    val first = remember { FocusRequester() }
+    Dialog(onDismissRequest = onDismiss) {
+        LaunchedEffect(Unit) { focusSoon(first) }
+        DialogCard(theme, title) {
+            TileAction.entries.forEachIndexed { i, action ->
+                MenuRow(theme, action.label, if (i == 0) first else null) { onAction(action) }
+            }
+        }
+    }
+}
+
+/** The list the Hidden tile opens: OK on an app shows it on the row again. Back closes it. */
+@Composable
+private fun HiddenAppsDialog(theme: HomeTheme, hidden: List<TileApp>, onUnhide: (TileApp) -> Unit, onDismiss: () -> Unit) {
+    val first = remember { FocusRequester() }
+    Dialog(onDismissRequest = onDismiss) {
+        // On open, and after an app leaves the list (the focused row is gone), focus goes to the first row.
+        LaunchedEffect(hidden.size) { focusSoon(first) }
+        DialogCard(theme, "Hidden apps") {
+            Text("OK on an app puts it back on the row.", color = color(theme.secondaryText), fontSize = Tokens.SECONDARY_SP.sp)
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                itemsIndexed(hidden, key = { _, t -> t.app.packageName }) { i, t ->
+                    MenuRow(theme, t.app.label, if (i == 0) first else null) { onUnhide(t) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialogCard(theme: HomeTheme, title: String, content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    val armed = remember { booleanArrayOf(false) }
+    Column(
+        Modifier
+            .width(420.dp)
+            .clip(shape)
+            .background(color(theme.background), shape)
+            .border(Tokens.RING_DP.dp, color(theme.secondaryText), shape)
+            .padding(24.dp)
+            // menu-held-ok-repeat: OK is still held down when the dialog opens, and a real remote then sends repeated
+            // KeyDowns and finally a KeyUp. Swallow OK/Enter events until a fresh press (KeyDown, repeatCount 0)
+            // arrives, so the held press cannot choose an entry.
+            .onPreviewKeyEvent { e ->
+                if (armed[0] || e.key !in OK_KEYS) {
+                    false
+                } else if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) {
+                    armed[0] = true
+                    false
+                } else {
+                    true
+                }
+            },
+    ) {
+        Text(title, color = color(theme.text), fontSize = 22.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(12.dp))
+        content()
+    }
+}
+
+/** One focusable row in a dialog, in the tiles' focus colours. */
+@Composable
+private fun MenuRow(theme: HomeTheme, label: String, requester: FocusRequester?, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(10.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .clip(shape)
+            .background(color(if (focused) theme.focusFill else theme.tile), shape)
+            .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
+            .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Text(label, color = color(if (focused) theme.text else theme.secondaryText), fontSize = Tokens.SECONDARY_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, onFocused: () -> Unit, onLongClick: () -> Unit, onClick: () -> Unit) {
+    TileFrame(theme, t.app.label, t.app.label, requester, onClick, onFocused, onLongClick = onLongClick) {
         val img = t.image
         if (img != null) {
             Image(
