@@ -619,6 +619,8 @@ pass "m3: Home from another app opens the dashboard"
 if (( napps >= 2 )); then
   start=$(focus_after m3); start_name=${start%%|*}
   key DPAD_RIGHT; key DPAD_RIGHT
+  moved=$(focus_after m3)
+  [[ -n ${moved%%|*} && ${moved%%|*} != "$start_name" ]] || fail "m3: Right x2 did not move focus off '$start_name' (test setup; m3-home-focus-vacuous)"
   sh_ input keyevent KEYCODE_HOME; sleep 3
   cur=$(focus_after m3)
   [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"

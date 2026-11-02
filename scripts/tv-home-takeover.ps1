@@ -26,7 +26,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-if ($TurnOn -eq $Rollback) { throw 'Choose -TurnOn or -Rollback.' }
+if ($TurnOn.IsPresent -eq $Rollback.IsPresent) { throw 'Choose -TurnOn or -Rollback.' }
 if ($Serial -notmatch '\A\d{1,3}(\.\d{1,3}){3}:\d{1,5}\z') { throw 'Serial must look like 192.168.68.71:5555' }
 
 $Tools = Join-Path $env:LOCALAPPDATA 'tv-home-tools'
