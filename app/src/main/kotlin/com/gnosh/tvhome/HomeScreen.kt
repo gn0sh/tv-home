@@ -63,6 +63,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -119,6 +120,7 @@ const val CALENDAR_FULL_SCREEN = "Calendar full screen"
  * the full-screen switch, so they survive it.
  */
 @Composable
+@OptIn(ExperimentalComposeUiApi::class) // testTagsAsResourceId
 fun HomeScreen(
     apps: AppsState,
     theme: HomeTheme,
@@ -260,6 +262,8 @@ fun HomeScreen(
         Modifier
             .fillMaxSize()
             .background(color(theme.background))
+            // Test tags (the hero's idle state) show as uiautomator resource-ids for the emulator QA; not read aloud.
+            .semantics { testTagsAsResourceId = true }
             // Key handlers are not focus targets, so this does not reintroduce home-back-twice. In NEAR_BLACK the
             // first key only wakes the screen (consumed); otherwise every key passes through.
             .onPreviewKeyEvent { e -> settled = true; idle.onPreviewKey(e) },

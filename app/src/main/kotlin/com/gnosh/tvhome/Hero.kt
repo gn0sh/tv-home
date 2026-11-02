@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,8 +97,11 @@ const val HERO_BACKDROP_FRACTION = 0.55f
 /** Content description prefix of the Now/Next line 1, read by the emulator QA check (scripts/ci/emulator-qa.sh). */
 const val HERO_NOW_DESC_PREFIX = "Hero now: "
 
-/** Content description prefix of the hero layer (followed by the IdleState name), read by the emulator QA check. */
-const val HERO_IDLE_DESC_PREFIX = "Hero idle: "
+/**
+ * Test tag prefix of the hero layer (followed by the IdleState name). Exposed as the uiautomator resource-id
+ * (testTagsAsResourceId on the home screen's root) for the emulator QA check; TalkBack does not read it.
+ */
+const val HERO_IDLE_TAG_PREFIX = "hero_idle_"
 
 /** Content description prefix of the context card, read by the emulator QA check. */
 const val HERO_CARD_DESC_PREFIX = "Hero card: "
@@ -150,8 +154,8 @@ fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modif
         text = if (dim) OledTokens.DIM_TEXT else resolved.text,
         secondary = if (dim) OledTokens.DIM_TEXT else resolved.secondaryText,
     )
-    // Not focusable; the description lets the emulator QA read the idle state (scripts/ci/emulator-qa.sh).
-    Box(modifier.fillMaxSize().semantics { contentDescription = HERO_IDLE_DESC_PREFIX + idle.value.name }) {
+    // Not focusable; the test tag lets the emulator QA read the idle state (scripts/ci/emulator-qa.sh).
+    Box(modifier.fillMaxSize().testTag(HERO_IDLE_TAG_PREFIX + idle.value.name)) {
         HeroBackdrop(
             resolved, weather?.precipNow,
             scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
@@ -359,12 +363,16 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, scrimAlpha: () -> Fl
         if (frozen) imageAlpha.snapTo(1f) else imageAlpha.animateTo(1f, tween(CROSSFADE_MS))
     }
     val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || precip != null)
-    LaunchedEffect(animate) {
+    // The particle tick runs only while the activity is STARTED (no animation work behind another app).
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(animate, owner) {
         if (!animate) return@LaunchedEffect
         val t0 = SystemClock.elapsedRealtime()
-        while (true) {
-            delay(FRAME_MS)
-            tick.longValue = (SystemClock.elapsedRealtime() - t0) * 1_000_000L
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(FRAME_MS)
+                tick.longValue = (SystemClock.elapsedRealtime() - t0) * 1_000_000L
+            }
         }
     }
     Box(

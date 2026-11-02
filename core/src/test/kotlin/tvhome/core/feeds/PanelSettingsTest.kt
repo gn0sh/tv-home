@@ -98,6 +98,20 @@ class PanelSettingsTest {
 }
 
 class IdleTestSettingTest {
+    @Test fun overrideExpiresAfterAnHour() {
+        val set = 1_000_000_000L
+        val hour = 60 * 60_000L
+        assertEquals(20, SettingsValidator.idleTestActive(20, set, set))
+        assertEquals(20, SettingsValidator.idleTestActive(20, set, set + hour - 1))
+        assertNull(SettingsValidator.idleTestActive(20, set, set + hour))
+        assertNull(SettingsValidator.idleTestActive(20, set, set + 10 * hour))
+        assertNull(SettingsValidator.idleTestActive(20, null, set), "no stamp: ignored")
+        assertNull(SettingsValidator.idleTestActive(null, set, set))
+        assertNull(SettingsValidator.idleTestActive(4, set, set), "out of range")
+        assertEquals(20, SettingsValidator.idleTestActive(20, set + 30_000, set), "small skew")
+        assertNull(SettingsValidator.idleTestActive(20, set + 2 * 60_000, set), "stamp in the future")
+    }
+
     @Test fun secondsIsAnIntInRange() {
         assertEquals(20, SettingsValidator.idleTest(mapOf("seconds" to 20)))
         assertEquals(5, SettingsValidator.idleTest(mapOf("seconds" to 5)))

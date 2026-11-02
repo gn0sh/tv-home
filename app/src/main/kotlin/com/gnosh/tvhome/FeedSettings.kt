@@ -4,6 +4,7 @@ import android.content.Context
 import tvhome.core.feeds.Location
 import tvhome.core.feeds.PanelId
 import tvhome.core.feeds.PanelSwitches
+import tvhome.core.feeds.SettingsValidator
 import tvhome.core.feeds.TravelRules
 import tvhome.core.feeds.panelSwitches
 import tvhome.core.ui.TravelRule
@@ -43,6 +44,7 @@ object FeedSettings {
     private const val TV_PROFILE = "tv_profile"
     private const val TRAVEL = "travel"
     private const val IDLE_TEST = "idle_test_s"
+    private const val IDLE_TEST_AT = "idle_test_at"
     private val lock = Any()
 
     private fun prefs(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -72,13 +74,20 @@ object FeedSettings {
     fun clearTvProfile(context: Context) { prefs(context).edit().remove(TV_PROFILE).apply() }
 
     /** Emulator QA only: idle thresholds in seconds (DIM after it, NEAR_BLACK after twice it), or null (the profile's). */
+    /** Lasts [SettingsValidator.IDLE_TEST_TTL] from when it was set; an expired or unstamped one is cleared here. */
     fun idleTestSeconds(context: Context): Int? = runCatching {
-        prefs(context).takeIf { it.contains(IDLE_TEST) }?.getInt(IDLE_TEST, 0)
-    }.getOrNull()?.takeIf { it in tvhome.core.feeds.SettingsValidator.IDLE_TEST_SECONDS }
+        val p = prefs(context)
+        if (!p.contains(IDLE_TEST) && !p.contains(IDLE_TEST_AT)) return@runCatching null
+        val s = if (p.contains(IDLE_TEST)) p.getInt(IDLE_TEST, 0) else null
+        val at = if (p.contains(IDLE_TEST_AT)) p.getLong(IDLE_TEST_AT, 0L) else null
+        SettingsValidator.idleTestActive(s, at, System.currentTimeMillis()) ?: run { clearIdleTestSeconds(context); null }
+    }.getOrNull()
 
-    fun setIdleTestSeconds(context: Context, seconds: Int) { prefs(context).edit().putInt(IDLE_TEST, seconds).commit() }
+    fun setIdleTestSeconds(context: Context, seconds: Int) {
+        prefs(context).edit().putInt(IDLE_TEST, seconds).putLong(IDLE_TEST_AT, System.currentTimeMillis()).commit()
+    }
 
-    fun clearIdleTestSeconds(context: Context) { prefs(context).edit().remove(IDLE_TEST).commit() }
+    fun clearIdleTestSeconds(context: Context) { prefs(context).edit().remove(IDLE_TEST).remove(IDLE_TEST_AT).commit() }
 
     fun travelRules(context: Context): List<TravelRule> =
         TravelRules.decode(runCatching { prefs(context).getString(TRAVEL, null) }.getOrNull())

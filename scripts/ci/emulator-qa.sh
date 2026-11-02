@@ -143,7 +143,9 @@ final_scan() {
   [[ $rc -eq 0 ]] && pass "no secret pattern and no dummy value in captured logs, dropbox or dumpsys"
   return $rc
 }
-on_exit() { local rc=$?; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
+# idle-test-sticky: never leave the idle_test override on the device, whatever failed (the TV also expires it at 60 min).
+idle_cleanup() { timeout 30 adb shell content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true; }
+on_exit() { local rc=$?; idle_cleanup; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
 trap on_exit EXIT
 
 step "device"
@@ -581,17 +583,17 @@ in_front && fail "hero: one Back with the M7 hero showing does not leave the app
 pass "hero: one Back leaves the app"
 no_app_crash_yet "hero"
 
-step "M7 F4 idle with a fake clock (idle_test 20 s: DIM at 20 s, NEAR_BLACK at 40 s); any key restores"
+step "M7 F4 idle with a fake clock (idle_test 30 s: DIM at 30 s, NEAR_BLACK at 60 s); any key restores"
 # The provider's /idle_test override (emulator QA only) scales the LG thresholds; it is removed after the M3 checks.
-idle_of() { ui_text | grep -oE 'content-desc="Hero idle: [A-Z_]+"' | head -1 | sed -E 's/.*: ([A-Z_]+)"$/\1/' || true; }
+idle_of() { ui_text | grep -oE 'resource-id="hero_idle_[A-Z_]+"' | head -1 | sed -E 's/.*hero_idle_([A-Z_]+)"$/\1/' || true; }
 black_shown() { ui_text | grep -qF 'content-desc="Screen resting"'; }   # NEAR_BLACK_DESC in IdleLayer.kt
 since() { echo $(( $(date +%s) - $1 )); }
 sleep_until() { local n=$(( $1 + $2 - $(date +%s) )); (( n > 0 )) && sleep "$n"; return 0; }  # $1 = t0, $2 = seconds after it
-sh_ content insert --uri "content://$PKG.provision/idle_test" --bind seconds:i:20 || fail "f4: idle_test insert refused"
+sh_ content insert --uri "content://$PKG.provision/idle_test" --bind seconds:i:30 || fail "f4: idle_test insert refused"
 sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; t0=$(date +%s); sleep 4
 in_front || fail "f4: home screen not in front"
 st=$(idle_of); [[ $st == ACTIVE ]] || fail "f4: idle state at start is '$st', expected ACTIVE"
-sleep_until "$t0" 25
+sleep_until "$t0" 36
 st=$(idle_of); [[ $st == DIM ]] || fail "f4: after $(since "$t0") s the idle state is '$st', expected DIM"
 pass "f4: DIM reached ($(since "$t0") s idle)"
 before=$(focus_after f4)
@@ -604,7 +606,7 @@ if (( napps >= 2 )); then
 else
   pass "f4: a key in DIM restores (pass-through NOT VERIFIED: fewer than 2 other apps)"
 fi
-sleep_until "$t0" 45
+sleep_until "$t0" 66
 black_shown || fail "f4: after $(since "$t0") s the near-black layer ('Screen resting') is not shown"
 st=$(idle_of); [[ $st == NEAR_BLACK ]] || fail "f4: near-black layer shown but the idle state is '$st'"
 pass "f4: NEAR_BLACK reached ($(since "$t0") s idle) with only the resting clock"
@@ -661,14 +663,14 @@ if ! in_front; then
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
 fi
 pass "m3: Home from another app opens the dashboard"
-# F4: the Home redirect works from DIM and from NEAR_BLACK, and comes back awake (idle_test 20 s still set).
-m3t=$(date +%s); sleep_until "$m3t" 25
+# F4: the Home redirect works from DIM and from NEAR_BLACK, and comes back awake (idle_test 30 s still set).
+m3t=$(date +%s); sleep_until "$m3t" 36
 st=$(idle_of); [[ $st == DIM ]] || fail "m3-idle: DIM not reached before the Home check (state '$st')"
 sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front || fail "m3-idle: Home from DIM did not bring the dashboard back ($(resumed | head -1))"
 st=$(idle_of); [[ $st == ACTIVE ]] || fail "m3-idle: after Home from DIM the state is '$st', expected ACTIVE"
 pass "m3-idle: Home from DIM redirects and wakes the screen"
-m3t=$(date +%s); sleep_until "$m3t" 45
+m3t=$(date +%s); sleep_until "$m3t" 66
 black_shown || fail "m3-idle: NEAR_BLACK not reached before the Home check"
 sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front || fail "m3-idle: Home from NEAR_BLACK did not bring the dashboard back ($(resumed | head -1))"
@@ -788,7 +790,7 @@ else
   for n in "Hero now: " "Hero card: "; do
     grep -qF "content-desc=\"$n" <<<"$ui" || fail "m7: no '$n...' node in the hero (planted caches not shown)"
   done
-  grep -oE '<node [^>]*content-desc="Hero (now|card|idle): [^"]*"[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
+  grep -oE '<node [^>]*(content-desc="Hero (now|card): [^"]*"|resource-id="hero_idle_[A-Z_]+")[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
     && fail "m7: a hero node is focusable (home-back-twice)"
   pass "m7: the hero's Now and card nodes are shown and none is focusable"
   if [[ -n $same_day ]]; then

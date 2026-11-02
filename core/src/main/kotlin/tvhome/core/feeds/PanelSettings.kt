@@ -68,6 +68,20 @@ object SettingsValidator {
         return (values["seconds"] as? Int)?.takeIf { it in IDLE_TEST_SECONDS }
     }
 
+    /** How long an /idle_test override lasts after it was set, so one left behind on a TV cannot stick. */
+    val IDLE_TEST_TTL: java.time.Duration = java.time.Duration.ofMinutes(60)
+
+    /**
+     * The stored override if it still applies: [seconds] in range, set at [setAtMs] (wall clock), less than
+     * [IDLE_TEST_TTL] ago, and not in the future beyond a minute of clock skew. Null otherwise (the caller clears it).
+     */
+    fun idleTestActive(seconds: Int?, setAtMs: Long?, nowMs: Long): Int? {
+        if (seconds == null || seconds !in IDLE_TEST_SECONDS || setAtMs == null) return null
+        val age = nowMs - setAtMs
+        if (age < -60_000L || age >= IDLE_TEST_TTL.toMillis()) return null
+        return seconds
+    }
+
     /** `--bind keyword:s:<text> --bind minutes:i:<1..180>`; the keyword rules are [TravelRule.of]'s. */
     fun travelRule(values: Map<String, Any?>): TravelRule? {
         if (values.keys != setOf("keyword", "minutes")) return null
