@@ -8,8 +8,9 @@
   -SetMic:  turns on the app's mic key service in the TV's accessibility settings. It appends to the list already
          there (saved to the rollback file first), so nothing else is switched off. Google Assistant stays
          installed; the service only takes the mic, voice and search keys.
-  -Rollback: puts back what the rollback file saved (the old home, the old accessibility list) and turns
-         HomeEntry off. Three commands by hand do the same; see docs/user/tv-home-setup.md.
+  -Rollback: puts back the home the rollback file saved, turns HomeEntry off, and takes only the mic service out of
+         the accessibility list (other services stay on). See docs/user/tv-home-setup.md for doing it by hand.
+  "pm enable" and "pm disable" restart the dashboard app; that is expected.
   It asks you to type YES before changing anything, and prints each adb command it runs.
   A Google TV system update can undo -SetHome; run it again after one.
 .PARAMETER SetHome   make the dashboard the TV's Home
@@ -96,23 +97,35 @@ $saved = Load-Rollback
 if ($Rollback) {
     $plan = @()
     if ($saved.home) { $plan += "Home goes back to $($saved.home)." }
-    if ($null -ne $saved.a11y) { $plan += 'The accessibility list goes back to what it was before -SetMic.' }
     $plan += 'The dashboard''s Home entry is turned off.'
+    $plan += 'The dashboard mic button is taken out of the accessibility settings; anything else there stays on.'
     Confirm-Change ("This will:`n - " + ($plan -join "`n - "))
-    if ($saved.home) {
-        if ($saved.home -notmatch $ComponentRe) { throw 'The rollback file has an unexpected home; stopping.' }
-        Adb @('shell', 'cmd', 'package', 'set-home-activity', $saved.home) | Out-Null
-    }
-    Adb @('shell', 'pm', 'disable', $HomeComponent) | Out-Null
-    if ($null -ne $saved.a11y) {
-        if ($saved.a11y -eq '') {
-            Adb @('shell', 'settings', 'delete', 'secure', 'enabled_accessibility_services') | Out-Null
-        } else {
-            if ($saved.a11y -notmatch $A11yListRe) { throw 'The rollback file has an unexpected accessibility list; stopping.' }
-            Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', $saved.a11y) | Out-Null
+    $problems = @()
+    # Each part runs even if another fails, so a failed home restore cannot leave the mic service on.
+    try {
+        if ($saved.home) {
+            if ($saved.home -notmatch $ComponentRe) { throw 'the rollback file has an unexpected home' }
+            Adb @('shell', 'cmd', 'package', 'set-home-activity', $saved.home) | Out-Null
         }
-        $on = if ($saved.a11yOn -eq '1') { '1' } else { '0' }
-        Adb @('shell', 'settings', 'put', 'secure', 'accessibility_enabled', $on) | Out-Null
+        Adb @('shell', 'pm', 'disable', $HomeComponent) | Out-Null
+    } catch { $problems += "Home: $($_.Exception.Message)" }
+    try {
+        # Remove only our service (a11y-settings-overwrite): a service turned on after -SetMic, such as TalkBack, stays.
+        $items = @((Get-TvA11yList) -split ':' | Where-Object { $_ })
+        $rest = @($items | Where-Object { $_ -ne $MicService -and $_ -ne "$Pkg/.MicKeyService" })
+        if ($rest.Count -ne $items.Count) {
+            if ($rest.Count -eq 0) { Adb @('shell', 'settings', 'delete', 'secure', 'enabled_accessibility_services') | Out-Null }
+            else { Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', ($rest -join ':')) | Out-Null }
+        }
+        # The master switch goes back to its old value only if the list is back to exactly what -SetMic found.
+        if ($null -ne $saved.a11y -and ($rest -join ':') -eq $saved.a11y) {
+            $on = if ($saved.a11yOn -eq '1') { '1' } else { '0' }
+            Adb @('shell', 'settings', 'put', 'secure', 'accessibility_enabled', $on) | Out-Null
+        }
+    } catch { $problems += "Mic: $($_.Exception.Message)" }
+    if ($problems.Count -gt 0) {
+        Write-Warning ("Not everything was undone; the rollback file is kept, so you can run -Rollback again:`n" + ($problems -join "`n"))
+        exit 1
     }
     Remove-Item $RollbackFile -ErrorAction SilentlyContinue
     Write-Host "Done. Home is now: $(Get-TvHome)"

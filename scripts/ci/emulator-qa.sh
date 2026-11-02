@@ -137,7 +137,7 @@ final_scan() {
   [[ $rc -eq 0 ]] && pass "no secret pattern and no dummy value in captured logs, dropbox or dumpsys"
   return $rc
 }
-on_exit() { local rc=$?; final_scan || rc=1; exit $rc; }
+on_exit() { local rc=$?; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
 trap on_exit EXIT
 
 step "device"
@@ -593,6 +593,15 @@ step "M3 Home and mic: off as installed; the takeover commands make Home and the
 home_now() { sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tr -d '\r' | grep / | tail -1 || true; }
 other_app() { sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true; sleep 3; }
 stock_home=$(home_now)
+# If a check below fails mid-step, put the emulator back (m3-dirty-on-fail), in case it is reused.
+m3_dirty=1
+m3_cleanup() {
+  [[ -n ${m3_dirty:-} ]] || return 0
+  sh_ cmd package set-home-activity "$stock_home" >/dev/null 2>&1 || true
+  sh_ pm disable "$PKG/.HomeEntry" >/dev/null 2>&1 || true
+  sh_ settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
+  sh_ settings put secure accessibility_enabled 0 >/dev/null 2>&1 || true
+}
 [[ -n $stock_home && $stock_home != "$PKG/"* ]] || fail "m3: home is '$stock_home' before the takeover (HomeEntry must be off as installed)"
 pass "m3: as installed, Home is still the TV's own ($stock_home)"
 sh_ pm enable "$PKG/.HomeEntry" >/dev/null
@@ -612,6 +621,7 @@ if (( napps >= 2 )); then
   pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
 fi
 key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
+expect_text "m3-full" "Calendar full screen"
 sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
@@ -641,12 +651,18 @@ for k in ASSIST VOICE_ASSIST SEARCH; do
     warn "m3: the $k key did not open Ask Claude on the emulator ($(resumed | head -1))"
   fi
 done
-# Other keys pass through untouched while the service is on.
-other_app; sh_ input keyevent KEYCODE_BACK; sleep 2
-in_front && fail "m3: with the mic service on, Back from Settings opened the dashboard"
+# Other keys pass through untouched while the service is on: Right still moves focus on the dashboard's row.
+if (( napps >= 2 )); then
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  a=$(focus_after m3-pass); key DPAD_RIGHT; b=$(focus_after m3-pass)
+  [[ -n ${a%%|*} && ${b%%|*} != "${a%%|*}" ]] || fail "m3: with the mic service on, Right did not move focus ('${a%%|*}' -> '${b%%|*}')"
+  pass "m3: other keys pass through the mic service (Right moved '${a%%|*}' -> '${b%%|*}')"
+fi
 if [[ -z $a11y_before || $a11y_before == null ]]; then sh_ settings delete secure enabled_accessibility_services >/dev/null
 else sh_ settings put secure enabled_accessibility_services "$a11y_before"; fi
-sh_ settings put secure accessibility_enabled "${on_before:-0}"
+[[ $on_before == 1 ]] || on_before=0   # a missing setting reads back as "null"
+sh_ settings put secure accessibility_enabled "$on_before"
+m3_dirty=""
 [[ -n $mic_ok ]] || fail "m3: no mic key (ASSIST, VOICE_ASSIST, SEARCH) opened Ask Claude through the key filter"
 no_app_crash_yet "m3"
 

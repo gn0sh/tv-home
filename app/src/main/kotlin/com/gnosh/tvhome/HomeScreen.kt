@@ -126,8 +126,8 @@ fun HomeScreen(
     // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     var returningTo by rememberSaveable { mutableStateOf<String?>(null) }
-    // M3: the remote's Home button (HomeEntry alias) shows the home row from anywhere, with focus on the first tile; the
-    // mic (MicEntry alias) opens Ask Claude, listening, as a fresh session even if Ask was already open.
+    // M3: the remote's Home button (the .HomeEntry manifest alias) shows the home row from anywhere, with focus on the
+    // first tile; the mic (MicKeyService, ACTION_ASK) opens Ask Claude, listening, as a fresh session even if Ask was open.
     var pendingHome by remember { mutableStateOf(false) }
     var askSession by remember { mutableIntStateOf(0) }
     LaunchedEffect(entry.seq) {
@@ -227,12 +227,17 @@ fun HomeScreen(
         // Re-check after the frame: a key press in that frame settles focus, and must not be overridden (dock-preview-steal).
         if (firstApp != null) { if (focusSoon(firstApp) { !settled }) settled = true } else focusSoon(calendar) { !settled }
     }
-    LaunchedEffect(pendingHome, firstApp) {
+    LaunchedEffect(pendingHome, firstApp, apps is AppsState.Loading) {
         if (!pendingHome) return@LaunchedEffect
         menuFor = null; hiddenOpen = false
-        val first = firstApp ?: return@LaunchedEffect // apps still loading: the initial-focus effect places focus
-        runCatching { rowState.scrollToItem(0) }
-        focusSoon(first)
+        val first = firstApp
+        if (first == null) {
+            if (apps is AppsState.Loading) return@LaunchedEffect // the initial-focus effect places focus once they load
+            focusSoon(calendar) // no app tiles (pending-home-stuck): the dock is the home focus
+        } else {
+            runCatching { rowState.scrollToItem(0) }
+            focusSoon(first)
+        }
         settled = true
         pendingHome = false
     }

@@ -61,9 +61,12 @@
              screen content and handles no events. It consumes the remote's assist, voice and search keys and opens Ask
              Claude, listening; every other key passes untouched. It does nothing until enabled in the TV's
              accessibility settings, which scripts/tv-home-takeover.ps1 -Mic (run by Brian) does and -Rollback undoes.
-             Google Assistant stays installed: it provides the speech recognition Ask Claude uses. -->
+             Google Assistant stays installed: it provides the speech recognition Ask Claude uses. Its own process
+             (:mic, a-11y-key-latency): while it filters keys every remote press on the TV waits for onKeyEvent, so it
+             must not queue behind the dashboard's UI thread. -->
         <service
             android:name=".MicKeyService"
+            android:process=":mic"
             android:exported="true"
             android:label="@string/mic_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

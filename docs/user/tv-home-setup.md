@@ -99,7 +99,9 @@ folder (it shows what it will change and asks you to type YES):
   accessibility settings; it reads no screen content and passes every other key on. Google Assistant stays installed
   (Ask Claude uses its speech recognition), but the mic button no longer opens it.
 
-To undo both: `.\scripts\tv-home-takeover.ps1 -Rollback`. By hand, without the script (adb from `%LOCALAPPDATA%\tv-home-tools`):
+To undo both: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
+By hand, without the script (adb from `%LOCALAPPDATA%\tv-home-tools`):
 1. `adb shell cmd package set-home-activity <the TV's own home, saved in %LOCALAPPDATA%\tv-home-tools\takeover-rollback.json>`
 2. `adb shell pm disable com.gnosh.tvhome/.HomeEntry`
-3. `adb shell settings put secure enabled_accessibility_services "<the list saved in that file>"` (or uninstall the dashboard, which removes both)
+3. Open the TV's Settings > System > Accessibility and turn off "Dashboard mic button". Or uninstall the dashboard,
+   which removes both.

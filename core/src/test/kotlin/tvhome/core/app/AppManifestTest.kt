@@ -90,6 +90,8 @@ class AppManifestTest {
         assertEquals("true", cfg.attr("canRequestFilterKeyEvents"))
         assertEquals("flagRequestFilterKeyEvents", cfg.attr("accessibilityFlags"))
         assertNull(cfg.attr("canPerformGestures"))
+        assertNull(cfg.attr("accessibilityEventTypes"), "no event types: the service only filters keys")
+        assertEquals(":mic", svc.attr("process"))
         assertNull(cfg.attr("canRequestTouchExplorationMode"))
     }
 

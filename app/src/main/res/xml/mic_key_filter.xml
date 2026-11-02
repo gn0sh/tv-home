@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- M3 mic key filter: key events only. No window content, no gestures, no event types it acts on
-     (typeAnnouncement is the narrowest type the attribute accepts; onAccessibilityEvent ignores everything). -->
+<!-- M3 mic key filter: key events only. No window content, no gestures, and no accessibilityEventTypes, so no
+     events are delivered (a11y-event-types); onAccessibilityEvent ignores everything anyway. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeAnnouncement"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRequestFilterKeyEvents"
     android:canRequestFilterKeyEvents="true"
