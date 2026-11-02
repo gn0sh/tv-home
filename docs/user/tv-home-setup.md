@@ -73,3 +73,16 @@ To remove it: `.\scripts\provision.ps1 -Key anthropic_api_key -Clear`.
 - `No device connected`: repeat step 2.
 - `TV Home is not installed` or `App not installed or provider unavailable`: the app is not on the TV yet (waits for T11).
 - `The TV did not accept it`: the stored link is unchanged; check you copied the whole link and the TV is awake.
+
+## On-screen remote for the PC
+A big-button remote window for the PC's touchscreen or mouse: arrows and OK, Back, Home, Power, play/pause, volume,
+mute, shortcuts to the dashboard, YouTube and the Play Store, and a box that types text into a search field on the TV.
+The keyboard works too: arrow keys, Enter (OK), Backspace (Back) and Escape (Home).
+
+In PowerShell, from the tv-home folder:
+```
+git pull
+.\scripts\tv-remote-pc.ps1
+```
+It uses the adb in `%LOCALAPPDATA%\tv-home-tools`, opens no port and sends only the fixed commands its buttons name.
+Typed text may use letters, numbers, spaces and `. , - _ @`. For another TV address: `-Serial 192.168.68.71:5555`.
