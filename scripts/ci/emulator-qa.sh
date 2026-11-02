@@ -630,12 +630,6 @@ echo "m3 diag dump: $(sh_ uiautomator dump /sdcard/qa-diag.xml 2>&1 | tr -d '\r'
 echo "m3 diag focus: $(sh_ dumpsys window | tr -d '\r' | grep -E 'mCurrentFocus|mFocusedApp' | head -2)"
 echo "m3 diag tasks: $(sh_ dumpsys activity activities | tr -d '\r' | grep -E 'topResumedActivity|\* Task\{' | head -6)"
 sleep 2; echo "m3 diag tasks later: $(resumed | head -1)"
-for t in 1 2 3; do sleep 5; echo "m3 diag dump +$((t*5))s: $(sh_ uiautomator dump /sdcard/qa-diag.xml 2>&1 | tr -d '\r' | tail -1)"; done
-echo "m3 diag a11y: $(sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services|Enabled services|packageNames|isEnabled' | head -6)"
-sh_ settings put secure enabled_accessibility_services "${a11y_before/null/}" >/dev/null 2>&1; [[ -z $a11y_before || $a11y_before == null ]] && sh_ settings delete secure enabled_accessibility_services >/dev/null
-sleep 3; echo "m3 diag dump with service off: $(sh_ uiautomator dump /sdcard/qa-diag.xml 2>&1 | tr -d '\r' | tail -1)"
-sh_ settings put secure enabled_accessibility_services "$list"; sleep 5
-echo "m3 diag dump service back on: $(sh_ uiautomator dump /sdcard/qa-diag.xml 2>&1 | tr -d '\r' | tail -1)"
 if (( napps >= 2 )); then
   start=$(focus_after m3); start_name=${start%%|*}
   key DPAD_RIGHT; key DPAD_RIGHT
