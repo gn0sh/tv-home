@@ -75,27 +75,34 @@ To remove it: `.\scripts\provision.ps1 -Key anthropic_api_key -Clear`.
 - `The TV did not accept it`: the stored link is unchanged; check you copied the whole link and the TV is awake.
 
 ## On-screen remote for the PC
-A big-button remote window for the PC's touchscreen or mouse, laid out like a Google TV remote: Power, Input,
-Settings, Assistant, Home, Back, arrows and OK, rewind, play/pause, fast forward, volume, mute, channel and guide.
-Below them are hotkeys for the dashboard, YouTube, Netflix, Prime Video, Disney+, Max, Hulu, Peacock, Paramount+,
-Apple TV, YouTube TV and Spotify (greyed out if the TV does not have the app), and a box that types text into a search
-field on the TV.
-The keyboard works too: arrow keys, Enter (OK), Backspace (Back) and Escape (Home).
+A remote window for the PC's touchscreen or mouse, laid out like a Google TV remote: Power, Input and Settings; a round
+direction pad with OK in the middle; Back, Home and Assistant; rewind, play/pause and fast forward; volume and channel
+rockers with Mute and Guide; app tiles for the dashboard, YouTube, Netflix, Prime Video, Disney+, Max, Hulu, Peacock,
+Paramount+, Apple TV, YouTube TV and Spotify (dimmed if the TV does not have the app); and a box that types text into
+a search field on the TV. Hold an arrow, volume or channel button to repeat it. The keyboard works too: arrow keys,
+Enter (OK), Backspace (Back) and Escape (Home). The window fits itself to the screen: tall on a big screen, wide and
+short on a small one, and you can resize it.
 
-In PowerShell, from the tv-home folder:
+**Volume and Mute go to the LG directly**, because the LG ignores volume from the Google TV. The card between the
+volume and channel rockers shows the LG's volume (it stops at 60, like Claude's `lg_volume`). If the LG is not set up
+or does not answer, the remote sends volume to the Google TV instead and says so under the buttons.
+
+**To update, or to set it up the first time**, in PowerShell from the tv-home folder:
 ```
 git pull
-.\scripts\tv-remote-pc.ps1
-```
-**As an icon** (no PowerShell window each time): run this once, from the tv-home folder:
-```
 .\scripts\install-remote-shortcut.ps1
 ```
-It puts "TV Remote" on the desktop and in the Start menu (right-click it there > Pin to taskbar). `-Remove` takes both
-away. It changes only the PC.
+It installs the remote app into `tv-remote\.venv` (about a minute the first time) and puts "TV Remote" on the desktop
+and in the Start menu. Then tap **TV Remote**. Right-click it in the Start menu > Pin to taskbar to pin it. If an
+older "TV Remote" is pinned to the taskbar, unpin it and pin the new one.
 
-It uses the adb in `%LOCALAPPDATA%\tv-home-tools`, opens no port and sends only the fixed commands its buttons name.
-Typed text may use letters, numbers, spaces and `. , - _ @`. For another TV address: `-Serial 192.168.68.71:5555`.
+`-Remove` takes both icons away. `-Classic` makes the icons open the older PowerShell remote
+(`.\scripts\tv-remote-pc.ps1`, which still works on its own) instead. Both change only the PC.
+
+It uses the adb in `%LOCALAPPDATA%\tv-home-tools` and the LG pairing in `%APPDATA%\tv-remote` (made by `tv_pair`), opens
+no port and sends only the fixed commands its buttons name. Typed text may use letters, numbers, spaces and
+`. , - _ @`. To use another Google TV address, start it from PowerShell instead of the icon:
+`.\tv-remote\.venv\Scripts\tv-remote-app.exe --serial 192.168.68.71:5555`.
 
 ## Home button (optional; you choose)
 As installed, the dashboard changes nothing about Home. To switch it on, in PowerShell from the tv-home folder (it
