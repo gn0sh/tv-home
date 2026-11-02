@@ -30,9 +30,7 @@ function Show-Result([string]$message, [bool]$ok) {
         $kind = if ($ok) { [System.Windows.Forms.MessageBoxIcon]::Information } else { [System.Windows.Forms.MessageBoxIcon]::Error }
         [void][System.Windows.Forms.MessageBox]::Show($message, 'Update TV Remote', 'OK', $kind)
     } catch {
-        Write-Host $message
-        Write-Host 'Press any key to close.'
-        [void]$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+        Write-Host $message  # no box: print and let the script exit (update-hidden-silent-fail); never wait for a key
     }
 }
 
@@ -50,9 +48,21 @@ function Invoke-Git([string[]]$GitArgs) {
     [pscustomobject]@{ Code = $code; Text = (($out | Where-Object { $_ }) -join "`n").Trim() }
 }
 
+function Test-ClassicInstalled {
+    if (-not (Test-Path $icon)) { return $false }
+    try {
+        $target = (New-Object -ComObject WScript.Shell).CreateShortcut($icon).TargetPath
+        return ([IO.Path]::GetFileName($target) -ieq 'powershell.exe')
+    } catch {
+        return $false
+    }
+}
+
 function Close-TvRemote {
     # The new app's window is "TV Remote" and the classic one "TV remote" (-eq ignores case). Only these processes.
-    $names = @('python', 'pythonw', 'tv-remote-app', 'powershell', 'pwsh')
+    $names = @('python', 'pythonw', 'tv-remote-app')
+    # PowerShell windows only when the icon opens the classic remote (update-close-match).
+    if (Test-ClassicInstalled) { $names += @('powershell', 'pwsh') }
     $open = @(Get-Process -ErrorAction SilentlyContinue |
         Where-Object { $names -contains $_.ProcessName -and $_.MainWindowTitle -eq 'TV Remote' })
     foreach ($p in $open) { [void]$p.CloseMainWindow() }
@@ -100,8 +110,15 @@ try {
     elseif (Test-Path $app) { Start-Process -FilePath $app }
 
     $what = if ($before -eq $after) { 'Already up to date.' } else { "Updated ($($changed.Count) files changed)." }
+    if ($before -ne $after) {
+        # What was pulled, so Brian sees what will run (update-pull-runs-code).
+        $log = @((Invoke-Git @('log', '--oneline', '--no-decorate', "$before..$after")).Text -split "`n" | Where-Object { $_ })
+        $shown = @($log | Select-Object -First 15)
+        if ($log.Count -gt $shown.Count) { $shown += "... and $($log.Count - $shown.Count) more" }
+        $what += "`n`nNew changes:`n" + ($shown -join "`n") + "`n"
+    }
     if ($reinstall) { $what += ' The remote app was reinstalled.' }
-    Show-Result "$what TV Remote is open again." $true
+    Show-Result "$what`nTV Remote is open again." $true
     exit 0
 } catch {
     Show-Result "$($_.Exception.Message)" $false

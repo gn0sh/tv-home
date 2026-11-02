@@ -81,7 +81,7 @@ if (Test-Path $updater) {
     foreach ($p in $updatePlaces) {
         $s = $shell.CreateShortcut($p)
         $s.TargetPath = $ps
-        $s.Arguments = "-NoProfile -WindowStyle Hidden -File `"$updater`""
+        $s.Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$updater`""
         $s.WorkingDirectory = $repo
         $s.IconLocation = (Join-Path $env:SystemRoot 'System32\shell32.dll') + ',238'
         $s.Description = 'Get the latest TV Remote and restart it'
