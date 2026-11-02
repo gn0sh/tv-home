@@ -31,6 +31,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -77,6 +79,9 @@ import tvhome.core.assistant.AskCopy
 import tvhome.core.ui.CALENDAR_TILE_LABEL
 import tvhome.core.ui.CalendarTile
 import tvhome.core.ui.HomeTheme
+import tvhome.core.ui.IdleState
+import tvhome.core.ui.OledTokens
+import tvhome.core.ui.dimmed
 import tvhome.core.ui.ScreenModel
 import tvhome.core.ui.Tokens
 
@@ -99,7 +104,8 @@ const val CALENDAR_FULL_SCREEN = "Calendar full screen"
  * M2d home screen: two rows and a button. On top the app carousel ([apps]: tiles, or a message while loading / failed /
  * empty); below it the dock, a left-aligned row of dashboard tiles holding the Calendar tile ([tile]); at the bottom
  * centre, in the same band as the dock, a small "Ask Claude" pill button (M2d, replacing the M1b Ask tile). Behind it all
- * the M2e hero ([HeroLayer]) shows the focused tile's label. Neither waits on the package manager or on
+ * the M7 hero ([HeroLayer]) shows the clock, weather, Now/Next and the context card (each tile names itself in its own
+ * label), and the idle layer ([IdleController]) dims it when left alone. Neither waits on the package manager or on
  * Claude. OK on the Calendar tile or the button switches this screen to its full screen (the agenda, or the Ask view
  * through [ask]); Back there returns here with focus on the same tile or button. Back here is not handled, so it exits
  * the activity with one press. Colours and tile size come from [theme].
@@ -242,17 +248,21 @@ fun HomeScreen(
         settled = true
         pendingHome = false
     }
-    // What the hero shows: the focused tile's label. Written from the tiles' onFocused; read only inside the hero's title.
-    val heroLabel = remember { mutableStateOf(HERO_IDLE_TITLE) }
-    val heroTitle = remember { { heroLabel.value } }
     var heroReady by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { withFrameNanos { }; heroReady = true }
+    // M7-F4 burn-in protection: DIM swaps to the dimmed theme and image alpha; NEAR_BLACK covers the screen. The M3 Home
+    // redirect wakes it too.
+    val idle = rememberIdleController()
+    LaunchedEffect(entry.seq) { if (entry.seq != 0) idle.wake() }
+    val idleState = idle.state.value
+    val shown = if (idleState == IdleState.DIM) theme.dimmed() else theme
     Box(
         Modifier
             .fillMaxSize()
             .background(color(theme.background))
-            // Key handlers are not focus targets, so this does not reintroduce home-back-twice.
-            .onPreviewKeyEvent { settled = true; false },
+            // Key handlers are not focus targets, so this does not reintroduce home-back-twice. In NEAR_BLACK the
+            // first key only wakes the screen (consumed); otherwise every key passes through.
+            .onPreviewKeyEvent { e -> settled = true; idle.onPreviewKey(e) },
     ) {
         // The hero is drawn behind the tiles and has no focus target (home-back-twice): nothing here is focusable, on
         // purpose. Compose maps Back to FocusDirection.Exit, which moves focus to the nearest focusable ancestor of the
@@ -260,17 +270,18 @@ fun HomeScreen(
         // the second would reach the activity.
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
-        if (heroReady) HeroLayer(heroTitle)
+        if (heroReady) HeroLayer(idle.state, idle.drift)
+        CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
         ) {
             Spacer(Modifier.weight(1f))
             AppRow(
-                apps, appList, hiddenList.size, rowKeys, theme, rowState, appFocus, onLaunch,
+                apps, appList, hiddenList.size, rowKeys, shown, rowState, appFocus, onLaunch,
                 onMenu = { menuFor = it }, onOpenHidden = { hiddenOpen = true },
-            ) { heroLabel.value = it }
-            Dock(theme) {
-                CalendarTileView(tile, theme, calendar, down = askTile, onFocused = { heroLabel.value = CALENDAR_TILE_LABEL }, onClick = { open = DOCK_CALENDAR })
+            )
+            Dock(shown) {
+                CalendarTileView(tile, shown, calendar, down = askTile, onClick = { open = DOCK_CALENDAR })
             }
         }
         // Bottom centre, in the dock's band (beside the Calendar tile) so the hero gets the room: the pill is centred on
@@ -279,8 +290,10 @@ fun HomeScreen(
             Modifier.fillMaxSize().padding(bottom = (Tokens.MARGIN_V_DP + dockPillInset(theme)).dp),
             contentAlignment = Alignment.BottomCenter,
         ) {
-            AskButton(theme, askTile, up = calendar, onFocused = { heroLabel.value = AskCopy.TILE_LABEL }, onClick = { open = DOCK_ASK })
+            AskButton(shown, askTile, up = calendar, onFocused = {}, onClick = { open = DOCK_ASK })
         }
+        }
+        if (idleState == IdleState.NEAR_BLACK) NearBlackLayer(idle.drift)
     }
     // Dialogs are separate windows, so they add no focus target to the home window (home-back-twice). Back closes
     // them (onDismissRequest) and focus is put back on the tile that opened them.
@@ -307,8 +320,8 @@ fun HomeScreen(
     }
 }
 
-/** Title shown before any tile has focus. */
-private const val HERO_IDLE_TITLE = "Home"
+/** Tile images' alpha: 1, or [OledTokens.DIM_IMAGE_ALPHA] while the screen is dimmed. */
+private val LocalImageAlpha = compositionLocalOf { 1f }
 
 /** Distance from the dock band's bottom to the bottom of a pill that is centred on the Calendar tile's box. */
 private fun dockPillInset(theme: HomeTheme): Int =
@@ -387,7 +400,6 @@ private fun AppRow(
     onLaunch: (LauncherApp) -> Unit,
     onMenu: (String) -> Unit,
     onOpenHidden: () -> Unit,
-    onHeroLabel: (String) -> Unit,
 ) {
     if (apps.isEmpty() && hiddenCount == 0) {
         // The message takes the row's place, at the row's height, so the dock does not jump when apps arrive.
@@ -420,7 +432,7 @@ private fun AppRow(
             val pkg = t.app.packageName
             AppTile(
                 t, theme, appFocus.requester(pkg),
-                onFocused = { appFocus.lastFocused = pkg; onHeroLabel(t.app.label) },
+                onFocused = { appFocus.lastFocused = pkg },
                 onLongClick = { onMenu(pkg) },
             ) { onLaunch(t.app) }
         }
@@ -429,7 +441,7 @@ private fun AppRow(
                 val label = "Hidden apps ($hiddenCount)"
                 TileFrame(
                     theme, label, label, appFocus.requester(HIDDEN_KEY), onOpenHidden,
-                    onFocused = { appFocus.lastFocused = HIDDEN_KEY; onHeroLabel(label) },
+                    onFocused = { appFocus.lastFocused = HIDDEN_KEY },
                 ) {
                     Text("$hiddenCount", color = color(theme.text), fontSize = 48.sp)
                 }
@@ -558,7 +570,7 @@ private fun CalendarTileView(
     theme: HomeTheme,
     requester: FocusRequester,
     down: FocusRequester,
-    onFocused: () -> Unit,
+    onFocused: () -> Unit = {},
     onClick: () -> Unit,
 ) {
     TileFrame(theme, CALENDAR_TILE_LABEL, tile.description, requester, onClick, onFocused, down) {
@@ -735,6 +747,7 @@ private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, on
                 bitmap = img,
                 contentDescription = null, // the tile's description names it
                 contentScale = if (t.isBanner) ContentScale.Crop else ContentScale.Fit,
+                alpha = LocalImageAlpha.current,
                 modifier = if (t.isBanner) Modifier.fillMaxSize() else Modifier.size((minOf(theme.tileWidthDp, theme.tileHeightDp) * 3 / 5).dp),
             )
         } else {
