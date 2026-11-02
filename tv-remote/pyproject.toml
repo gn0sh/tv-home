@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 tv-remote = "tv_remote.server:main"
+tv-remote-lg = "tv_remote.lgpipe:main"
 
 [dependency-groups]
 dev = ["pytest==8.4.2"]
