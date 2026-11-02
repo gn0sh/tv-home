@@ -58,6 +58,8 @@ function Adb([string[]]$argv) {
     $out = $p.StandardOutput.ReadToEnd(); $err = $p.StandardError.ReadToEnd()
     $p.WaitForExit()
     if ($p.ExitCode -ne 0) { throw "adb failed ($($p.ExitCode)): $($err.Trim())" }
+    # Some shell tools (content, cmd) print an exception and still exit 0 (content-exit-code).
+    if (($out + "`n" + $err) -match '(?m)Exception|^Error') { throw "adb reported an error: $((($out + ' ' + $err).Trim() -split "`r?`n")[0])" }
     return $out.Trim()
 }
 
