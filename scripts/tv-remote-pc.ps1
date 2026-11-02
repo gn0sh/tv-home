@@ -82,7 +82,7 @@ function Start-TvShell {
 # so presses made meanwhile are dropped with a message rather than queued and replayed later.
 $script:failedAt = [DateTime]::MinValue
 function Send-Tv([string]$line) {
-    $offline = "Can't reach the TV at $Serial. Is it on and on the home Wi-Fi? (Retrying in a few seconds.)"
+    $offline = "Can't reach the TV at $Serial. Is it on and on the home Wi-Fi? Try again in a few seconds."
     try {
         if ($null -eq $script:shell -or $script:shell.HasExited) {
             if (([DateTime]::Now - $script:failedAt).TotalSeconds -lt 10) { $status.Text = $offline; return }
