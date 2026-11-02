@@ -486,6 +486,10 @@ step "Row edit (M2g): long-press OK opens the menu, Move right reorders, Hide hi
 # OK is held with `input keyevent --longpress` (press, a repeat flagged long-press after the timeout, release); API 34's
 # input tool has no --duration, which was silently a short press. The release lands after the menu opened, so the menu
 # must ignore it and choose nothing (menu-held-ok-repeat).
+menu_nodes() { # diagnostic: each node's text, focus flags and bounds in the current dump (the menu is plain text rows)
+  echo "--- $1:"; ui_text | grep -oE '<node [^>]*>' | grep -E 'text="[^"]+"|focused="true"' \
+    | sed -E 's/.*text="([^"]*)".*focusable="([a-z]*)".*focused="([a-z]*)".*bounds="([^"]*)".*/  \1 | focusable=\2 focused=\3 \4/' | head -15 || true
+}
 long_press_ok() { sh_ input keyevent --longpress KEYCODE_DPAD_CENTER; sleep 2; }
 key_trace() { # the dispatcher's recent OK-key events and the input tool's keyevent usage, for a long press that misfired
   echo "--- recent DPAD_CENTER events (dumpsys input):"; sh_ dumpsys input | tr -d '\r' | grep -E 'KeyEvent.*keyCode=(23|DPAD_CENTER|KEYCODE_DPAD_CENTER)' | tail -20 || true
@@ -513,7 +517,10 @@ else
   pass "row-edit: Back closed the menu, the hold chose nothing, focus returned to '$first_name'"
   # Move right: the first tile swaps with the second and focus follows it.
   long_press_ok; expect_text "row-edit-held" "Move right"   # still open: the hold chose nothing
-  key DPAD_DOWN; key DPAD_DOWN; key DPAD_CENTER; sleep 1
+  menu_nodes "menu on open"
+  key DPAD_DOWN; key DPAD_DOWN
+  menu_nodes "menu after Down x2"
+  key DPAD_CENTER; sleep 1
   cur=$(focus_after row-edit)
   [[ ${cur%%|*} == "$first_name" ]] || fail "row-edit: after Move right focus is on '${cur%%|*}', not the moved tile '$first_name'"
   moved_x=$(cut -d'|' -f2 <<<"$cur")
