@@ -99,20 +99,27 @@ The remote remembers the choice next time it opens. With Vizio picked:
   The card shows the Vizio's volume, and **Vol+ stops at 60**, as with the LG. The LG is never contacted.
 - **Not paired yet**: the card says "Pair the Vizio" and Vol+ is not sent. Vol- and Mute go to the Google TV, which
   passes them to the Vizio over HDMI-CEC (the Vizio may ignore them).
-- If the Vizio answers but does not report its volume, Vol+ moves one step per tap (holding it does not repeat).
+- If the Vizio answers but does not report its volume, Vol+ moves one step per tap (holding it does not repeat), and
+  after 2 such steps in a row it stops and says the Vizio did not report its volume, until the Vizio reports it again.
 
 **Pair the Vizio (once, about 2 minutes, at the TV).** Turn the Vizio on. In PowerShell from the tv-home folder:
 1. Type `git pull` and press Enter.
 2. Type `.\scripts\install-remote-shortcut.ps1` and press Enter. It adds the pairing command.
-3. Type `.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe` and press Enter. It looks for the Vizio and asks
-   "Found ... at 192.168.x.x. Use it? [Y/n]": press Enter. If it finds none, type the Vizio's IP address (on the TV:
-   Settings > Network > Network Information) and press Enter. To skip the search, add `--host 192.168.x.x`.
-4. A 4-digit PIN appears on the Vizio. Type it in PowerShell and press Enter. You should see `Vizio paired.`
-5. Close TV Remote if it is open, reopen it, tap **Vizio** at the top, and press Vol- once. The card should show
+3. On the Vizio, open Settings > Network > Network Information and note its IP address (for example 192.168.68.90).
+4. Type `.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe --host 192.168.68.90` (with the Vizio's address) and
+   press Enter.
+   Without `--host` it searches the network instead and shows the address it found: type `y` only if it matches the
+   one on the Vizio's screen (the default is no). Windows Firewall may block the search; if it finds nothing, use
+   `--host`.
+5. A 4-digit PIN appears on the Vizio. Type it in PowerShell and press Enter. You should see `Vizio paired.`
+6. Close TV Remote if it is open, reopen it, tap **Vizio** at the top, and press Vol- once. The card should show
    a number.
 
-If it says the PIN was not accepted, run step 3 again for a new PIN. To unpair, run
-`.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe --forget`. The key the Vizio hands over is sealed with Windows
+If it says the PIN was not accepted, run step 4 again for a new PIN. To unpair, run
+`.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe --forget`. That deletes the pairing from this PC only; to cut
+the PC off on the TV too, remove "TV Remote (PC)" from the Vizio's paired devices (Settings > System > Mobile Devices,
+approximately; the name varies by model), or reset the Vizio to factory settings as a last resort.
+The key the Vizio hands over is sealed with Windows
 (DPAPI) in `%APPDATA%\tv-remote\vizio-auth.sealed` and never shown. The remote also remembers the Vizio's
 certificate; if a different device answers at that address later, the remote refuses it and says to pair again.
 
