@@ -588,32 +588,33 @@ else
   no_app_crash_yet "hero"
 fi
 
-step "M3 Home and mic: off as installed; the takeover commands make Home and the mic open the dashboard; rollback restores"
-# The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV.
-home_role() { sh_ cmd role get-role-holders android.app.role.HOME | tr -d '\r' | head -1; }
-home_now() { sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tr -d '\r' | grep / | tail -1 || true; }
+step "M3 Home and mic: off as installed; turning on the key service makes Home and the mic open the dashboard; rollback restores"
+# The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV. Google TV's launcher holds HOME at priority 2,
+# so the app takes the Home key with its accessibility key filter instead (home-role-priority).
 other_app() { sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true; sleep 3; }
-stock_home=$(home_now)
+a11y_before=$(sh_ settings get secure enabled_accessibility_services | tr -d '\r')
+on_before=$(sh_ settings get secure accessibility_enabled | tr -d '\r')
+[[ $on_before == 1 ]] || on_before=0   # a missing setting reads back as "null"
+svc="$PKG/$PKG.MicKeyService"
+m3_restore() {
+  if [[ -z $a11y_before || $a11y_before == null ]]; then sh_ settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
+  else sh_ settings put secure enabled_accessibility_services "$a11y_before" >/dev/null 2>&1 || true; fi
+  sh_ settings put secure accessibility_enabled "$on_before" >/dev/null 2>&1 || true
+}
 # If a check below fails mid-step, put the emulator back (m3-dirty-on-fail), in case it is reused.
 m3_dirty=1
-m3_cleanup() {
-  [[ -n ${m3_dirty:-} ]] || return 0
-  sh_ cmd package set-home-activity "$stock_home" >/dev/null 2>&1 || true
-  sh_ content delete --uri content://com.gnosh.tvhome.provision/home_entry >/dev/null 2>&1 || true
-  sh_ settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
-  sh_ settings put secure accessibility_enabled 0 >/dev/null 2>&1 || true
-}
-[[ -n $stock_home && $stock_home != "$PKG/"* ]] || fail "m3: home is '$stock_home' before the takeover (HomeEntry must be off as installed)"
-pass "m3: as installed, Home is still the TV's own ($stock_home)"
-sh_ content insert --uri content://com.gnosh.tvhome.provision/home_entry --bind on:i:1 >/dev/null   # pm enable is refused for a release app
-sh_ cmd package set-home-activity "$PKG/.HomeEntry" >/dev/null
-# set-home-activity makes us the HOME role holder; resolve-activity keeps listing the priority-2 system launcher, so
-# the role (and the Home key itself, below) is what is checked.
-[[ $(home_role) == "$PKG" ]] || fail "m3: after set-home-activity, the HOME role holder is '$(home_role)'"
+m3_cleanup() { [[ -n ${m3_dirty:-} ]] && m3_restore; return 0; }
+other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front && fail "m3: as installed, Home opened the dashboard (the key service must be off until turned on)"
+pass "m3: as installed, Home is still the TV's own ($(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1))"
+if [[ -z $a11y_before || $a11y_before == null ]]; then list="$svc"; else list="$a11y_before:$svc"; fi
+sh_ settings put secure enabled_accessibility_services "$list"
+sh_ settings put secure accessibility_enabled 1
+sleep 3
 other_app
 in_front && fail "m3: Settings did not come to the front (test setup)"
 sh_ input keyevent KEYCODE_HOME; sleep 3
-in_front || fail "m3: Home from another app did not bring the dashboard to the front ($(resumed))"
+in_front || fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
 pass "m3: Home from another app opens the dashboard"
 if (( napps >= 2 )); then
   start=$(focus_after m3); start_name=${start%%|*}
@@ -622,27 +623,18 @@ if (( napps >= 2 )); then
   cur=$(focus_after m3)
   [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"
   pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
+  # Other keys pass through untouched while the service is on: Right moved focus above; check it once more by name.
+  a=$(focus_after m3-pass); key DPAD_RIGHT; b=$(focus_after m3-pass)
+  [[ -n ${a%%|*} && ${b%%|*} != "${a%%|*}" ]] || fail "m3: with the key service on, Right did not move focus ('${a%%|*}' -> '${b%%|*}')"
+  pass "m3: other keys pass through the key service (Right moved '${a%%|*}' -> '${b%%|*}')"
 fi
+sh_ input keyevent KEYCODE_HOME; sleep 3   # focus back on the first tile, as before Down in M2b
 key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
 expect_text "m3-full" "Calendar full screen"
 sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
 pass "m3: Home from the full-screen calendar returns to the home row"
-sh_ cmd package set-home-activity "$stock_home" >/dev/null
-sh_ content delete --uri content://com.gnosh.tvhome.provision/home_entry >/dev/null
-[[ $(home_role) == "${stock_home%%/*}" ]] || fail "m3: rollback left the HOME role with '$(home_role)', expected '${stock_home%%/*}'"
-other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
-in_front && fail "m3: after rollback, Home still opens the dashboard"
-pass "m3: rollback (set-home-activity back, HomeEntry off) restores the TV's own Home"
-
-a11y_before=$(sh_ settings get secure enabled_accessibility_services | tr -d '\r')
-on_before=$(sh_ settings get secure accessibility_enabled | tr -d '\r')
-svc="$PKG/$PKG.MicKeyService"
-if [[ -z $a11y_before || $a11y_before == null ]]; then list="$svc"; else list="$a11y_before:$svc"; fi
-sh_ settings put secure enabled_accessibility_services "$list"
-sh_ settings put secure accessibility_enabled 1
-sleep 3
 mic_ok=""
 for k in ASSIST VOICE_ASSIST SEARCH; do
   other_app
@@ -654,21 +646,13 @@ for k in ASSIST VOICE_ASSIST SEARCH; do
     warn "m3: the $k key did not open Ask Claude on the emulator ($(resumed | head -1))"
   fi
 done
-# Other keys pass through untouched while the service is on: Right still moves focus on the dashboard's row.
-if (( napps >= 2 )); then
-  # No force-stop here: it would also switch the accessibility service off (a11y drops a force-stopped package).
-  sh_ am start -W -n "$MAIN" >/dev/null; sleep 3   # an existing task: onNewIntent shows the row, focus on the first tile
-  sh_ settings get secure enabled_accessibility_services | grep -q "$svc" || fail "m3: the mic service is no longer enabled (test setup)"
-  a=$(focus_after m3-pass); key DPAD_RIGHT; b=$(focus_after m3-pass)
-  [[ -n ${a%%|*} && ${b%%|*} != "${a%%|*}" ]] || fail "m3: with the mic service on, Right did not move focus ('${a%%|*}' -> '${b%%|*}')"
-  pass "m3: other keys pass through the mic service (Right moved '${a%%|*}' -> '${b%%|*}')"
-fi
-if [[ -z $a11y_before || $a11y_before == null ]]; then sh_ settings delete secure enabled_accessibility_services >/dev/null
-else sh_ settings put secure enabled_accessibility_services "$a11y_before"; fi
-[[ $on_before == 1 ]] || on_before=0   # a missing setting reads back as "null"
-sh_ settings put secure accessibility_enabled "$on_before"
-m3_dirty=""
 [[ -n $mic_ok ]] || fail "m3: no mic key (ASSIST, VOICE_ASSIST, SEARCH) opened Ask Claude through the key filter"
+m3_restore
+m3_dirty=""
+sleep 2
+other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front && fail "m3: after rollback, Home still opens the dashboard"
+pass "m3: rollback (key service off, settings restored) gives Home back to the TV"
 no_app_crash_yet "m3"
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"

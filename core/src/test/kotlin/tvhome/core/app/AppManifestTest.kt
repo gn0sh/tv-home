@@ -55,26 +55,14 @@ class AppManifestTest {
     }
 
     /**
-     * M3 (a hard stop): Home reaches the app only through HomeEntry, an alias that is OFF as installed, so an install
-     * changes nothing until Brian runs the takeover script. HOME appears there and nowhere else.
+     * M3 Home is the key filter (MicKeyService), not a HOME intent filter: Google TV's launcher holds HOME at priority 2,
+     * so a HOME alias could never win (home-role-priority), and none is declared.
      */
-    @Test fun homeEntryIsADisabledAlias() {
-        val alias = application.kids("activity-alias").single()
-        assertEquals(".HomeEntry", alias.attr("name"))
-        assertEquals(".AgendaActivity", alias.attr("targetActivity"))
-        assertEquals("false", alias.attr("enabled"))
-        assertEquals("true", alias.attr("exported"))
-        val home = alias.kids("intent-filter").single()
-        assertEquals(listOf("android.intent.action.MAIN"), home.kids("action").map { it.attr("name") })
-        assertEquals(
-            setOf("android.intent.category.HOME", "android.intent.category.DEFAULT"),
-            home.kids("category").map { it.attr("name") }.toSet(),
-        )
-        val text = File(app, "src/main/AndroidManifest.xml").readText()
-        assertEquals(1, Regex("android\\.intent\\.category\\.HOME").findAll(text).count())
+    @Test fun noHomeCategory() {
+        assertFalse(File(app, "src/main/AndroidManifest.xml").readText().contains("android.intent.category.HOME"))
     }
 
-    /** M3 mic: key filtering only. Bound by the system only (BIND_ACCESSIBILITY_SERVICE), no window content. */
+    /** M3 Home and mic: key filtering only. Bound by the system only (BIND_ACCESSIBILITY_SERVICE), no window content. */
     @Test fun micServiceOnlyFiltersKeys() {
         val svc = application.kids("service").single()
         assertEquals(".MicKeyService", svc.attr("name"))
@@ -130,7 +118,7 @@ class AppManifestTest {
         assertEquals(listOf(".ProvisionProvider"), application.kids("provider").map { it.attr("name") })
         assertEquals(listOf(".MicKeyService"), application.kids("service").map { it.attr("name") })
         assertTrue(application.kids("receiver").isEmpty())
-        assertEquals(listOf(".HomeEntry"), application.kids("activity-alias").map { it.attr("name") })
+        assertTrue(application.kids("activity-alias").isEmpty())
     }
 
     @Test fun referencedResourcesExist() {

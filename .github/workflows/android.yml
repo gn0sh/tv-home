@@ -256,8 +256,8 @@ jobs:
             || { echo "::error::merged manifest permissions differ from the allowed set"; fail=1; }
 
           # Every exported component: name and permission. Allowed: our two activities and provider (DUMP-guarded except
-          # the launcher activity), AndroidX's profileinstaller receiver (also DUMP-guarded), the M3 Home alias (off as
-          # installed, unguarded like any launcher) and the mic key service (bound by the system only).
+          # the launcher activity), AndroidX's profileinstaller receiver (also DUMP-guarded) and the M3 Home and mic key
+          # service (bound by the system only).
           "$apkanalyzer" manifest print "$APK" | python3 -c '
           import sys, xml.etree.ElementTree as ET
           A = "{http://schemas.android.com/apk/res/android}"
@@ -272,7 +272,6 @@ jobs:
           cat > "$RUNNER_TEMP/exported.expected" <<'EOF'
           activity com.gnosh.tvhome.AgendaActivity -
           activity com.gnosh.tvhome.ProvisionActivity android.permission.DUMP
-          activity-alias com.gnosh.tvhome.HomeEntry -
           provider com.gnosh.tvhome.ProvisionProvider android.permission.DUMP
           receiver androidx.profileinstaller.ProfileInstallReceiver android.permission.DUMP
           service com.gnosh.tvhome.MicKeyService android.permission.BIND_ACCESSIBILITY_SERVICE

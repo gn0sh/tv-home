@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- M3 mic key filter: key events only. No window content, no gestures, and no accessibilityEventTypes, so no
+<!-- M3 Home and mic key filter: key events only. No window content, no gestures, and no accessibilityEventTypes, so no
      events are delivered (a11y-event-types); onAccessibilityEvent ignores everything anyway. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityFeedbackType="feedbackGeneric"

@@ -41,26 +41,13 @@
             </intent-filter>
         </activity>
 
-        <!-- M3 Home: OFF as installed (android:enabled="false"), so installing changes nothing about Home.
-             scripts/tv-home-takeover.ps1 -Home, run by Brian himself, asks the app to turn it on (ProvisionProvider /home_entry; adb may not) and makes it the
-             default home; -Rollback restores the TV's own home. Like any launcher it only brings the dashboard to
-             the front, so it has no permission guard. -->
-        <activity-alias
-            android:name=".HomeEntry"
-            android:targetActivity=".AgendaActivity"
-            android:enabled="false"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity-alias>
-
-        <!-- M3 mic: an accessibility service that only filters key events (res/xml/mic_key_filter.xml): it reads no
-             screen content and handles no events. It consumes the remote's assist, voice and search keys and opens Ask
-             Claude, listening; every other key passes untouched. It does nothing until enabled in the TV's
-             accessibility settings, which scripts/tv-home-takeover.ps1 -Mic (run by Brian) does and -Rollback undoes.
+        <!-- M3 Home and mic: an accessibility service that only filters key events (res/xml/mic_key_filter.xml): it
+             reads no screen content and handles no events. It consumes the remote's Home key (opens the dashboard) and
+             the assist, voice and search keys (open Ask Claude, listening); every other key passes untouched. A key
+             filter, not a HOME intent filter: Google TV's own launcher declares HOME at priority 2, which always beats
+             a third-party app's, whatever "cmd package set-home-activity" says (home-role-priority). It does nothing
+             until enabled in the TV's accessibility settings, which scripts/tv-home-takeover.ps1 -TurnOn (run by
+             Brian) does and -Rollback undoes.
              Google Assistant stays installed: it provides the speech recognition Ask Claude uses. Its own process
              (:mic, a-11y-key-latency): while it filters keys every remote press on the TV waits for onKeyEvent, so it
              must not queue behind the dashboard's UI thread. -->

@@ -6,20 +6,19 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 
 /**
- * M3 mic button: a key-filter-only accessibility service (res/xml/mic_key_filter.xml; no window content). The remote's
- * assist, voice and search keys open Ask Claude, listening, from any app; the key is consumed so Google Assistant does
- * not open as well. Every other key returns false at once: nothing is buffered, read further or logged.
+ * M3 Home and mic buttons: a key-filter-only accessibility service (res/xml/mic_key_filter.xml; no window content).
+ * The remote's Home key shows the dashboard's home row, and its assist, voice and search keys open Ask Claude,
+ * listening, from any app. Those keys are consumed, so the TV's own launcher and Google Assistant do not open as well.
+ * Every other key returns false at once: nothing is buffered, read further or logged.
  */
 class MicKeyService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode !in MIC_KEYS) return false
+        val home = event.keyCode == KeyEvent.KEYCODE_HOME
+        if (!home && event.keyCode !in MIC_KEYS) return false
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
             runCatching {
-                startActivity(
-                    Intent(this, AgendaActivity::class.java)
-                        .setAction(AgendaActivity.ACTION_ASK)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
+                val open = Intent(this, AgendaActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(if (home) open.setAction(AgendaActivity.ACTION_HOME) else open.setAction(AgendaActivity.ACTION_ASK))
             }
         }
         return true
