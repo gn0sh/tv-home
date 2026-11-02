@@ -84,6 +84,13 @@ In PowerShell, from the tv-home folder:
 git pull
 .\scripts\tv-remote-pc.ps1
 ```
+**As an icon** (no PowerShell window each time): run this once, from the tv-home folder:
+```
+.\scripts\install-remote-shortcut.ps1
+```
+It puts "TV Remote" on the desktop and in the Start menu (right-click it there > Pin to taskbar). `-Remove` takes both
+away. It changes only the PC.
+
 It uses the adb in `%LOCALAPPDATA%\tv-home-tools`, opens no port and sends only the fixed commands its buttons name.
 Typed text may use letters, numbers, spaces and `. , - _ @`. For another TV address: `-Serial 192.168.68.71:5555`.
 
