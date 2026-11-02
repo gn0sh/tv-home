@@ -11,9 +11,9 @@ import android.view.accessibility.AccessibilityEvent
  *
  * Why not something firmer: Google TV's launcher declares HOME at priority 2, so "set-home-activity" cannot win
  * (home-role-priority), and the system handles Home (and the assistant keys) before an accessibility key filter sees
- * them (CI, PR #15). So the service watches only "window changed" events, only from the TV's own home apps (set in
- * [onServiceConnected]), and reads only the event's package and activity class (and drops every other app's at once): no window content, nothing stored or
- * logged. The quick panel that holding Home opens is a different screen, so it still works, and so does Settings.
+ * them (CI, PR #15). So the service gets only "window changed" events, reads only their package and activity class,
+ * and acts only on the TV's own home activities (found in [onServiceConnected]); every other event is dropped at once.
+ * No window content, nothing stored or logged. The quick panel that holding Home opens is a different screen, so it still works, and so does Settings.
  */
 class HomeWatchService : AccessibilityService() {
     /** The TV's own home activities, as package to class. */
