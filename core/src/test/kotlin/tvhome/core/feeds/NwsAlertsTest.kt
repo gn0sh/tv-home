@@ -19,15 +19,36 @@ class NwsAlertsTest {
         assertTrue(HttpFeedFetcher.isAllowed(NwsAlerts.url(Location(36.53, -87.36))))
     }
 
-    @Test fun handFixture() {
-        val s = NwsAlerts.parse(Fixtures.text("nws-alerts-point-hand.json"), now)!!
+    /** Synthetic: the real captures hold no Warning. Same shape as nws-alerts-area.json. */
+    private val warningDoc = doc(p("Tornado Warning", "Extreme", ends = "\"2026-04-15T04:45:00Z\""),
+        p("Flood Watch", ends = "\"2026-04-15T12:00:00Z\"", expires = "\"2026-04-15T06:00:00Z\""),
+        p("Wind Advisory", "Moderate", ends = null, expires = "\"2026-04-15T08:00:00Z\""))
+
+    @Test fun realTexasCaptureWithActiveAlerts() {
+        val at = Instant.parse("2026-11-02T21:36:00Z")
+        val s = NwsAlerts.parse(Fixtures.text("nws-alerts-area.json"), at)!!
+        assertEquals(listOf("Tornado Watch", "Wind Advisory"), s.alerts.map { it.event })
+        assertEquals(listOf("Extreme", "Moderate"), s.alerts.map { it.severity })
+        assertEquals(listOf(AlertKind.SUFFIX, AlertKind.SUFFIX), s.alerts.map { it.kind }, "an Extreme Watch is still a chip suffix")
+        assertNull(s.override)
+        assertEquals("Tornado Watch +1", s.suffixText())
+        assertEquals(Instant.parse("2026-11-03T04:00:00Z"), s.alerts[0].until)
+        assertEquals(Instant.parse("2026-11-03T10:00:00Z"), s.alerts[1].until, "ends (later than expires) wins")
+        // After the watch ends only the advisory is left.
+        assertEquals(listOf("Wind Advisory"), NwsAlerts.parse(Fixtures.text("nws-alerts-area.json"), Instant.parse("2026-11-03T04:00:00Z"))!!.alerts.map { it.event })
+    }
+
+    @Test fun realPointCaptureWithNothingActive() {
+        assertEquals(AlertSet(emptyList()), NwsAlerts.parse(Fixtures.text("nws-alerts-point.json"), now))
+    }
+
+    @Test fun syntheticWarning() {
+        val s = NwsAlerts.parse(warningDoc, now)!!
         assertEquals(listOf("Tornado Warning", "Flood Watch", "Wind Advisory"), s.alerts.map { it.event })
         assertEquals(listOf(AlertKind.OVERRIDE, AlertKind.SUFFIX, AlertKind.SUFFIX), s.alerts.map { it.kind })
         assertEquals(Instant.parse("2026-04-15T04:45:00Z"), s.override!!.until)
         assertEquals(Instant.parse("2026-04-15T12:00:00Z"), s.alerts[1].until, "ends wins over expires")
         assertEquals(Instant.parse("2026-04-15T08:00:00Z"), s.alerts[2].until, "null ends falls back to expires")
-        assertEquals("Flood Watch +1", s.suffixText())
-        assertEquals(AlertSet(emptyList()), NwsAlerts.parse(Fixtures.text("nws-alerts-empty-hand.json"), now))
     }
 
     @Test fun classifyTable() {
@@ -45,8 +66,18 @@ class NwsAlertsTest {
             Triple("Special Weather Statement", "Moderate", AlertKind.SUFFIX),
             Triple("Hazardous Weather Outlook", "Unknown", AlertKind.SUFFIX),
             Triple("Extreme Wind Warning", "Extreme", AlertKind.OVERRIDE),
-            Triple("Civil Danger Emergency", "Extreme", AlertKind.OVERRIDE), // Extreme always overrides
+            Triple("Civil Danger Emergency", "Extreme", AlertKind.OVERRIDE),
             Triple("Tornado Emergency", "extreme", AlertKind.OVERRIDE),
+            Triple("Unheard Of Hazard", "Extreme", AlertKind.OVERRIDE), // unknown Extreme event overrides
+            Triple("Unheard Of Hazard", "Severe", AlertKind.SUFFIX),
+            Triple("Tornado Watch", "Extreme", AlertKind.SUFFIX), // seen in the real TX capture
+            Triple("Extreme Cold Advisory", "Extreme", AlertKind.SUFFIX),
+            Triple("Special Weather Statement", "Extreme", AlertKind.SUFFIX),
+            Triple("Tornado Warning", "Moderate", AlertKind.SUFFIX),
+            Triple("Civil Emergency Message", "Extreme", AlertKind.OVERRIDE), // nws-cem-suffix: life-safety
+            Triple("Civil Emergency Message", "Unknown", AlertKind.OVERRIDE),
+            Triple(" civil emergency message ", "Moderate", AlertKind.OVERRIDE),
+            Triple("Administrative Message", "Extreme", AlertKind.SUFFIX),
             Triple("  Winter Storm Warning  ", " severe ", AlertKind.OVERRIDE),
         )
         for ((e, s, k) in table) assertEquals(k, AlertRules.classify(e, s), "$e/$s")
@@ -125,7 +156,7 @@ class NwsAlertsTest {
     }
 
     @Test fun cacheDtoRoundTripsAndIsRevalidated() {
-        val s = NwsAlerts.parse(Fixtures.text("nws-alerts-point-hand.json"), now)!!
+        val s = NwsAlerts.parse(warningDoc, now)!!
         assertEquals(s, NwsAlerts.fromDto(NwsAlerts.toDto(s)))
         val d = NwsAlerts.toDto(s)
         assertNull(NwsAlerts.fromDto(NwsAlerts.AlertSetDto(d.alerts.map { NwsAlerts.AlertDto(it.event, it.severity, "PANIC", it.until) })))

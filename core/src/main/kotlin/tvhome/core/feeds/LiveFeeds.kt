@@ -162,7 +162,7 @@ class LiveFeeds(
         var allOk = true
         var anyOk = false
         for (team in teams) {
-            val games = fetcher.fetch(team.scheduleUrl())?.let { raw -> withContext(io) { Schedules.parse(team, raw, clock()) } }
+            val games = fetcher.fetch(team.scheduleUrl(clock()))?.let { raw -> withContext(io) { Schedules.parse(team, raw, clock()) } }
             if (games != null) { perTeam[team.key] = Stamped(games, clock()); anyOk = true } else allOk = false
         }
         val held = teams.mapNotNull { t -> perTeam[t.key]?.let { t to it } }

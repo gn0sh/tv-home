@@ -115,7 +115,11 @@ class HttpFeedFetcherTest {
     }
 
     @Test fun configuredTeamUrlsAreAllowlisted() {
-        for (t in Teams.ALL) assertTrue(HttpFeedFetcher.isAllowed(t.scheduleUrl()), t.key)
-        assertEquals("https://api-web.nhle.com/v1/club-schedule/NSH/week/now", Teams.PREDATORS.scheduleUrl().toString())
+        val now = java.time.Instant.parse("2026-11-03T04:30:00Z") // 10:30 PM Mon 2 Nov in Nashville, Tue in UTC
+        for (t in Teams.ALL) assertTrue(HttpFeedFetcher.isAllowed(t.scheduleUrl(now)), t.key)
+        // Dated, never "now" (which redirects, and redirects are refused); the club's local date, not UTC.
+        assertEquals("https://api-web.nhle.com/v1/club-schedule/NSH/week/2026-11-02", Teams.PREDATORS.scheduleUrl(now).toString())
+        assertEquals("https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/194/schedule", Teams.OHIO_STATE.scheduleUrl(now).toString())
+        for (t in Teams.ALL) assertFalse(t.scheduleUrl(now).encodedPath.endsWith("/now"), t.key)
     }
 }

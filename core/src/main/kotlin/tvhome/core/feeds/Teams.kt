@@ -3,6 +3,7 @@ package tvhome.core.feeds
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.time.Instant
+import java.time.ZoneId
 
 /** Which public schedule feed a team is read from. */
 enum class League { NHL, ESPN_FOOTBALL }
@@ -23,9 +24,15 @@ data class TeamConfig(
     val backdropTop: Int,
     val backdropBottom: Int,
     val accent: Int,
+    /** The club's home time zone: the NHL dated URL uses the club's local date. */
+    val zone: ZoneId,
 ) {
-    fun scheduleUrl(): HttpUrl = when (league) {
-        League.NHL -> "https://api-web.nhle.com/v1/club-schedule/$feedId/week/now"
+    /**
+     * NHL: `week/YYYY-MM-DD` for today in [zone]. The `week/now` form answers HTTP 307 to the dated URL, and
+     * [HttpFeedFetcher] refuses redirects (ADR 0005), so `now` never worked (CI capture, 2026-11-02).
+     */
+    fun scheduleUrl(now: Instant): HttpUrl = when (league) {
+        League.NHL -> "https://api-web.nhle.com/v1/club-schedule/$feedId/week/${now.atZone(zone).toLocalDate()}"
         League.ESPN_FOOTBALL -> "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/$feedId/schedule"
     }.toHttpUrl()
 }
@@ -36,6 +43,7 @@ object Teams {
         key = "predators", league = League.NHL, feedId = "NSH", name = "Predators",
         primary = 0xFFB81C, secondary = 0x041E42,
         backdropTop = 0x041E42, backdropBottom = 0x0B3169, accent = 0xFFB81C,
+        zone = ZoneId.of("America/Chicago"),
     )
 
     /** Scarlet #BB0000 and gray #666666. Gray is too dark for text on the dark backdrop, so the accent is a lighter gray. */
@@ -43,6 +51,7 @@ object Teams {
         key = "ohio-state", league = League.ESPN_FOOTBALL, feedId = "194", name = "Ohio State",
         primary = 0xBB0000, secondary = 0x666666,
         backdropTop = 0x2A0707, backdropBottom = 0x8A0000, accent = 0xC4C4C4,
+        zone = ZoneId.of("America/New_York"),
     )
 
     val ALL: List<TeamConfig> = listOf(PREDATORS, OHIO_STATE)

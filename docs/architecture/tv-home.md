@@ -576,7 +576,8 @@ Spec: M7 in `docs/specs/tv-home.md`. Panel: `docs/reviews/dashboard-info-panels.
 | NWS `api.weather.gov` needs no key and requires a `User-Agent` ("A User Agent is required to identify your application"); rate limit not public, "generous for typical use"; default format GeoJSON (`application/geo+json`) | Verified (docs) | [NWS API docs](https://www.weather.gov/documentation/services-web-API), read 2026-11-02 |
 | `/alerts/active` takes a `point=<lat>,<lon>` filter | Verified (secondary) | Not in the NWS docs page; documented by the `nwswx` client (`point - point (latitude,longitude)`). Confirmed for real by task M7-D1 |
 | Alert features carry `properties.event, severity, urgency, certainty, headline, onset, ends, expires, messageType, status`; `ends` can be null | Verified (secondary), shape unverified | Third-party client source reading exactly these fields; the CAP model. No captured response (sandbox proxy blocks the host: curl 000, 2026-11-02). M7-D1 captures one |
-| NWS "Watch" events can carry severity `Severe` | Unverified (judgment, medium) | Hence the override rule keys on event name ending "Warning" plus severity, not severity alone |
+| NWS "Watch" events can carry severity `Severe` or `Extreme` | Verified (M7-D1 capture, TX, 2026-11-02: Tornado Watch, Extreme) | Hence the override rule keys on event name ending "Warning" plus severity, not severity alone |
+| NHL api-web `.../now` paths answer HTTP 307 to a dated path, so the app requests `week/YYYY-MM-DD` (club's local date); fetcher refuses redirects | Verified (CI capture, 2026-11-02) | M7 fix in `Teams.scheduleUrl(now)` |
 | NHL api-web: `/v1/club-schedule/{team}/week/now`, `/month/now`, `/v1/club-schedule-season/{team}/now`, `/v1/scoreboard/{team}/now` exist | Verified (community reference) | [Zmalski NHL-API-Reference](https://github.com/Zmalski/NHL-API-Reference) (no sample bodies). Unofficial (ADR 0005) |
 | NHL game fields `startTimeUTC`, `gameState` (`FUT`, `LIVE`, `FINAL` seen), `homeTeam`/`awayTeam` with `abbrev`, `placeName`, `score` | Verified (secondary) | `nhl_api` Rust crate serde names. `commonName`, `periodDescriptor`, `PRE`/`CRIT`/`OFF` and `tvBroadcasts` **unverified** |
 | ESPN `site.api.espn.com/apis/site/v2/sports/football/{league}/scoreboard?dates=YYYYMMDD` and `/teams/{id}/schedule` exist | Verified for NFL paths (community gist); college-football path by analogy | [nntrn ESPN gist](https://gist.github.com/nntrn/ee26cb2a0716de0947a0a4e9a157bc1c). Unofficial, no terms (ADR 0005) |
@@ -619,8 +620,9 @@ enum class AlertKind { OVERRIDE, SUFFIX }
 data class NwsAlert(val event: String /* cleaned, <= 40 */, val severity: String, val kind: AlertKind, val until: Instant?)
 data class AlertSet(val alerts: List<NwsAlert> /* <= 8 kept, override first */)
 object NwsAlerts { fun url(loc: Location): HttpUrl; fun parse(raw: String, now: Instant): AlertSet? }  // null = not the shape
-// keep: status == "Actual", messageType in {Alert, Update}, now < (ends ?: expires). OVERRIDE iff event ends with
-// "Warning" and severity in {Severe, Extreme}; everything else SUFFIX.
+// keep: status == "Actual", messageType in {Alert, Update}, now < (ends ?: expires). OVERRIDE iff severity in
+// {Severe, Extreme}, the event does not end in Watch/Advisory/Statement/Outlook/Message, and it ends in Warning or
+// Emergency or is Extreme. Real NWS sends "Tornado Watch" with severity Extreme (capture 2026-11-02), so a Watch stays SUFFIX.
 
 data class TravelRule(val keyword: String /* <= 40 */, val minutes: Int /* 1..180 */)   // <= 10 rules, adb-set
 data class NowNext(val line1: String, val line2: String?, val ageText: String?)          // null result = hidden
