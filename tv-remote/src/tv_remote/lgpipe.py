@@ -32,21 +32,25 @@ def lock_for(lg: LgBackend) -> asyncio.Lock:
     return held[1]
 
 
-async def handle(lg: LgBackend, line: str) -> str:
+async def handle(lg: LgBackend, line: str, *, name: str = "LG", unknown_up: str = "refuse") -> str:
+    """One volume command with the cap. `name` is the TV's name in error text ("LG" or "Vizio"). `unknown_up`:
+    "refuse" (the LG and the MCP pipe) refuses to step up from an unknown level; "step" (the Vizio, ADR 0007) takes one
+    step, which the PC remote allows only once per tap, and still clamps if the TV then reports a level above 60."""
     cmd = line.strip().lower()
     if cmd not in COMMANDS:
         return "error unknown command"
     # Read, step and clamp are one unit (volume-cap-race): two presses at 59 must not both step, and a caller that
     # gives up (timeout, window closing) must not cancel it between a step up and the clamp, so it is shielded.
-    return await asyncio.shield(_locked(lg, cmd))
+    return await asyncio.shield(_locked(lg, cmd, name, unknown_up == "step"))
 
 
-async def _locked(lg: LgBackend, cmd: str) -> str:
+async def _locked(lg: LgBackend, cmd: str, name: str = "LG", step_unknown: bool = False) -> str:
     async with lock_for(lg):
-        return await _run(lg, cmd)
+        return await _run(lg, cmd, name, step_unknown)
 
 
-async def _run(lg: LgBackend, cmd: str) -> str:
+async def _run(lg: LgBackend, cmd: str, name: str = "LG", step_unknown: bool = False) -> str:
+    the = "the " + name
     try:
         if cmd == "mute":
             st = await lg.status()
@@ -56,9 +60,9 @@ async def _run(lg: LgBackend, cmd: str) -> str:
             # The cap is checked before stepping, as lg_volume does (server.py, finding volume-step-cap): never step
             # up from an unknown level, and never step past 60.
             current = (await lg.status()).volume
-            if current is None:
-                return "error the LG did not report its volume"
-            if current >= VOLUME_CAP:
+            if current is None and not step_unknown:
+                return f"error {the} did not report its volume"
+            if current is not None and current >= VOLUME_CAP:
                 if current > VOLUME_CAP:
                     current = await lg.set_volume(VOLUME_CAP)
                 return "ok " + str(current)
@@ -70,13 +74,13 @@ async def _run(lg: LgBackend, cmd: str) -> str:
             level = await lg.set_volume(VOLUME_CAP)
         return "ok " + ("-" if level is None else str(level))
     except CertificateChanged:
-        return "error the LG's certificate changed; pair it again"
+        return f"error {the}'s certificate changed; pair it again"
     except NotPaired:
-        return "error the LG is not paired"
+        return f"error {the} is not paired"
     except DeviceRefused:
-        return "error the LG refused"
+        return f"error {the} refused"
     except DeviceUnreachable:
-        return "error the LG did not answer"
+        return f"error {the} did not answer"
     except Exception as exc:  # never a traceback (it could carry a host or key) on the pipe
         return "error " + type(exc).__name__
 

@@ -25,7 +25,7 @@ _PRIVATE_NETS = (
 )
 _MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([:-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}$")
 
-_ALLOWED_KEYS = {"lg": {"host", "mac"}, "googletv": {"host"}}
+_ALLOWED_KEYS = {"lg": {"host", "mac"}, "googletv": {"host"}, "vizio": {"host"}}
 
 
 class ConfigError(Exception):
@@ -44,9 +44,15 @@ class GoogleTvConfig:
 
 
 @dataclass(frozen=True)
+class VizioConfig:
+    host: str
+
+
+@dataclass(frozen=True)
 class Config:
     lg: LgConfig | None
     googletv: GoogleTvConfig | None
+    vizio: VizioConfig | None = None  # the PC remote's volume for the Vizio (ADR 0007); not an MCP tool
 
 
 def config_dir() -> Path:
@@ -125,9 +131,15 @@ def parse_config(data: dict) -> Config:
         if "host" not in sec:
             raise ConfigError("[googletv] needs host.")
         gtv = GoogleTvConfig(host=check_private_host(sec["host"], "googletv.host"))
-    if lg is None and gtv is None:
-        raise ConfigError("Config has neither [lg] nor [googletv]; add at least one TV.")
-    return Config(lg=lg, googletv=gtv)
+    vizio = None
+    if "vizio" in data:
+        sec = data["vizio"]
+        if "host" not in sec:
+            raise ConfigError("[vizio] needs host.")
+        vizio = VizioConfig(host=check_private_host(sec["host"], "vizio.host"))
+    if lg is None and gtv is None and vizio is None:
+        raise ConfigError("Config has no [lg], [googletv] or [vizio]; add at least one TV.")
+    return Config(lg=lg, googletv=gtv, vizio=vizio)
 
 
 def load_config(path: Path | None = None) -> Config:

@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 tv-remote = "tv_remote.server:main"
 tv-remote-lg = "tv_remote.lgpipe:main"
+tv-remote-vizio-pair = "tv_remote.vizio_pair:entry"
 
 [project.gui-scripts]
 # A GUI launcher on Windows (no console window): the "TV Remote" icon points at .venv\Scripts\tv-remote-app.exe

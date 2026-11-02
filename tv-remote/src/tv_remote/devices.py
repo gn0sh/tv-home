@@ -12,9 +12,9 @@ from typing import Literal, Protocol
 Key = Literal["UP", "DOWN", "LEFT", "RIGHT", "OK", "BACK", "HOME", "PLAY_PAUSE", "REWIND", "FAST_FORWARD",
               "VOLUME_UP", "VOLUME_DOWN", "MUTE", "POWER"]
 LgInput = Literal["HDMI_1", "HDMI_2", "HDMI_3", "HDMI_4"]
-Device = Literal["lg", "googletv"]
+Device = Literal["lg", "googletv", "vizio"]
 
-DEVICE_NAMES = {"lg": "LG TV", "googletv": "Google TV"}
+DEVICE_NAMES = {"lg": "LG TV", "googletv": "Google TV", "vizio": "Vizio TV"}
 VOLUME_CAP = 60
 
 
