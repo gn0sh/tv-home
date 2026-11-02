@@ -3,7 +3,6 @@ package com.gnosh.tvhome
 import android.content.Context
 import android.os.SystemClock
 import android.text.format.DateFormat
-import android.util.Log
 import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -39,7 +38,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.tv.material3.Text
 import java.time.Duration
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -167,18 +165,12 @@ fun rememberIdleController(): IdleController {
     return idle
 }
 
-private val pnpLogged = AtomicBoolean(false)
-
 private fun resolveProfile(context: Context, view: View): TvProfile {
     val pnp = runCatching { view.display?.deviceProductInfo?.manufacturerPnpId }.getOrNull()
-    // A-M7-6: the EDID manufacturer id, logged once per process at debug level. A three-letter code, never more.
-    if (pnpLogged.compareAndSet(false, true)) {
-        Log.d("TvHome", "display pnp=" + (pnp?.takeIf { PNP.matches(it) } ?: "none"))
-    }
+    // A-M7-6: the EDID manufacturer id picks the profile. Not logged (app code has no logging); check it on the TV with `adb shell dumpsys display`.
     return TvProfile.resolve(FeedSettings.tvProfile(context), pnp)
 }
 
-private val PNP = Regex("[A-Z]{3}")
 
 /**
  * NEAR_BLACK: the whole screen black, with only the clock in [OledTokens.NEAR_BLACK_CLOCK], drifting, at the top strip's

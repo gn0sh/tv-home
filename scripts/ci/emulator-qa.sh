@@ -35,6 +35,9 @@ fail() { echo "::error::$*"; exit 1; }
 a() { timeout 90 adb "$@"; }
 sh_() { timeout 90 adb shell "$@"; }
 
+# Emulator only: later steps run adb root and plant fake caches. Refuse any real device (for example Brian's TV).
+[[ "$(sh_ getprop ro.kernel.qemu | tr -d '\r')" == 1 ]] || { echo "::error::emulator-qa.sh runs only on an emulator"; exit 1; }
+
 pid_of() { sh_ pidof "$PKG" 2>/dev/null | tr -d '\r' || true; }
 resumed() { sh_ dumpsys activity activities | tr -d '\r' | grep -E 'topResumedActivity=|ResumedActivity:' || true; }
 in_front() { resumed | grep -q "$PKG/"; }
