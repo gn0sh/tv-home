@@ -59,6 +59,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -493,8 +494,15 @@ private fun TileFrame(
                 .onFocusChanged {
                     focused = it.isFocused
                     if (it.isFocused) onFocused()
+                    // A press whose release went elsewhere (the menu opened) does not carry over (tile-down-reset).
+                    else { downAt.longValue = -1L; longFired.value = false }
                 }
-                .semantics { contentDescription = description }
+                .semantics {
+                    contentDescription = description
+                    // The menu is reachable without the held key too (tile-a11y-longclick).
+                    val menu = onLongClick
+                    if (menu != null) this.onLongClick(label = null) { menu(); true }
+                }
                 .then(
                     if (onLongClick == null) Modifier else Modifier.onPreviewKeyEvent { e ->
                         if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) {
