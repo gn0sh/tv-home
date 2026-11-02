@@ -114,8 +114,9 @@ cold_start() { # $1 = label, $2 = "nolimit" to skip the MAX_COLD_MS check, $3 = 
   COLD_FAILED=""
   cs_fail() { if [[ $soft == soft ]]; then warn "$1"; COLD_FAILED=1; return 0; fi; fail "$1"; }
   for ((i = 0; i <= COLD_RUNS; i++)); do
-    sh_ am force-stop "$PKG"; sleep 1
-    out=$(sh_ am start -W -n "$MAIN" | tr -d '\r')
+    sh_ am force-stop "$PKG" || true; sleep 1
+    # || true: a failed or hung launch is judged by the Status check below (soft for the base, a fail for the PR).
+    out=$(sh_ am start -W -n "$MAIN" | tr -d '\r' || true)
     grep -q '^Status: ok' <<<"$out" || { echo "$out"; cs_fail "$1: am start -W did not report Status: ok"; return 0; }
     t=$(sed -n 's/^TotalTime: *\([0-9]*\).*/\1/p' <<<"$out")
     w=$(sed -n 's/^WaitTime: *\([0-9]*\).*/\1/p' <<<"$out")
@@ -246,7 +247,11 @@ if [[ -n $BASE_APK && -f $BASE_APK ]]; then
     if (( delta > MAX_REGRESSION_MS )); then
       warn "AC8: delta ${delta} ms over ${MAX_REGRESSION_MS}; measuring one more PR/base pair before deciding"
       ac8_pair 3
-      if [[ $AC8_STATUS == ok ]]; then ac8_compare; fi
+      if [[ $AC8_STATUS == ok ]]; then ac8_compare
+      else  # ac8-round3-escape: rounds 1-2 were already over budget, so a base failure now cannot excuse it
+        use_apk "$APK" PR
+        fail "AC8: PR cold start was ${delta} ms over the base after rounds 1-2 (max ${MAX_REGRESSION_MS}), and the round-3 base run failed"
+      fi
     fi
   fi
   use_apk "$APK" PR
