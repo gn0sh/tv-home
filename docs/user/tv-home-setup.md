@@ -94,7 +94,7 @@ folder (it shows what it will change and asks you to type YES):
 .\scripts\tv-home-takeover.ps1 -TurnOn
 ```
 - **Home:** the remote's Home button opens the dashboard, from any app, with focus on the first tile. **Holding Home
-  for about a second opens the TV's Settings** (in place of the TV's own quick panel), so you can always reach
+  for a moment opens the TV's Settings** (the dashboard flashes up first; that is expected) (in place of the TV's own quick panel), so you can always reach
   Settings > System > Accessibility with the remote alone.
 - **Mic:** the remote's mic button opens Ask Claude, listening. Google Assistant stays installed (Ask Claude uses its
   speech recognition), but the mic button no longer opens it.

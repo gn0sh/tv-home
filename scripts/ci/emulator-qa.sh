@@ -641,6 +641,10 @@ pass "m3: Home from the full-screen calendar returns to the home row"
 sh_ input keyevent --longpress KEYCODE_HOME; sleep 3
 resumed | head -1 | grep -q 'com.android.tv.settings\|com.android.settings' || fail "m3: holding Home did not open Settings ($(resumed | head -1))"
 pass "m3: holding Home opens the TV's Settings"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3: a short Home press after the hold did not open the dashboard ($(resumed | head -1))"
+resumed | head -1 | grep -q 'com.android.tv.settings\|com.android.settings' && fail "m3: a short Home press reopened Settings (hold timer not cancelled)"
+pass "m3: a short Home press after the hold opens the dashboard, not Settings"
 mic_ok=""
 for k in ASSIST VOICE_ASSIST SEARCH; do
   other_app

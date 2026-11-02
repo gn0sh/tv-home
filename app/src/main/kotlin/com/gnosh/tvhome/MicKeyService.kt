@@ -40,11 +40,9 @@ class MicKeyService : AccessibilityService() {
                 .setAction(if (home) AgendaActivity.ACTION_HOME else AgendaActivity.ACTION_ASK)
             val started = runCatching { startActivity(open) }.isSuccess
             if (home && !started) { passHome = true; return false }
-            // A held key's repeats are made after this filter, so it may never see them: a timer finds the hold, and
-            // a repeat that does arrive (an injected long press) opens Settings at once.
+            // A held key's repeats are made after this filter, so it may never see them: a timer finds the hold
+            // (hold-path-untested: this is also the path CI's injected long press takes; repeats are ignored).
             if (home) { main.removeCallbacks(openSettings); main.postDelayed(openSettings, HOLD_MS) }
-        } else if (home && event.repeatCount == 1) {
-            main.removeCallbacks(openSettings); openSettings.run()
         }
         return true
     }
@@ -58,7 +56,10 @@ class MicKeyService : AccessibilityService() {
     private companion object {
         val MIC_KEYS = setOf(KeyEvent.KEYCODE_ASSIST, KeyEvent.KEYCODE_VOICE_ASSIST, KeyEvent.KEYCODE_SEARCH)
 
-        /** How long Home must be held to open Settings. */
-        const val HOLD_MS = 800L
+        /**
+         * How long Home must be held to open Settings: past a normal press (about 0.1-0.2 s), and under the 0.4 s an
+         * injected long press (`input keyevent --longpress`, the system long-press timeout) holds, so CI covers it.
+         */
+        const val HOLD_MS = 330L
     }
 }
