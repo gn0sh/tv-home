@@ -29,7 +29,7 @@ foreach ($p in $places) {
     $s.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $s.Arguments = "-NoProfile -WindowStyle Hidden -File `"$remote`""
     $s.WorkingDirectory = Split-Path $PSScriptRoot -Parent
-    $s.IconLocation = (Join-Path $env:SystemRoot 'System32\imageres.dll') + ',27'
+    $s.IconLocation = (Join-Path $env:SystemRoot 'System32\shell32.dll') + ',15'
     $s.Description = 'On-screen remote for the Google TV'
     $s.Save()
     Write-Host "Made $p"

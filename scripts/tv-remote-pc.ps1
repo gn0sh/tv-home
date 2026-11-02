@@ -16,12 +16,21 @@
 param([string]$Serial = '192.168.68.71:5555')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-# Started from the "TV Remote" icon there is no console, so a startup error would vanish: show it in a box instead.
+# Started from the "TV Remote" icon there is no console, so errors would vanish: show them in a box instead. Before the
+# window: the trap. Inside it (button handlers): a ThreadException handler that shows the message and keeps running.
+Add-Type -AssemblyName System.Windows.Forms
 trap {
-    Add-Type -AssemblyName System.Windows.Forms
     [void][System.Windows.Forms.MessageBox]::Show("TV remote could not start: $($_.Exception.Message)", 'TV remote')
     exit 1
 }
+[System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
+[System.Windows.Forms.Application]::add_ThreadException({
+    param($s, $e)
+    [void][System.Windows.Forms.MessageBox]::Show("TV remote: $($e.Exception.Message)", 'TV remote')
+})
+# One window at a time: a second tap on the icon would otherwise open a second remote.
+$single = New-Object System.Threading.Mutex($false, 'Local\gnosh-tv-remote')
+if (-not $single.WaitOne(0)) { exit 0 }
 
 if ($Serial -notmatch '\A\d{1,3}(\.\d{1,3}){3}:\d{1,5}\z') { throw "Serial must look like 192.168.68.71:5555" }
 
