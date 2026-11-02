@@ -153,20 +153,20 @@ fun HomeScreen(
     var hiddenOpen by remember { mutableStateOf(false) }
     var pendingFocus by remember { mutableStateOf<String?>(null) }
     fun visiblePkgs() = appList.map { it.app.packageName }
-    fun commit(next: SavedLayout, focusKey: String?) {
-        // Keep the row where it is (move-scroll-anchor): a LazyRow keeps its first visible item's key in place when
-        // the data changes, so moving the first tile right would scroll the row along with it and look like nothing
-        // moved. This position is used instead on the next measure; pendingFocus then brings the tile into view.
-        rowState.requestScrollToItem(rowState.firstVisibleItemIndex, rowState.firstVisibleItemScrollOffset)
+    fun commit(next: SavedLayout, focusKey: String?, keepScroll: Boolean = false) {
+        // A move keeps the row where it is (move-scroll-anchor): a LazyRow keeps its first visible item's key in place
+        // when the data changes, so moving the first tile right would scroll the row along with it and look like
+        // nothing moved. This position is used instead on the next measure; pendingFocus then brings the tile into view.
+        if (keepScroll) rowState.requestScrollToItem(rowState.firstVisibleItemIndex, rowState.firstVisibleItemScrollOffset)
         onLayoutChange(next)
         pendingFocus = focusKey
     }
     fun onTileAction(pkg: String, action: TileAction) {
         menuFor = null
         when (action) {
-            TileAction.Left -> commit(layout.copy(order = AppLayout.moveLeft(layout.order, layout.hidden, installedPkgs, pkg)), pkg)
-            TileAction.Right -> commit(layout.copy(order = AppLayout.moveRight(layout.order, layout.hidden, installedPkgs, pkg)), pkg)
-            TileAction.Front -> commit(layout.copy(order = AppLayout.moveToFront(layout.order, installedPkgs, pkg)), pkg)
+            TileAction.Left -> commit(layout.copy(order = AppLayout.moveLeft(layout.order, layout.hidden, installedPkgs, pkg)), pkg, keepScroll = true)
+            TileAction.Right -> commit(layout.copy(order = AppLayout.moveRight(layout.order, layout.hidden, installedPkgs, pkg)), pkg, keepScroll = true)
+            TileAction.Front -> commit(layout.copy(order = AppLayout.moveToFront(layout.order, installedPkgs, pkg)), pkg, keepScroll = true)
             TileAction.Hide -> {
                 val before = visiblePkgs()
                 val rest = before - pkg
@@ -184,6 +184,9 @@ fun HomeScreen(
     }
     LaunchedEffect(pendingFocus) {
         val key = pendingFocus ?: return@LaunchedEffect
+        // Two frames: frame callbacks run before that frame's layout, so after the second one the row has been measured
+        // with the new layout (and any move-scroll-anchor request applied) and layoutInfo below is not the old one.
+        withFrameNanos { }; withFrameNanos { }
         val index = rowKeys.indexOf(key)
         if (index >= 0) {
             val info = rowState.layoutInfo
