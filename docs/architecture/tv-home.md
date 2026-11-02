@@ -1,6 +1,6 @@
-# Architecture: tv-home (M1 agenda, M1b Ask Claude, M1c phone/laptop remote)
+# Architecture: tv-home (M1 agenda, M1b Ask Claude, M1c phone/laptop remote, M7 Now / Next)
 
-Status: v3, 2026-10-31, software-architect. v2 applied the security review
+Status: v4, 2026-11-02, software-architect (v4 adds section 11, M7, ADR 0008). v3 was 2026-10-31. v2 applied the security review
 (`docs/reviews/security-tv-home-design.md`, findings tagged `#n key`) and the spec's M1b/M1c ACs. v3 adds section 3a
 (bounded calendar parse, ADR 0004) after `ics-parse-cpu-memory-dos` came back a third time. Spec: `docs/specs/tv-home.md` (M1, M1b, M1b-2, M1c). Build order: M1 → M1c → M1b.
 ADRs: [0001](../adr/0001-tv-home-module-split-and-calendar-source.md) (module split, ICS library, secrets, signing),
@@ -565,3 +565,104 @@ the ATV client private key are encrypted at rest with Windows DPAPI (current use
 | Brian's real feed hits a parse limit on the TV (stale, then "Calendar data unreadable") | Low-medium | Limits are 20x a legit feed's step need; `provision.ps1` prints counts at T11; `Limits` is one parameter to change |
 | Google's feed framing differs from what `IcsReader` accepts (e.g. LF line ends) | Low | T2b.6 live check on a public Google feed before T11; fails visibly (Unreadable), never silently |
 | About 50 crafted recurring invites exhaust the global budget (availability only) | Low | Accepted (ADR 0004); the last copy stays on screen; Brian deletes them |
+
+## 11. M7: Now / Next home screen (summary; decisions in ADR 0008)
+Spec: M7 in `docs/specs/tv-home.md`. Panel: `docs/reviews/dashboard-info-panels.md`. ADR:
+[0008](../adr/0008-tv-home-now-next-panels.md). Tasks: `docs/tasks/tv-home-m7.md`. Internal, one user, lean.
+
+### 11.1 Facts this design rests on
+| Fact | Status | How |
+|---|---|---|
+| NWS `api.weather.gov` needs no key and requires a `User-Agent` ("A User Agent is required to identify your application"); rate limit not public, "generous for typical use"; default format GeoJSON (`application/geo+json`) | Verified (docs) | [NWS API docs](https://www.weather.gov/documentation/services-web-API), read 2026-11-02 |
+| `/alerts/active` takes a `point=<lat>,<lon>` filter | Verified (secondary) | Not in the NWS docs page; documented by the `nwswx` client (`point - point (latitude,longitude)`). Confirmed for real by task M7-D1 |
+| Alert features carry `properties.event, severity, urgency, certainty, headline, onset, ends, expires, messageType, status`; `ends` can be null | Verified (secondary), shape unverified | Third-party client source reading exactly these fields; the CAP model. No captured response (sandbox proxy blocks the host: curl 000, 2026-11-02). M7-D1 captures one |
+| NWS "Watch" events can carry severity `Severe` | Unverified (judgment, medium) | Hence the override rule keys on event name ending "Warning" plus severity, not severity alone |
+| NHL api-web: `/v1/club-schedule/{team}/week/now`, `/month/now`, `/v1/club-schedule-season/{team}/now`, `/v1/scoreboard/{team}/now` exist | Verified (community reference) | [Zmalski NHL-API-Reference](https://github.com/Zmalski/NHL-API-Reference) (no sample bodies). Unofficial (ADR 0005) |
+| NHL game fields `startTimeUTC`, `gameState` (`FUT`, `LIVE`, `FINAL` seen), `homeTeam`/`awayTeam` with `abbrev`, `placeName`, `score` | Verified (secondary) | `nhl_api` Rust crate serde names. `commonName`, `periodDescriptor`, `PRE`/`CRIT`/`OFF` and `tvBroadcasts` **unverified** |
+| ESPN `site.api.espn.com/apis/site/v2/sports/football/{league}/scoreboard?dates=YYYYMMDD` and `/teams/{id}/schedule` exist | Verified for NFL paths (community gist); college-football path by analogy | [nntrn ESPN gist](https://gist.github.com/nntrn/ee26cb2a0716de0947a0a4e9a157bc1c). Unofficial, no terms (ADR 0005) |
+| ESPN competitions carry `status.type.state` (`pre`/`in`/`post`) and `broadcasts[].names` (e.g. "FOX", "ESPN+") | Unverified (memory, medium) | No primary source found; M7-D1 captures one. Design works without them (team default network) |
+| Game-specific Watch deep links exist for ESPN+ / other apps on Google TV | Unverified (community reports for ESPN on Channels DVR/ADBTuner only) | Not needed: Watch opens the app's leanback launch intent, the same path as the tiles (spec M7-4.3) |
+| Android TV 1080p is 1280x720 dp (1 dp = 1.5 px) | Verified (design doc, M1) | `docs/design/tv-home-m1-agenda.md`; so 32 px = 22 sp, 66 px = 44 sp |
+| `Display.getDeviceProductInfo()` (API 31) returns the sink's EDID PnP id (`GSM` = LG, `VIZ` = Vizio) on a Google TV dongle | Unverified | Platform API exists at our minSdk 31; whether Google TV fills it over HDMI is unknown. M7-F4 logs it on the emulator and Brian's TV; adb setting is the fallback |
+| HOME, SEARCH, ASSIST never reach the app | Verified (PR #15 CI, API 34) | `docs/status.md` blockers |
+| The Ask key is provisioned and spend-limited by Brian | Verified | `docs/status.md` 2026-11-01 |
+| Claude Opus 5.5 is $4 / $20 per MTok; Haiku 5.5 $0.10 / $0.50 | Verified (claude-api skill price table, cached 2026-10-06) | Used for the brief cap ceiling |
+| ZIP 37042 ≈ 36.53, -87.36 at two decimals | Unverified (A-M7-7) | Same value as ADR 0005's example; set over adb once |
+
+### 11.2 Components (new or changed)
+| Where | Unit | Job |
+|---|---|---|
+| `core/feeds/Panels.kt` | `Stamped`, `PanelPolicy`, `PanelView`, `view()`, `PanelCacheCodec` | stamps, staleness, age line, disk envelope |
+| `core/feeds/NwsAlerts.kt` | `NwsAlerts.url/parse`, `AlertSet`, `AlertRules.classify` | NWS fetch URL, defensive parse, override vs chip-suffix |
+| `core/feeds/LiveFeeds.kt` | + alerts loop, cache load/write, switches | the one fetch path (extended) |
+| `core/feeds/FeedFetcher.kt` | + `api.weather.gov` in `HOSTS`; per-host headers | NWS UA `tvhome/1 (+https://github.com/gn0sh/tv-home)` and `Accept: application/geo+json`; other hosts unchanged |
+| `core/feeds/Weather.kt` | + hourly temperature, daily min/max in the Open-Meteo URL | morning arc and overnight low for the time-of-day card |
+| `core/feeds/GameSources.kt` | `ScheduleSource` adapter per league, season fallback | live source, then cached season schedule; shape change = fallback, never a crash |
+| `core/feeds/WatchMap.kt` | network → package map, team default network | which app the Watch pill opens; no mapping = no pill |
+| `core/agenda/Agenda.kt` | `AgendaItem.endsAt: Instant?` (default null) | "now, until 5:30" |
+| `core/ui/NowNext.kt` | `nowNext(state, now, zone, travel, quiet)` | lines 1-2, countdown, "Leave by", all-day, nothing left |
+| `core/ui/ContextCard.kt` | `contextCard(...)` | priority: severe alert > live game > game today > time of day |
+| `core/ui/HomeGlance.kt` | `homeGlance()`, `GlanceBudget`, `HeroZones` | the only text source for hero, top strip and brief line |
+| `core/ui/Oled.kt` | `TvProfile`, `Drift`, `IdleClock`, dim tokens | burn-in protection, pure |
+| `core/assistant/Brief.kt` | `briefFacts`, `briefRequestBody`, `BriefEngine`, `MonthlyCap`, `templateLine` | the daily line, capped, cached |
+| `app/Hero.kt`, `HomeScreen.kt` | draw `HomeGlance` in zones; Watch and Quiet pills; idle layer | drawing only |
+| `app/FeedSettings.kt`, `ProvisionProvider.kt` | switches, `tv_profile`, travel rules, watch map, quiet | adb-set, DUMP/shell-guarded as today |
+
+### 11.3 Contracts (signatures; all `:core`, pure unless noted)
+```kotlin
+data class Stamped<T>(val value: T, val at: Instant)
+data class PanelPolicy(val staleAfter: Duration, val ageShownAfter: Duration = Duration.ofMinutes(15), val hideWhenStale: Boolean = true)
+sealed interface PanelView<out T> { object Off; object NoData; data class Shown<T>(val value: T, val ageText: String?, val stale: Boolean) }
+fun <T> view(s: Stamped<T>?, p: PanelPolicy, enabled: Boolean, now: Instant): PanelView<T>   // stale iff age >= staleAfter
+
+enum class AlertKind { OVERRIDE, SUFFIX }
+data class NwsAlert(val event: String /* cleaned, <= 40 */, val severity: String, val kind: AlertKind, val until: Instant?)
+data class AlertSet(val alerts: List<NwsAlert> /* <= 8 kept, override first */)
+object NwsAlerts { fun url(loc: Location): HttpUrl; fun parse(raw: String, now: Instant): AlertSet? }  // null = not the shape
+// keep: status == "Actual", messageType in {Alert, Update}, now < (ends ?: expires). OVERRIDE iff event ends with
+// "Warning" and severity in {Severe, Extreme}; everything else SUFFIX.
+
+data class TravelRule(val keyword: String /* <= 40 */, val minutes: Int /* 1..180 */)   // <= 10 rules, adb-set
+data class NowNext(val line1: String, val line2: String?, val ageText: String?)          // null result = hidden
+fun nowNext(state: AgendaState, now: Instant, zone: ZoneId, travel: List<TravelRule>, quiet: Boolean, is24h: Boolean): NowNext?
+
+data class HomeGlance(val clock: String, val date: String, val chip: String?, val nowNext: NowNext?,
+                      val card: ContextCard?, val brief: String?, val quiet: Boolean, val watch: WatchTarget?)
+fun homeGlance(inputs: GlanceInputs): HomeGlance   // GlanceBudget.fit applied inside
+
+data class BriefFacts(...)                         // exactly the fields in ADR 0008 section 5
+fun briefRequestBody(f: BriefFacts): String        // model AskConfig.MODEL, effort low, max_tokens 1024, schema {"line"}
+class BriefEngine(client, dailyCap, monthlyCap, store, clock, zone, enabled: () -> Boolean, hasKey: () -> Boolean)
+```
+"Leave by": within 60 min of a timed event whose title contains a rule keyword (case-insensitive), line 1 is
+"Leave by 5:40" (start minus rule minutes); no rule, no "Leave by". Rules are set over adb (none by default). The
+ICS `LOCATION` field is not parsed in M7: adding a field to the bounded parser (ADR 0004 limits) is not worth it yet.
+
+### 11.4 Key flows
+1. **Cold start.** First frame draws tiles with every panel empty (unchanged AC8 path). After the frame plus 1.5 s,
+   `LiveFeeds.run()` loads disk caches on IO and publishes them (panels appear with their age), then the loops fetch
+   what is due. `AgendaSession` already runs on its own.
+2. **Alert.** Alerts loop fetches every 15 min (5 min while any alert is active). An OVERRIDE alert takes the context
+   card ("Tornado Warning until 7:45 PM", 40 sp); SUFFIX alerts append to the chip ("72°F Rain · Flood Watch"). Past
+   30 min without a good fetch the alerts are dropped and the chip says "alerts unknown".
+3. **Brief.** At the first minute tick on home after 07:00 or 16:00, if the brief is on, a key exists and both caps
+   allow, `BriefEngine` sends the facts once; success caches `{line, fingerprint, hadTitles, at}`. The line shows while
+   the fingerprint matches current facts; otherwise the template line.
+
+### 11.5 Non-functional
+- **Requests.** NWS at most 12/h during an alert, 4/h otherwise, only while home is visible. Claude at most 2/day, 62/month.
+- **Disk.** Panel files cap 64 KiB each; brief file under 1 KiB. All in `noBackupFilesDir` (no backup, app-private).
+- **Privacy.** Location leaves the TV at two decimals (Open-Meteo, NWS). Event titles leave only in the brief (off by
+  default; never in Quiet). Nothing new is logged.
+- **Security review.** External input grows by one host (NWS) and one outbound personal-data flow (brief). Run
+  security-engineer on ADR 0008 sections 1 and 5 before tasks M7-B3 and M7-B10.
+
+### 11.6 Risks
+| Risk | Likelihood | Mitigation |
+|---|---|---|
+| NWS `point` filter or shape differs from the fixture | Low-medium | M7-D1 captures real responses in CI before M7-B3 is merged; parse failure = "alerts unknown" |
+| Unofficial sports APIs change or block | Medium | Adapter + cached season fallback; team goes dark, no crash |
+| EDID profile not exposed on Google TV | Medium | adb `tv_profile`; default LG (safer) |
+| Returning to home shows stale panels for a few seconds | High, low impact | Age lines; fetch-if-due on return |
+| Brief wording wrong or odd from a hostile invite title | Low | Display-only, capped, cleaned; Quiet; template fallback |
+| Near-black first key consumed (deviation from M7-5.2) | n/a | Flagged to PM/ux; one constant to flip |
