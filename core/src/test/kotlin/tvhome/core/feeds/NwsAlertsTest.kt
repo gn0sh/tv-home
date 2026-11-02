@@ -74,6 +74,10 @@ class NwsAlertsTest {
             Triple("Extreme Cold Advisory", "Extreme", AlertKind.SUFFIX),
             Triple("Special Weather Statement", "Extreme", AlertKind.SUFFIX),
             Triple("Tornado Warning", "Moderate", AlertKind.SUFFIX),
+            Triple("Civil Emergency Message", "Extreme", AlertKind.OVERRIDE), // nws-cem-suffix: life-safety
+            Triple("Civil Emergency Message", "Unknown", AlertKind.OVERRIDE),
+            Triple(" civil emergency message ", "Moderate", AlertKind.OVERRIDE),
+            Triple("Administrative Message", "Extreme", AlertKind.SUFFIX),
             Triple("  Winter Storm Warning  ", " severe ", AlertKind.OVERRIDE),
         )
         for ((e, s, k) in table) assertEquals(k, AlertRules.classify(e, s), "$e/$s")

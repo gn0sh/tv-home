@@ -36,16 +36,20 @@ object AlertRules {
     /** Event-name endings that are never an override, whatever the severity (spec M7-2.3: chip suffix). */
     private val NEVER_OVERRIDE = listOf("Watch", "Advisory", "Statement", "Outlook", "Message")
 
+    /** Life-safety events that always override, whatever their name or severity (security finding `nws-cem-suffix`). */
+    private val ALWAYS_OVERRIDE = setOf("civil emergency message")
+
     /**
      * OVERRIDE iff the severity is Severe or Extreme and the event is not a Watch, Advisory, Statement, Outlook or
      * Message, and either the event ends in "Warning" or "Emergency" or the severity is Extreme (an unknown Extreme
      * event overrides). The real NWS feed sends a Tornado Watch with severity Extreme (CI capture 2026-11-02), so
      * "Extreme always overrides" would put every Watch on the card. Call with the raw trimmed event name, before it
-     * is cut to 40 chars, so a long name keeps its ending.
+     * is cut to 40 chars, so a long name keeps its ending. Exception: "Civil Emergency Message" always overrides.
      */
     fun classify(event: String, severity: String): AlertKind {
         val sev = severity.trim().lowercase(Locale.ROOT)
         val name = event.trim()
+        if (name.lowercase(Locale.ROOT) in ALWAYS_OVERRIDE) return AlertKind.OVERRIDE
         if (sev !in OVERRIDE_SEVERITY) return AlertKind.SUFFIX
         if (NEVER_OVERRIDE.any { name.endsWith(it, ignoreCase = true) }) return AlertKind.SUFFIX
         val strong = name.endsWith("Warning", ignoreCase = true) || name.endsWith("Emergency", ignoreCase = true)
