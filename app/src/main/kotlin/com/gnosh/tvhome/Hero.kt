@@ -11,7 +11,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -21,6 +22,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.provider.Settings
+import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -29,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -59,7 +62,6 @@ import androidx.tv.material3.Text
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -68,30 +70,48 @@ import tvhome.core.feeds.GameDay
 import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelView
 import tvhome.core.feeds.view
+import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.Precip
+import tvhome.core.ui.ContextCard
+import tvhome.core.ui.DriftOffset
+import tvhome.core.ui.GlanceInputs
+import tvhome.core.ui.GlanceTokens
 import tvhome.core.ui.HeroMotif
 import tvhome.core.ui.HeroTheme
+import tvhome.core.ui.HeroZones
+import tvhome.core.ui.HomeGlance
+import tvhome.core.ui.IdleState
+import tvhome.core.ui.NowNext
+import tvhome.core.ui.OledTokens
 import tvhome.core.ui.Tokens
+import tvhome.core.ui.TravelRule
+import tvhome.core.ui.homeGlance
 
 /** Fraction of the screen height the backdrop covers (under the app row, as in the mockup). */
 const val HERO_BACKDROP_FRACTION = 0.55f
 
-/** Prefix of the hero title's content description, read by the emulator QA check (scripts/ci/emulator-qa.sh). */
-const val HERO_TITLE_DESC_PREFIX = "Hero title: "
+/** Content description prefix of the Now/Next line 1, read by the emulator QA check (scripts/ci/emulator-qa.sh). */
+const val HERO_NOW_DESC_PREFIX = "Hero now: "
 
-/** What the hero shows for the focused tile. */
-const val HERO_SUBTITLE = "Press OK to open"
+/** Content description prefix of the context card, read by the emulator QA check. */
+const val HERO_CARD_DESC_PREFIX = "Hero card: "
 
 /**
- * The hero layer: backdrop, title, subtitle, theme badge and clock. Not focusable and no focus targets (home-back-twice).
- * It owns the minute clock, so the theme re-evaluates at each tick without recomposing the home screen. [label] is read
- * only inside [HeroText], so a focus change recomposes just the title, not the backdrop or the clock.
+ * The M7 hero layer (ADR 0008 sections 2-4): backdrop under a 25% scrim, the top strip (clock and date left, weather
+ * chip right), Now/Next in the left 60% and the context card (severe alert or today's game) in the right 40%. Every
+ * string comes from [homeGlance]; this only draws. Not focusable and no focus targets (home-back-twice): the Calendar
+ * tile in the dock is how OK reaches the calendar.
+ *
+ * It owns the minute clock, so the countdown and the theme re-evaluate at each tick without recomposing the home
+ * screen. [idle] dims the backdrop and text (DIM; NEAR_BLACK is drawn over everything by [NearBlackLayer]); [drift]
+ * moves the top strip and the hero text, read in the layer phase only.
  */
 @Composable
-fun HeroLayer(label: () -> String, modifier: Modifier = Modifier) {
+fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val now by rememberMinuteClock()
-    val feeds = remember(context) { (context.applicationContext as TvHomeApp).graph.feeds }
+    val graph = remember(context) { (context.applicationContext as TvHomeApp).graph }
+    val feeds = graph.feeds
     // Feed work starts only after the first frame is on screen and a short settle, never on the startup path (AC8). It
     // runs on Default; the loops hold no state in the composition and stop when the hero leaves it.
     LaunchedEffect(feeds) {
@@ -100,31 +120,71 @@ fun HeroLayer(label: () -> String, modifier: Modifier = Modifier) {
         withContext(Dispatchers.Default) { feeds.run() }
     }
     val snap by feeds.snapshot.collectAsState()
+    val agenda by graph.session.state.collectAsState()
+    // The adb-set settings, read off the main thread once a minute (SharedPreferences: memory after the first read).
+    val settings by produceState(HeroSettings.NONE, now) {
+        value = withContext(Dispatchers.IO) { runCatching { HeroSettings.read(context) }.getOrDefault(HeroSettings.NONE) }
+    }
+    val is24h = DateFormat.is24HourFormat(context)
     val zone = ZoneId.systemDefault()
     val instant = Instant.now()
-    // M7-B4: values are stamped; the panel rule (weather hidden at 2 h) moved from LiveFeeds to view().
-    val weather = (view(snap.weather, PanelPolicies.WEATHER, true, instant) as? PanelView.Shown)?.value
-    val game = GameDay.select(snap.games?.value.orEmpty(), instant, zone)
+    val glance = remember(now, snap, agenda, settings, is24h) {
+        homeGlance(GlanceInputs(instant, zone, is24h, snap, settings.switches, settings.hasLocation, agenda, settings.travel))
+    }
+    val weather = (view(snap.weather, PanelPolicies.WEATHER, settings.switches.weather, instant) as? PanelView.Shown)?.value
+    val game = if (settings.switches.games) GameDay.select(snap.games?.value.orEmpty(), instant, zone) else null
     // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).
     val resolved = HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game)
-    val gameLine = game?.let { GameDay.line(it, instant, zone) }
+    val dim = idle.value == IdleState.DIM
+    val ink = HeroInk(
+        text = if (dim) OledTokens.DIM_TEXT else resolved.text,
+        secondary = if (dim) OledTokens.DIM_TEXT else resolved.secondaryText,
+    )
     Box(modifier.fillMaxSize()) {
-        HeroBackdrop(resolved, weather?.precipNow, Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION))
-        HeroTopBar(resolved, now, gameLine, weather?.chip)
-        HeroText(resolved, label)
+        HeroBackdrop(
+            resolved, weather?.precipNow,
+            scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION),
+        )
+        val drifting = Modifier.graphicsLayer {
+            val o = drift.value
+            translationX = o.dx.dp.toPx()
+            translationY = o.dy.dp.toPx()
+        }
+        HeroTopStrip(glance, resolved, ink, drifting)
+        HeroNowNext(glance.nowNext, ink, drifting)
+        HeroCard(glance.card, ink, drifting)
     }
 }
 
 private const val FEEDS_START_DELAY_MS = 1500L
 
+/** The text colours the hero draws with: the theme's, or the DIM grey. */
+private class HeroInk(val text: Int, val secondary: Int)
+
+/** The adb-set settings the hero reads ([FeedSettings]). */
+private data class HeroSettings(val switches: PanelSwitches, val hasLocation: Boolean, val travel: List<TravelRule>) {
+    companion object {
+        val NONE = HeroSettings(PanelSwitches(), hasLocation = false, travel = emptyList())
+
+        /** Disk on first use: call off the main thread. */
+        fun read(context: Context) = HeroSettings(
+            FeedSettings.switches(context), FeedSettings.location(context) != null, FeedSettings.travelRules(context),
+        )
+    }
+}
+
+/** Places a composable on one of the fixed [HeroZones] (dp at 1280x720). */
+private fun Modifier.zone(z: HeroZones.Zone): Modifier = offset(z.x.dp, z.y.dp).size(z.w.dp, z.h.dp)
+
 /**
  * The current local time. Driven by the system's minute tick and by time and time-zone changes (no `delay`), so it stays
  * right across device sleep, a clock change or a zone change (clock-sleep-stale). The receiver is registered while the
- * hero is composed and unregistered when it leaves. All three actions are protected system broadcasts, so no
+ * composable is composed and unregistered when it leaves. All three actions are protected system broadcasts, so no
  * exported/not-exported flag is needed.
  */
 @Composable
-private fun rememberMinuteClock(): State<LocalDateTime> {
+internal fun rememberMinuteClock(): State<LocalDateTime> {
     val context = LocalContext.current
     val state = remember { mutableStateOf(LocalDateTime.now()) }
     DisposableEffect(context) {
@@ -143,70 +203,100 @@ private fun rememberMinuteClock(): State<LocalDateTime> {
     return state
 }
 
-private val CLOCK_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("h:mm a")
-
+/** Top strip: clock (40 sp) and date left, holiday badge after them; weather chip with any alert suffix right. */
 @Composable
-private fun HeroTopBar(theme: HeroTheme, now: LocalDateTime, gameLine: String?, weather: String?) {
+private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, drifting: Modifier) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
+        Modifier.zone(HeroZones.TOP_STRIP).then(drifting),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            Text(g.clock, color = rgb(ink.text), fontSize = GlanceTokens.CLOCK_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(g.date, color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, maxLines = 1)
             val badge = theme.badge
             if (badge != null) {
                 Text(
                     badge,
-                    color = Color(theme.backdropTop or OPAQUE),
-                    fontSize = 16.sp,
+                    color = rgb(theme.backdropTop),
+                    fontSize = GlanceTokens.BADGE_SP.sp,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 1.6.sp,
                     maxLines = 1,
                     modifier = Modifier
-                        .background(Color(theme.accent or OPAQUE), RoundedCornerShape(50))
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                        .background(rgb(theme.accent), RoundedCornerShape(50))
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
-            if (gameLine != null) {
-                Text(gameLine, color = Color(theme.text or OPAQUE), fontSize = 20.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            if (weather != null) {
-                Text(weather, color = Color(theme.secondaryText or OPAQUE), fontSize = 20.sp, maxLines = 1)
-            }
+        val chip = g.chip
+        if (chip != null) {
             Text(
-                CLOCK_FORMAT.format(now),
-                color = Color(theme.text or OPAQUE),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
+                chip, color = rgb(ink.secondary), fontSize = GlanceTokens.CHIP_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 24.dp),
             )
         }
     }
 }
 
+/** Hero left 60%: Now/Next line 1 (44 sp), line 2 (28 sp), the data-age line (22 sp). Nothing when hidden. */
 @Composable
-private fun HeroText(theme: HeroTheme, label: () -> String) {
-    Column(
-        Modifier
-            .padding(start = Tokens.MARGIN_H_DP.dp, top = (Tokens.MARGIN_V_DP + 36).dp)
-            .widthIn(max = 560.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        val title = label()
+private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier) {
+    nn ?: return
+    Column(Modifier.zone(HeroZones.HERO_LEFT).then(drifting), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            title,
-            color = Color(theme.text or OPAQUE),
-            fontSize = 48.sp,
-            lineHeight = 52.sp,
+            nn.line1,
+            color = rgb(ink.text),
+            fontSize = GlanceTokens.HERO_SP.sp,
+            lineHeight = (GlanceTokens.HERO_SP + 6).sp,
             fontFamily = FontFamily.SansSerif,
             fontWeight = FontWeight.Bold,
-            letterSpacing = (-1).sp,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.semantics { contentDescription = HERO_TITLE_DESC_PREFIX + title },
+            modifier = Modifier.semantics { contentDescription = HERO_NOW_DESC_PREFIX + nn.line1 },
         )
-        Text(HERO_SUBTITLE, color = Color(theme.secondaryText or OPAQUE), fontSize = 20.sp, maxLines = 1)
+        nn.line2?.let {
+            Text(it, color = rgb(ink.secondary), fontSize = GlanceTokens.HERO_LINE2_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        nn.ageText?.let {
+            Text(it, color = rgb(ink.secondary), fontSize = GlanceTokens.AGE_SP.sp, maxLines = 1)
+        }
+    }
+}
+
+/** Hero right 40%: a severe alert on an opaque red card (40 sp), or today's game line. Nothing when there is neither. */
+@Composable
+private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier) {
+    card ?: return
+    Box(Modifier.zone(HeroZones.HERO_RIGHT).then(drifting), contentAlignment = Alignment.TopStart) {
+        when (card) {
+            is ContextCard.Alert -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(rgb(GlanceTokens.ALERT_FILL), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 24.dp, vertical = 20.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = HERO_CARD_DESC_PREFIX + card.text },
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // The alert text is the hero text colour in DIM too (the fill keeps 7:1 for both; GlanceTokensTest).
+                val c = if (ink.text == OledTokens.DIM_TEXT) OledTokens.DIM_TEXT else GlanceTokens.ALERT_TEXT
+                Text(
+                    card.event, color = rgb(c), fontSize = GlanceTokens.ALERT_SP.sp, lineHeight = (GlanceTokens.ALERT_SP + 4).sp,
+                    fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                card.until?.let { Text(it, color = rgb(c), fontSize = GlanceTokens.ALERT_UNTIL_SP.sp, maxLines = 1) }
+            }
+            is ContextCard.Game -> Text(
+                card.line,
+                color = rgb(ink.text),
+                fontSize = GlanceTokens.CARD_SP.sp,
+                lineHeight = (GlanceTokens.CARD_SP + 6).sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { contentDescription = HERO_CARD_DESC_PREFIX + card.line },
+            )
+        }
     }
 }
 
@@ -227,12 +317,13 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  * - The image is drawn with the theme's own gradient over it at [TINT_ALPHA] when the theme is not the one the image was
  *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, every team shares GAME).
  * - The rain and snow particles are drawn on top of the image.
+ * - A black scrim ([scrimAlpha], read in the draw phase) goes over everything but the bottom fade (M7, R3).
  * - Only Christmas animates (slow snowfall), plus the rain or snow overlay while it is falling now. The loop ticks about 15 times a second with a delay, not every vsync, and
  *   does not run at all when the system animator scale is 0 (snow-uiautomator-idle: QA sets that so uiautomator can
  *   reach an idle state; it also honours the user's "remove animations" choice).
  */
 @Composable
-private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, modifier: Modifier) {
+private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, scrimAlpha: () -> Float, modifier: Modifier) {
     val context = LocalContext.current
     val frozen = remember(context) { animationsFrozen(context) }
     var ready by remember { mutableStateOf(false) }
@@ -303,6 +394,9 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, modifier: Modifier) 
                             null -> Unit
                         }
                     }
+                    // R3: the scrim caps the brightest backdrop pixel at 25% (15% in DIM), so hero text keeps 7:1 over
+                    // any art. Under the fade, so the backdrop still meets the screen background without a seam.
+                    drawRect(Color.Black, alpha = scrimAlpha())
                     drawRect(fade)
                 }
             },
