@@ -380,7 +380,7 @@ def test_mute_toggles_on_the_lg():
         vol.close()
 
 
-@pytest.mark.parametrize("cmd,key", [("up", "VOLUME_UP"), ("down", "VOLUME_DOWN"), ("mute", "VOLUME_MUTE")])
+@pytest.mark.parametrize("cmd,key", [("down", "VOLUME_DOWN"), ("mute", "VOLUME_MUTE")])
 def test_unreachable_lg_falls_back_to_adb(cmd, key):
     lg = FakeLg(fail=DeviceUnreachable("lg", LG_HOST))
     api, fake, vol = lg_api(lg)
@@ -393,6 +393,21 @@ def test_unreachable_lg_falls_back_to_adb(cmd, key):
         vol.close()
 
 
+def test_volume_up_never_falls_back_to_adb():
+    """adb volume has no cap (adb-volume-uncapped): up goes to the LG or nowhere."""
+    lg = FakeLg(fail=DeviceUnreachable("lg", LG_HOST))
+    api, fake, vol = lg_api(lg)
+    try:
+        r = api.volume("up")
+    finally:
+        vol.close()
+    assert r == {"ok": False, "status": "The LG did not answer. Volume up was not sent.", "via": "none"}
+    assert fake.lines == []
+    sh, fake = shell()
+    r = RemoteApi(sh, None).volume("up")
+    assert r["ok"] is False and "not set up" in r["status"] and fake.lines == []
+
+
 def test_unreachable_lg_is_skipped_for_ten_seconds():
     lg = FakeLg(fail=DeviceUnreachable("lg", LG_HOST))
     clock = Clock()
@@ -400,21 +415,22 @@ def test_unreachable_lg_is_skipped_for_ten_seconds():
     vol = LgVolume(lg, timeout=5, clock=clock)
     try:
         api = RemoteApi(sh, vol)
-        api.volume("up")
+        api.volume("down")
         lg.fail = None
-        api.volume("up")
+        api.volume("down")
         assert lg.calls == [] and len(fake.lines) == 2  # straight to adb, no 8 s wait per press
         clock.t += 11
-        assert api.volume("up")["via"] == "lg"
+        assert api.volume("down")["via"] == "lg"
     finally:
         vol.close()
 
 
-def test_lg_not_set_up_uses_adb():
+def test_lg_not_set_up_uses_adb_for_down_and_mute():
     sh, fake = shell()
-    r = RemoteApi(sh, None).volume("up")
+    r = RemoteApi(sh, None).volume("down")
     assert r["ok"] and r["via"] == "googletv" and "not set up" in r["status"]
-    assert fake.lines == ["input keyevent KEYCODE_VOLUME_UP"]
+    RemoteApi(sh, None).volume("mute")
+    assert fake.lines == ["input keyevent KEYCODE_VOLUME_DOWN", "input keyevent KEYCODE_VOLUME_MUTE"]
 
 
 def test_volume_refuses_other_commands():
@@ -443,7 +459,7 @@ def test_error_text_never_carries_secrets():
 
 def test_unexpected_lg_reply_is_not_shown():
     sh, fake = shell()
-    r = RemoteApi(sh, lambda cmd: "error <script>192.168.68.61</script>").volume("up")
+    r = RemoteApi(sh, lambda cmd: "error <script>192.168.68.61</script>").volume("down")
     assert r["status"] == "The LG: did not work. Sent to the Google TV instead."
 
 
@@ -585,3 +601,43 @@ def test_lg_remote_close_closes_its_link():
     asyncio.run(remote.close())
     assert closed == [True] and remote._link is None
     asyncio.run(remote.close())  # closing twice is fine
+
+
+def test_wrong_arity_through_the_real_dispatcher_is_a_short_error():
+    """bridge-arity-traceback: a call with too few or too many arguments gets a short reply, never a traceback."""
+    from webview.util import js_bridge_call
+
+    sh, fake = shell()
+    for name, params in (("key", []), ("key", ["HOME", "BACK"]), ("start", ["x"]), ("volume", []),
+                         ("text", ["a", "b"]), ("app", [])):
+        window = BridgeWindow(make_bridge(sh, None), SEALED)
+        js_bridge_call(window, name, params, "1")
+        assert window.answered.wait(5)
+        out = window.results[0]
+        assert "isError" not in out and "Traceback" not in out and "wrong call" in out
+    assert fake.lines == [] and fake.runs == []
+
+
+def test_new_window_links_never_open_the_browser():
+    """newwindow-startfile: pywebview must not pass a link from the page to webbrowser.open (os.startfile)."""
+    import webview
+
+    before = webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"]
+    try:
+        pcremote.configure_webview(webview)
+        assert webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] is False
+    finally:
+        webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = before
+    src = Path(pcremote.__file__).read_text(encoding="utf-8")
+    assert src.index("configure_webview(webview)") < src.index("webview.start(")
+
+
+def test_lock_down_failure_is_logged(monkeypatch, caplog):
+    monkeypatch.setattr(pcremote.sys, "platform", "win32")
+
+    class Window:
+        native = None
+
+    with caplog.at_level("WARNING", logger="tv_remote.pcremote"):
+        pcremote._lock_down(Window())
+    assert "could not lock the window down" in caplog.text

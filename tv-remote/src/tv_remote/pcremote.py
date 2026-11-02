@@ -14,6 +14,7 @@ never carry the LG's address, client key, certificate or any exception text.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import subprocess
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from .lgpipe import VOLUME_CAP
+
+log = logging.getLogger("tv_remote.pcremote")
 
 DEFAULT_SERIAL = "192.168.68.71:5555"
 SERIAL_RE = re.compile(r"\A\d{1,3}(\.\d{1,3}){3}:\d{1,5}\Z")
@@ -297,10 +300,13 @@ def _reply(ok: bool, status: str, **extra: Any) -> dict[str, Any]:
     return {"ok": ok, "status": status, **extra}
 
 
-def _guard(fn: Callable[..., dict[str, Any]], *args: Any) -> dict[str, Any]:
-    """No exception text (which could name a host or a file) ever reaches the page: pywebview would send it."""
+def _guard(fn: Callable[..., dict[str, Any]], want: int, backends: tuple[Any, ...], args: tuple[Any, ...]) -> dict[str, Any]:
+    """Calls fn(*backends, *args) when the page passed exactly `want` arguments. No exception text (which could name
+    a host or a file) ever reaches the page: pywebview would send it with a traceback (bridge-arity-traceback)."""
+    if len(args) != want:
+        return _reply(False, "That did not work (wrong call).")
     try:
-        return fn(*args)
+        return fn(*backends, *args)
     except Exception as exc:  # noqa: BLE001
         return _reply(False, "Something went wrong (" + type(exc).__name__ + "). Try again.")
 
@@ -345,6 +351,8 @@ def _volume(tv: AdbShell, lg: Callable[[str], str] | None, cmd: object) -> dict[
     if not isinstance(cmd, str) or cmd not in VOLUME_KEYS:
         return _reply(False, "That button is not on this remote.")
     if lg is None:
+        if cmd == "up":  # adb volume has no cap (adb-volume-uncapped), so up goes to the LG or nowhere
+            return _reply(False, "Volume up needs the LG, and it is not set up.", via="none")
         ok, status = tv.send(volume_key_line(cmd))
         return _reply(ok, "Volume sent to the Google TV (the LG is not set up)." if ok else status, via="googletv")
     reply = lg(cmd)
@@ -364,6 +372,8 @@ def _volume(tv: AdbShell, lg: Callable[[str], str] | None, cmd: object) -> dict[
         return _reply(False, "The LG did not report its volume, so it was not raised.", via="lg")
     reason = reason if LG_REASON_RE.match(reason) else "did not work"
     lg_said = "The LG" + reason[6:] if reason.startswith("the LG") else "The LG: " + reason
+    if cmd == "up":
+        return _reply(False, f"{lg_said}. Volume up was not sent.", via="none")
     ok, status = tv.send(volume_key_line(cmd))
     if ok:
         return _reply(True, f"{lg_said}. Sent to the Google TV instead.", via="googletv")
@@ -399,20 +409,20 @@ def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None) -> tuple[Callable
     SEALED, which finds nothing.
     """
 
-    def start():
-        return _guard(_start, tv, lg)
+    def start(*args):
+        return _guard(_start, 0, (tv, lg), args)
 
-    def key(code):
-        return _guard(_key, tv, code)
+    def key(*args):
+        return _guard(_key, 1, (tv,), args)
 
-    def app(pkg):
-        return _guard(_app, tv, pkg)
+    def app(*args):
+        return _guard(_app, 1, (tv,), args)
 
-    def text(value):
-        return _guard(_text, tv, value)
+    def text(*args):
+        return _guard(_text, 1, (tv,), args)
 
-    def volume(cmd):
-        return _guard(_volume, tv, lg, cmd)
+    def volume(*args):
+        return _guard(_volume, 1, (tv, lg), args)
 
     return start, key, app, text, volume
 
@@ -453,6 +463,13 @@ def _work_area(webview: Any) -> tuple[int | None, int | None]:
         return None, None
 
 
+def configure_webview(webview: Any) -> None:
+    """Before start (newwindow-startfile): a link that asks for a new window must never reach webbrowser.open, which
+    on Windows ends in os.startfile; with this off, pywebview loads it in this window instead, and _lock_down cancels
+    that navigation."""
+    webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
+
+
 def _lock_down(window: Any) -> None:
     """Windows: nothing dragged onto the window can navigate it, and once the page has loaded no navigation away from
     it is allowed (jsapi-private-dispatch: another page in this window would get the bridge too)."""
@@ -467,13 +484,18 @@ def _lock_down(window: Any) -> None:
         def deny(_sender, args):
             args.Cancel = True
 
+        def no_new_window(_sender, args):
+            args.Handled = True  # no popup; pywebview's own handler only loads it here, which `deny` cancels
+
         def apply():
             form.webview.AllowExternalDrop = False
-            form.webview.CoreWebView2.NavigationStarting += deny
+            core = form.webview.CoreWebView2
+            core.NavigationStarting += deny
+            core.NewWindowRequested += no_new_window
 
         form.Invoke(Action(apply))
-    except Exception:  # noqa: BLE001  the page's own drop handlers still stop drops
-        pass
+    except Exception as exc:  # noqa: BLE001  the page's own drop handlers still stop drops
+        log.warning("could not lock the window down (drops and navigation): %s", type(exc).__name__)
 
 
 def _single_instance():
@@ -502,6 +524,22 @@ def _release(mutex: Any) -> None:
         kernel32.ReleaseMutex(ctypes.c_void_p(mutex))
         kernel32.CloseHandle(ctypes.c_void_p(mutex))
     except Exception:  # noqa: BLE001
+        pass
+
+
+def _log_to_file() -> None:
+    """There is no console, so this module's own warnings (only exception type names, never hosts or keys) go to
+    %LOCALAPPDATA%\\tv-remote\\remote-app.log, kept under 64 KB. Other libraries' logs are not written there."""
+    try:
+        from logging.handlers import RotatingFileHandler
+
+        folder = Path(os.environ["LOCALAPPDATA"]) / "tv-remote"
+        folder.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(folder / "remote-app.log", maxBytes=64 * 1024, backupCount=1, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+    except Exception:  # noqa: BLE001  no log file is not a reason to stop
         pass
 
 
@@ -535,6 +573,7 @@ def main(argv: list[str] | None = None) -> None:
             raise FileNotFoundError(f"adb.exe not found under {base} (the tv-home install puts it there).")
         import webview
 
+        _log_to_file()
         if sys.platform == "win32":
             try:  # its own taskbar button and icon, not Python's
                 import ctypes
@@ -542,6 +581,7 @@ def main(argv: list[str] | None = None) -> None:
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("gnosh.tv-remote")
             except Exception:  # noqa: BLE001
                 pass
+        configure_webview(webview)
         tv = AdbShell(adb, args.serial)
         lg = load_lg()
         width, height = window_size(*_work_area(webview))
