@@ -97,20 +97,27 @@ network() { # on|off
   pass "network off: $PKG is denied all networking (OEM_DENY_3)"
 }
 
-cold_start() { # $1 = label; prints the TotalTime of each of 3 cold starts and checks the median against AC8
-  local out t times=()
-  for _ in 1 2 3; do
+# AC8: one uncounted warm-up cold start (the first launch after install or pm clear pays one-time costs: dex
+# verification, profile and prefs file creation), then 5 counted cold starts (force-stop each time) and their median.
+# Each prints TotalTime and WaitTime. The limit (MAX_COLD_MS) is unchanged; 5 samples make the median robust to the
+# swiftshader runner's noise (same code measured 979-4180 ms across runs with 3 samples).
+COLD_RUNS=5
+cold_start() { # $1 = label
+  local out t w times=() i
+  for ((i = 0; i <= COLD_RUNS; i++)); do
     sh_ am force-stop "$PKG"; sleep 1
     out=$(sh_ am start -W -n "$MAIN" | tr -d '\r')
     grep -q '^Status: ok' <<<"$out" || { echo "$out"; fail "$1: am start -W did not report Status: ok"; }
     t=$(sed -n 's/^TotalTime: *\([0-9]*\).*/\1/p' <<<"$out")
+    w=$(sed -n 's/^WaitTime: *\([0-9]*\).*/\1/p' <<<"$out")
     [[ -n $t ]] || { echo "$out"; fail "$1: no TotalTime in am start -W output"; }
-    times+=("$t")
+    if (( i == 0 )); then echo "$1 warm-up (not counted): TotalTime=$t WaitTime=${w:-?}"
+    else echo "$1 run $i: TotalTime=$t WaitTime=${w:-?}"; times+=("$t"); fi
     sleep 2
     [[ -n $(pid_of) ]] || fail "$1: process died after launch"
     in_front || fail "$1: AgendaActivity is not in front after launch"
   done
-  local median; median=$(printf '%s\n' "${times[@]}" | sort -n | sed -n 2p)
+  local median; median=$(printf '%s\n' "${times[@]}" | sort -n | sed -n "$(( (COLD_RUNS + 1) / 2 ))p")
   echo "$1 cold start TotalTime ms: ${times[*]} (median $median, limit $MAX_COLD_MS)"
   echo "$1 ${times[*]} median=$median" >> "$OUT/cold-start.txt"
   (( median < MAX_COLD_MS )) || fail "$1: median cold start ${median} ms is not under ${MAX_COLD_MS} ms (AC8)"
