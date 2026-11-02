@@ -89,7 +89,8 @@ private sealed interface Step {
 }
 
 /**
- * The Ask Claude view, full screen (M1b lean). Input: speech through the system dialog, else a text field; the
+ * The Ask Claude view, full screen (M1b lean). Input: speech through the system dialog, which opens at once (and for a
+ * follow-up), else a text field; the
  * transcript is shown with Send and Cancel before anything is sent. Result: the answer (focusable, D-pad Up/Down
  * scrolls it), and Open only when Claude named an installed app; nothing launches until Open is pressed. One
  * follow-up, then Start over. Back closes the view and drops the conversation (it lives in [engine], remembered only
@@ -101,9 +102,6 @@ fun AskFullScreen(host: AskHost, theme: HomeTheme, onClose: () -> Unit) {
     var generation by remember { mutableIntStateOf(0) }
     val engine = remember(generation) { host.newEngine() }
     var step by remember(generation) { mutableStateOf<Step>(Step.Checking) }
-    LaunchedEffect(generation) {
-        step = if (engine.checkKey()) Step.Start(null) else Step.Done("", AskOutcome.NotSetUp)
-    }
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
 
@@ -121,6 +119,17 @@ fun AskFullScreen(host: AskHost, theme: HomeTheme, onClose: () -> Unit) {
             step = if (text.isNullOrBlank()) Step.Start("Didn't catch that. Try again, or type it.") else Step.Confirm(text)
         }
         if (!started) step = Step.Typing("")
+    }
+
+    // On the TV Brian always speaks, so the view goes straight to listening (ask-listen-first). The Start screen with
+    // Speak and Type stays underneath the speech dialog, and is where a miss, a cancel or no speech service lands.
+    LaunchedEffect(generation) {
+        if (engine.checkKey()) {
+            step = Step.Start(null)
+            listen()
+        } else {
+            step = Step.Done("", AskOutcome.NotSetUp)
+        }
     }
 
     val fg = color(theme.text)
@@ -168,7 +177,7 @@ fun AskFullScreen(host: AskHost, theme: HomeTheme, onClose: () -> Unit) {
                         button("Cancel") { job?.cancel(); step = Step.Start(null) }
                     }
                 }
-                is Step.Done -> Result(s, engine, host, theme, onRetry = { send(s.question) }, onFollowUp = { step = Step.Start(null) },
+                is Step.Done -> Result(s, engine, host, theme, onRetry = { send(s.question) }, onFollowUp = { step = Step.Start(null); listen() },
                     onStartOver = { generation++ }, onClose = onClose)
             }
         }
