@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Agenda</string>
-    <string name="mic_service_label">Dashboard Home and mic buttons</string>
-    <string name="mic_service_description">The remote\'s Home button opens the dashboard and its mic button opens Ask Claude. It reads no screen content and passes every other key on untouched.</string>
+    <string name="mic_service_label">Dashboard Home button</string>
+    <string name="mic_service_description">When the TV\'s own home screen comes up, opens the dashboard instead. It sees only which app came to the front, never what is on screen.</string>
 </resources>

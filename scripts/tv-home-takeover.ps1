@@ -1,19 +1,18 @@
 <#
 .SYNOPSIS
-  Makes the Google TV remote's Home button open the dashboard and its mic button open Ask Claude (-TurnOn), or undoes
-  that (-Rollback). Run it yourself in your own PowerShell window; it changes a setting on the TV.
+  Makes the Google TV remote's Home button open the dashboard (-TurnOn), or undoes that (-Rollback). Run it yourself in your own PowerShell window; it changes a setting on the TV.
 .DESCRIPTION
-  -TurnOn:   turns on the app's key service ("Dashboard Home and mic buttons") in the TV's accessibility settings. It
+  -TurnOn:   turns on the app's key service ("Dashboard Home button") in the TV's accessibility settings. It
              appends to the list already there (saved to a rollback file first), so nothing else is switched off.
-             The service reads no screen content; it takes only the Home, mic, voice and search keys. Google
-             Assistant stays installed.
+             The service reads no screen content: it sees only that the TV's own home came to the front, and then
+             opens the dashboard (a brief flash of the TV's home first). The mic button stays Google Assistant.
   -Rollback: takes only that service out of the accessibility list (other services stay on) and, if the list is then
              what -TurnOn found, puts the accessibility switch back as it was. See docs/user/tv-home-setup.md for
              doing it by hand.
-  Why a key service and not "default home": Google TV's own launcher declares Home at a priority no other app can
-  match, so the TV keeps choosing it.
+  Why not "default home": Google TV's own launcher declares Home at a priority no other app can match, so the TV keeps
+  choosing it; and the system handles the Home and mic keys before any app could catch them.
   It asks you to type YES before changing anything, and prints each adb command it runs.
-.PARAMETER TurnOn    Home opens the dashboard, the mic opens Ask Claude
+.PARAMETER TurnOn    Home opens the dashboard
 .PARAMETER Rollback  undo
 .PARAMETER Serial  the TV's adb address (default 192.168.68.71:5555)
 #>
@@ -37,8 +36,8 @@ $Adb = $adbItem.FullName
 $RollbackFile = Join-Path $Tools ('takeover-rollback-' + ($Serial -replace '[.:]', '-') + '.json')
 
 $Pkg = 'com.gnosh.tvhome'
-$Service = "$Pkg/$Pkg.MicKeyService"
-$ServiceShort = "$Pkg/.MicKeyService"
+$Service = "$Pkg/$Pkg.HomeWatchService"
+$ServiceShort = "$Pkg/.HomeWatchService"
 # What the accessibility list may contain; anything else read from the TV is refused. $ is allowed (inner-class
 # services, a11y-list-regex-too-strict), so the list is always written inside single quotes, which the TV's shell
 # leaves alone; no quote, space or ; can get in.
@@ -64,7 +63,7 @@ function Get-TvA11yList {
     $v = Adb @('shell', 'settings', 'get', 'secure', 'enabled_accessibility_services')
     if ($v -eq 'null' -or $v -eq '') { return '' }
     if ($v -notmatch $A11yListRe) {
-        throw "The TV's accessibility list has an unexpected form; stopping without changes. To turn the dashboard's service off with the remote: hold Home, then System > Accessibility > Dashboard Home and mic buttons."
+        throw "The TV's accessibility list has an unexpected form; stopping without changes. To turn it off with the remote: open Settings from the dashboard's app row, then System > Accessibility > Dashboard Home button."
     }
     return $v
 }
@@ -92,7 +91,7 @@ $null = & { $c = New-Object System.Diagnostics.ProcessStartInfo; $c.FileName = $
 $saved = Load-Rollback
 
 if ($Rollback) {
-    Confirm-Change "This will take ""Dashboard Home and mic buttons"" out of the TV's accessibility settings; anything else there stays on."
+    Confirm-Change "This will take ""Dashboard Home button"" out of the TV's accessibility settings; anything else there stays on."
     # Remove only our service (a11y-settings-overwrite): a service turned on after -TurnOn, such as TalkBack, stays.
     $items = @((Get-TvA11yList) -split ':' | Where-Object { $_ })
     $rest = @($items | Where-Object { $_ -ne $Service -and $_ -ne $ServiceShort })
@@ -106,11 +105,11 @@ if ($Rollback) {
         Adb @('shell', 'settings', 'put', 'secure', 'accessibility_enabled', $on) | Out-Null
     }
     Remove-Item $RollbackFile -ErrorAction SilentlyContinue
-    Write-Host 'Done. Home and the mic button are the TV''s own again.'
+    Write-Host 'Done. Home is the TV''s own again.'
     exit 0
 }
 
-Confirm-Change ("This will change a setting on the TV:`n - Home: the remote's Home button opens the dashboard.`n - Mic: the remote's mic button opens Ask Claude (Google Assistant stays installed).`nUndo any time with: .\scripts\tv-home-takeover.ps1 -Rollback")
+Confirm-Change ("This will change a setting on the TV:`n - Home: the remote's Home button (and turning the TV on) opens the dashboard.`nUndo any time with: .\scripts\tv-home-takeover.ps1 -Rollback")
 $list = Get-TvA11yList
 if ($null -eq $saved.a11y) {
     $on = Adb @('shell', 'settings', 'get', 'secure', 'accessibility_enabled')
@@ -123,4 +122,4 @@ if ($items -notcontains $Service -and $items -notcontains $ServiceShort) {
     Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', ("'" + ((@($items) + $Service) -join ':') + "'")) | Out-Null
 }
 Adb @('shell', 'settings', 'put', 'secure', 'accessibility_enabled', '1') | Out-Null
-Write-Host 'Done. Press Home, then the mic button, on the remote to check.'
+Write-Host 'Done. Press Home on the remote to check.'

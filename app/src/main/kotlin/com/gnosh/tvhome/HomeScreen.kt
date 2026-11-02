@@ -126,8 +126,8 @@ fun HomeScreen(
     // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     var returningTo by rememberSaveable { mutableStateOf<String?>(null) }
-    // M3: the remote's Home button (MicKeyService, ACTION_HOME) shows the home row from anywhere, with focus on the
-    // first tile; the mic (MicKeyService, ACTION_ASK) opens Ask Claude, listening, as a fresh session even if Ask was open.
+    // M3: the remote's Home button (HomeWatchService, ACTION_HOME) shows the home row from anywhere, with focus on the
+    // first tile; ACTION_ASK opens Ask Claude, listening, as a fresh session even if Ask was open.
     var pendingHome by remember { mutableStateOf(false) }
     var askSession by remember { mutableIntStateOf(0) }
     LaunchedEffect(entry.seq) {

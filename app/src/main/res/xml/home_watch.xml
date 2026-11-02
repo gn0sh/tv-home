@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- M3 Home watch: "window state changed" events only, limited at runtime to the TV's own home apps
+     (HomeWatchService.onServiceConnected). No window content, no key filtering, no gestures. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/mic_service_description"
+    android:notificationTimeout="0" />

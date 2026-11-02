@@ -12,6 +12,11 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
         </intent>
+        <!-- M3: lets HomeWatchService find the TV's own home activities. Visibility only; the app declares no HOME. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
     </queries>
 
     <uses-feature android:name="android.software.leanback" android:required="true" />
@@ -41,18 +46,13 @@
             </intent-filter>
         </activity>
 
-        <!-- M3 Home and mic: an accessibility service that only filters key events (res/xml/mic_key_filter.xml): it
-             reads no screen content and handles no events. It consumes the remote's Home key (opens the dashboard) and
-             the assist, voice and search keys (open Ask Claude, listening); every other key passes untouched. A key
-             filter, not a HOME intent filter: Google TV's own launcher declares HOME at priority 2, which always beats
-             a third-party app's, whatever "cmd package set-home-activity" says (home-role-priority). It does nothing
-             until enabled in the TV's accessibility settings, which scripts/tv-home-takeover.ps1 -TurnOn (run by
-             Brian) does and -Rollback undoes.
-             Google Assistant stays installed: it provides the speech recognition Ask Claude uses. Its own process
-             (:mic, a-11y-key-latency): while it filters keys every remote press on the TV waits for onKeyEvent, so it
-             must not queue behind the dashboard's UI thread. -->
+        <!-- M3 Home: an accessibility service that watches only for the TV's own home screen coming up and then
+             brings the dashboard to the front (HomeWatchService; res/xml/home_watch.xml). No window content, no key
+             filtering. It does nothing until enabled in the TV's accessibility settings, which
+             scripts/tv-home-takeover.ps1 -TurnOn (run by Brian) does and -Rollback undoes. Its own process (:mic,
+             kept from the first version) so it never waits on the dashboard's UI thread. -->
         <service
-            android:name=".MicKeyService"
+            android:name=".HomeWatchService"
             android:process=":mic"
             android:exported="true"
             android:label="@string/mic_service_label"
@@ -62,7 +62,7 @@
             </intent-filter>
             <meta-data
                 android:name="android.accessibilityservice"
-                android:resource="@xml/mic_key_filter" />
+                android:resource="@xml/home_watch" />
         </service>
 
         <!-- Put a secret on the device over adb (architecture section 5). No intent-filter. Only holders of DUMP

@@ -256,7 +256,7 @@ jobs:
             || { echo "::error::merged manifest permissions differ from the allowed set"; fail=1; }
 
           # Every exported component: name and permission. Allowed: our two activities and provider (DUMP-guarded except
-          # the launcher activity), AndroidX's profileinstaller receiver (also DUMP-guarded) and the M3 Home and mic key
+          # the launcher activity), AndroidX's profileinstaller receiver (also DUMP-guarded) and the M3 Home watch
           # service (bound by the system only).
           "$apkanalyzer" manifest print "$APK" | python3 -c '
           import sys, xml.etree.ElementTree as ET
@@ -274,7 +274,7 @@ jobs:
           activity com.gnosh.tvhome.ProvisionActivity android.permission.DUMP
           provider com.gnosh.tvhome.ProvisionProvider android.permission.DUMP
           receiver androidx.profileinstaller.ProfileInstallReceiver android.permission.DUMP
-          service com.gnosh.tvhome.MicKeyService android.permission.BIND_ACCESSIBILITY_SERVICE
+          service com.gnosh.tvhome.HomeWatchService android.permission.BIND_ACCESSIBILITY_SERVICE
           EOF
           sed -i 's/^ *//' "$RUNNER_TEMP/exported.expected"
           diff "$RUNNER_TEMP/exported.expected" "$RUNNER_TEMP/exported.actual" \

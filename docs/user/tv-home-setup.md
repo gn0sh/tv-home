@@ -87,23 +87,22 @@ git pull
 It uses the adb in `%LOCALAPPDATA%\tv-home-tools`, opens no port and sends only the fixed commands its buttons name.
 Typed text may use letters, numbers, spaces and `. , - _ @`. For another TV address: `-Serial 192.168.68.71:5555`.
 
-## Home button and mic button (optional; you choose)
-As installed, the dashboard changes nothing about Home or the mic. To switch them on, in PowerShell from the tv-home
-folder (it shows what it will change and asks you to type YES):
+## Home button (optional; you choose)
+As installed, the dashboard changes nothing about Home. To switch it on, in PowerShell from the tv-home folder (it
+shows what it will change and asks you to type YES):
 ```
 .\scripts\tv-home-takeover.ps1 -TurnOn
 ```
-- **Home:** the remote's Home button opens the dashboard, from any app, with focus on the first tile. **Holding Home
-  for a moment opens the TV's Settings** (the dashboard flashes up first; that is expected) (in place of the TV's own quick panel), so you can always reach
-  Settings > System > Accessibility with the remote alone.
-- **Mic:** the remote's mic button opens Ask Claude, listening. Google Assistant stays installed (Ask Claude uses its
-  speech recognition), but the mic button no longer opens it.
+The remote's Home button, and turning the TV on, then open the dashboard, with focus on the first tile. You will see
+the TV's own home for a moment first; that is expected. Holding Home still opens the TV's quick panel, and Back on the
+dashboard's row stays on the dashboard.
 
-Both come from one switch, "Dashboard Home and mic buttons" in the TV's accessibility settings: it reads no screen
-content and passes every other key on. (Google TV's own launcher always wins the "default home" setting, so a key
-filter is the only way.) If you ever "Force stop" the dashboard in the TV's app settings, Android switches it off too;
-run `-TurnOn` again.
+How it works: "Dashboard Home button" in the TV's accessibility settings notices when the TV's own home comes up and
+opens the dashboard. It sees only which app came to the front, never what is on screen. (Google TV does not let
+another app be the real home, and the system handles the Home and mic keys before any app could catch them, so the
+mic button stays Google Assistant; Ask Claude is on the dashboard and on the PC remote.) If you ever "Force stop" the
+dashboard in the TV's app settings, Android switches it off; run `-TurnOn` again.
 
 To undo: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
-By hand, with the remote: hold Home to open Settings, then System > Accessibility, and turn off "Dashboard Home and
-mic buttons". Or uninstall the dashboard.
+By hand, with the remote: open Settings from the dashboard's app row, then System > Accessibility, and turn off
+"Dashboard Home button". Or uninstall the dashboard.

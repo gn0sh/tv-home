@@ -588,14 +588,15 @@ else
   no_app_crash_yet "hero"
 fi
 
-step "M3 Home and mic: off as installed; turning on the key service makes Home and the mic open the dashboard; rollback restores"
-# The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV. Google TV's launcher holds HOME at priority 2,
-# so the app takes the Home key with its accessibility key filter instead (home-role-priority).
+step "M3 Home: off as installed; turning on the Home watch makes Home open the dashboard; rollback restores"
+# The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV. Google TV's launcher holds HOME at priority 2
+# (home-role-priority) and the system takes Home before an accessibility key filter, so the app watches for the TV's
+# home coming up and brings itself to the front.
 other_app() { sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true; sleep 3; }
 a11y_before=$(sh_ settings get secure enabled_accessibility_services | tr -d '\r')
 on_before=$(sh_ settings get secure accessibility_enabled | tr -d '\r')
 [[ $on_before == 1 ]] || on_before=0   # a missing setting reads back as "null"
-svc="$PKG/$PKG.MicKeyService"
+svc="$PKG/$PKG.HomeWatchService"
 m3_restore() {
   if [[ -z $a11y_before || $a11y_before == null ]]; then sh_ settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
   else sh_ settings put secure enabled_accessibility_services "$a11y_before" >/dev/null 2>&1 || true; fi
@@ -605,23 +606,21 @@ m3_restore() {
 m3_dirty=1
 m3_cleanup() { [[ -n ${m3_dirty:-} ]] && m3_restore; return 0; }
 other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
-in_front && fail "m3: as installed, Home opened the dashboard (the key service must be off until turned on)"
+in_front && fail "m3: as installed, Home opened the dashboard (the Home watch must be off until turned on)"
 pass "m3: as installed, Home is still the TV's own ($(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1))"
 if [[ -z $a11y_before || $a11y_before == null ]]; then list="$svc"; else list="$a11y_before:$svc"; fi
 sh_ settings put secure enabled_accessibility_services "$list"
 sh_ settings put secure accessibility_enabled 1
 sleep 3
-# The service must be bound before any key reaches it.
-for _ in $(seq 1 10); do sh_ dumpsys accessibility | tr -d '\r' | grep -q "MicKeyService" && break; sleep 1; done
-a11y_state() { sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services|Enabled services|MicKeyService|isKeyEventFilter|filter' | head -12; }
-sh_ dumpsys accessibility | tr -d '\r' | grep -q "MicKeyService" || { a11y_state; fail "m3: the key service was not bound after turning it on"; }
+# The service must be bound before Home is pressed.
+for _ in $(seq 1 10); do sh_ dumpsys accessibility | tr -d '\r' | grep -q "HomeWatchService" && break; sleep 1; done
+a11y_state() { sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services|Enabled services|HomeWatchService' | head -12; }
+sh_ dumpsys accessibility | tr -d '\r' | grep -q "HomeWatchService" || { a11y_state; fail "m3: the Home watch was not bound after turning it on"; }
 other_app
 in_front && fail "m3: Settings did not come to the front (test setup)"
 sh_ input keyevent KEYCODE_HOME; sleep 3
 if ! in_front; then
   a11y_state
-  sh_ input keyevent KEYCODE_SEARCH; sleep 3
-  echo "after SEARCH: $(resumed | head -1)"
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
 fi
 pass "m3: Home from another app opens the dashboard"
@@ -634,10 +633,10 @@ if (( napps >= 2 )); then
   cur=$(focus_after m3)
   [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"
   pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
-  # Other keys pass through untouched while the service is on: Right moved focus above; check it once more by name.
+  # Keys are untouched while the service is on: Right still moves focus.
   a=$(focus_after m3-pass); key DPAD_RIGHT; b=$(focus_after m3-pass)
-  [[ -n ${a%%|*} && ${b%%|*} != "${a%%|*}" ]] || fail "m3: with the key service on, Right did not move focus ('${a%%|*}' -> '${b%%|*}')"
-  pass "m3: other keys pass through the key service (Right moved '${a%%|*}' -> '${b%%|*}')"
+  [[ -n ${a%%|*} && ${b%%|*} != "${a%%|*}" ]] || fail "m3: with the Home watch on, Right did not move focus ('${a%%|*}' -> '${b%%|*}')"
+  pass "m3: other keys pass through the Home watch (Right moved '${a%%|*}' -> '${b%%|*}')"
 fi
 sh_ input keyevent KEYCODE_HOME; sleep 3   # focus back on the first tile, as before Down in M2b
 key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
@@ -646,32 +645,12 @@ sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
 pass "m3: Home from the full-screen calendar returns to the home row"
-# Holding Home opens the TV's Settings (home-recovery-unreachable): the remote-only way to turn the service off.
-sh_ input keyevent --longpress KEYCODE_HOME; sleep 3
-resumed | head -1 | grep -q 'com.android.tv.settings\|com.android.settings' || fail "m3: holding Home did not open Settings ($(resumed | head -1))"
-pass "m3: holding Home opens the TV's Settings"
-sh_ input keyevent KEYCODE_HOME; sleep 3
-in_front || fail "m3: a short Home press after the hold did not open the dashboard ($(resumed | head -1))"
-resumed | head -1 | grep -q 'com.android.tv.settings\|com.android.settings' && fail "m3: a short Home press reopened Settings (hold timer not cancelled)"
-pass "m3: a short Home press after the hold opens the dashboard, not Settings"
-mic_ok=""
-for k in ASSIST VOICE_ASSIST SEARCH; do
-  other_app
-  sh_ input keyevent "KEYCODE_$k"; sleep 3
-  if in_front && ui_text | grep -q "content-desc=\"Ask Claude full screen\""; then
-    pass "m3: the $k key opens Ask Claude from another app"; mic_ok=1
-    sh_ input keyevent KEYCODE_BACK; sleep 1
-  else
-    warn "m3: the $k key did not open Ask Claude on the emulator ($(resumed | head -1))"
-  fi
-done
-[[ -n $mic_ok ]] || fail "m3: no mic key (ASSIST, VOICE_ASSIST, SEARCH) opened Ask Claude through the key filter"
 m3_restore
 m3_dirty=""
 sleep 2
 other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front && fail "m3: after rollback, Home still opens the dashboard"
-pass "m3: rollback (key service off, settings restored) gives Home back to the TV"
+pass "m3: rollback (Home watch off, settings restored) gives Home back to the TV"
 no_app_crash_yet "m3"
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"

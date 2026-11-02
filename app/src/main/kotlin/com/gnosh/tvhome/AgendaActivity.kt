@@ -50,7 +50,7 @@ class AgendaActivity : ComponentActivity() {
     private val layoutStore by lazy { AppLayoutStore(applicationContext) }
     private var entry by mutableStateOf(HomeEntry(0, null))
 
-    /** M3: [ACTION_ASK] (the mic key) opens Ask Claude; anything else (the Home key, the launcher entry) shows the row. */
+    /** M3: [ACTION_ASK] opens Ask Claude; anything else (Home, the launcher entry) shows the row. */
     private fun targetOf(intent: Intent?): String? = if (intent?.action == ACTION_ASK) HomeEntry.ASK else null
 
     /**
@@ -152,7 +152,7 @@ class AgendaActivity : ComponentActivity() {
         }
     }
 
-    /** singleTask: the Home and mic keys and the launcher entry arrive here while the activity exists. */
+    /** singleTask: Home and the launcher entry arrive here while the activity exists. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -160,10 +160,10 @@ class AgendaActivity : ComponentActivity() {
     }
 
     companion object {
-        /** Opens Ask Claude, listening (sent by [MicKeyService]). Any app could send it; it only shows the Ask view. */
+        /** Opens Ask Claude, listening (the PC remote or adb; the mic key cannot be caught, PR #15). Any app could send it; it only shows the Ask view. */
         const val ACTION_ASK = "com.gnosh.tvhome.action.ASK"
 
-        /** Shows the home row, focus on the first tile (sent by [MicKeyService] for the Home key). */
+        /** Shows the home row, focus on the first tile (sent by [HomeWatchService] when the TV's own home comes up). */
         const val ACTION_HOME = "com.gnosh.tvhome.action.HOME"
     }
 }
