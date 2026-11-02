@@ -88,3 +88,66 @@ class OledTest {
         assertTrue(Tokens.contrast(OledTokens.NEAR_BLACK_CLOCK, OledTokens.NEAR_BLACK_BG) >= 7.0)
     }
 }
+
+class IdleKeyGateTest {
+    private val OK = 23L
+    private val RIGHT = 22L
+
+    @Test fun activePassesAndDimWakesAndPasses() {
+        val g = IdleKeyGate()
+        assertEquals(KeyDecision(consume = false, wake = false), g.onKey(IdleState.ACTIVE, OK, down = true, repeatCount = 0))
+        assertEquals(KeyDecision(consume = false, wake = true), g.onKey(IdleState.DIM, OK, down = true, repeatCount = 0))
+        assertFalse(g.holding)
+    }
+
+    @Test fun nearBlackFirstKeyOnlyWakesWithItsRepeatsAndRelease() {
+        val g = IdleKeyGate()
+        assertEquals(KeyDecision(consume = true, wake = true), g.onKey(IdleState.NEAR_BLACK, OK, down = true, repeatCount = 0))
+        assertTrue(g.holding)
+        // The screen is awake (ACTIVE) for the rest of the press.
+        assertEquals(KeyDecision(consume = true, wake = false), g.onKey(IdleState.ACTIVE, OK, down = true, repeatCount = 1))
+        assertEquals(KeyDecision(consume = true, wake = false), g.onKey(IdleState.ACTIVE, OK, down = false, repeatCount = 0))
+        assertFalse(g.holding)
+        // The next press goes through.
+        assertEquals(KeyDecision(consume = false, wake = false), g.onKey(IdleState.ACTIVE, OK, down = true, repeatCount = 0))
+    }
+
+    @Test fun aLostReleaseNeverSwallowsLaterKeys() {
+        val g = IdleKeyGate()
+        g.onKey(IdleState.NEAR_BLACK, OK, down = true, repeatCount = 0)
+        // A fresh press of the same key (its release never came) is handled normally.
+        assertEquals(KeyDecision(consume = false, wake = false), g.onKey(IdleState.ACTIVE, OK, down = true, repeatCount = 0))
+        assertFalse(g.holding)
+        g.onKey(IdleState.NEAR_BLACK, OK, down = true, repeatCount = 0)
+        // Another key ends the hold and passes.
+        assertEquals(KeyDecision(consume = false, wake = false), g.onKey(IdleState.ACTIVE, RIGHT, down = true, repeatCount = 0))
+        assertFalse(g.holding)
+        // So does clear() (resume, the Home redirect).
+        g.onKey(IdleState.NEAR_BLACK, OK, down = true, repeatCount = 0)
+        g.clear()
+        assertEquals(KeyDecision(consume = false, wake = false), g.onKey(IdleState.ACTIVE, OK, down = false, repeatCount = 0))
+    }
+
+    @Test fun releaseArrivingInNearBlackWakesAndPasses() {
+        val g = IdleKeyGate()
+        assertEquals(KeyDecision(consume = false, wake = true), g.onKey(IdleState.NEAR_BLACK, OK, down = false, repeatCount = 0))
+        assertFalse(g.holding)
+    }
+
+    @Test fun wakesOnlyOffPassesTheFirstKey() {
+        val g = IdleKeyGate(wakesOnly = false)
+        assertEquals(KeyDecision(consume = false, wake = true), g.onKey(IdleState.NEAR_BLACK, OK, down = true, repeatCount = 0))
+    }
+
+    @Test fun testTimingsScaleTheProfile() {
+        var t = 0L
+        val c = IdleClock(IdleTimings.test(TvProfile.LG_OLED, 20)) { t }
+        t = 19_999; assertEquals(IdleState.ACTIVE, c.state())
+        t = 20_000; assertEquals(IdleState.DIM, c.state())
+        assertEquals(Duration.ofSeconds(20), c.nextChangeIn())
+        t = 40_000; assertEquals(IdleState.NEAR_BLACK, c.state())
+        assertNull(c.nextChangeIn())
+        assertNull(IdleTimings.test(TvProfile.VIZIO_LED, 20).nearBlackAfter)
+        assertEquals(IdleTimings(Duration.ofMinutes(10), Duration.ofMinutes(30)), IdleTimings.of(TvProfile.LG_OLED))
+    }
+}

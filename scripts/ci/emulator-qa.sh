@@ -36,7 +36,10 @@ a() { timeout 90 adb "$@"; }
 sh_() { timeout 90 adb shell "$@"; }
 
 # Emulator only: later steps run adb root and plant fake caches. Refuse any real device (for example Brian's TV).
-[[ "$(sh_ getprop ro.kernel.qemu | tr -d '\r')" == 1 ]] || { echo "::error::emulator-qa.sh runs only on an emulator"; exit 1; }
+# API 31+ emulators set ro.boot.qemu=1 and may leave ro.kernel.qemu empty, so either one counts.
+qemu_k=$(sh_ getprop ro.kernel.qemu | tr -d '\r'); qemu_b=$(sh_ getprop ro.boot.qemu | tr -d '\r')
+[[ $qemu_k == 1 || $qemu_b == 1 ]] || {
+  echo "::error::emulator-qa.sh runs only on an emulator (ro.kernel.qemu='$qemu_k' ro.boot.qemu='$qemu_b')"; exit 1; }
 
 pid_of() { sh_ pidof "$PKG" 2>/dev/null | tr -d '\r' || true; }
 resumed() { sh_ dumpsys activity activities | tr -d '\r' | grep -E 'topResumedActivity=|ResumedActivity:' || true; }
@@ -565,10 +568,7 @@ step "Hero (M7): no focusable hero; focus starts on the apps row; one Back leave
 # M7 removed the M2e focused-tile title (each tile labels itself); the hero is non-focusable text (home-back-twice).
 sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
 in_front || fail "hero: home screen not in front"
-ui=$(ui_text); [[ -n $ui ]] || fail "hero: uiautomator dump failed"
-printf '%s\n' "$ui" > "$OUT/ui-hero-m7.xml"
-grep -oE '<node [^>]*content-desc="Hero (now|card): [^"]*"[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
-  && fail "hero: a hero node is focusable (home-back-twice)"
+# (The hero-nodes-not-focusable check is in the M7 Q1 step, where the hero has content.)
 cur=$(focus_after hero)
 if (( napps >= 1 )); then
   case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) fail "hero: focus on launch is '${cur%%|*}', not an app tile (R1)" ;; esac
@@ -580,6 +580,48 @@ sh_ input keyevent KEYCODE_BACK; sleep 2
 in_front && fail "hero: one Back with the M7 hero showing does not leave the app (home-back-twice)"
 pass "hero: one Back leaves the app"
 no_app_crash_yet "hero"
+
+step "M7 F4 idle with a fake clock (idle_test 20 s: DIM at 20 s, NEAR_BLACK at 40 s); any key restores"
+# The provider's /idle_test override (emulator QA only) scales the LG thresholds; it is removed after the M3 checks.
+idle_of() { ui_text | grep -oE 'content-desc="Hero idle: [A-Z_]+"' | head -1 | sed -E 's/.*: ([A-Z_]+)"$/\1/' || true; }
+black_shown() { ui_text | grep -qF 'content-desc="Screen resting"'; }   # NEAR_BLACK_DESC in IdleLayer.kt
+since() { echo $(( $(date +%s) - $1 )); }
+sleep_until() { local n=$(( $1 + $2 - $(date +%s) )); (( n > 0 )) && sleep "$n"; return 0; }  # $1 = t0, $2 = seconds after it
+sh_ content insert --uri "content://$PKG.provision/idle_test" --bind seconds:i:20 || fail "f4: idle_test insert refused"
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; t0=$(date +%s); sleep 4
+in_front || fail "f4: home screen not in front"
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "f4: idle state at start is '$st', expected ACTIVE"
+sleep_until "$t0" 25
+st=$(idle_of); [[ $st == DIM ]] || fail "f4: after $(since "$t0") s the idle state is '$st', expected DIM"
+pass "f4: DIM reached ($(since "$t0") s idle)"
+before=$(focus_after f4)
+key DPAD_RIGHT; t0=$(date +%s)
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "f4: a key in DIM did not restore (state '$st')"
+if (( napps >= 2 )); then
+  cur=$(focus_after f4)
+  [[ ${cur%%|*} != "${before%%|*}" ]] || fail "f4: the key in DIM was swallowed (focus stayed on '${before%%|*}'); DIM must pass keys through"
+  pass "f4: a key in DIM restores and passes through (focus moved to '${cur%%|*}')"
+else
+  pass "f4: a key in DIM restores (pass-through NOT VERIFIED: fewer than 2 other apps)"
+fi
+sleep_until "$t0" 45
+black_shown || fail "f4: after $(since "$t0") s the near-black layer ('Screen resting') is not shown"
+st=$(idle_of); [[ $st == NEAR_BLACK ]] || fail "f4: near-black layer shown but the idle state is '$st'"
+pass "f4: NEAR_BLACK reached ($(since "$t0") s idle) with only the resting clock"
+before=$(focus_after f4)
+key DPAD_RIGHT
+black_shown && fail "f4: a key in NEAR_BLACK did not wake the screen"
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "f4: after the waking key the idle state is '$st'"
+cur=$(focus_after f4)
+[[ ${cur%%|*} == "${before%%|*}" ]] || fail "f4: the first key in NEAR_BLACK moved focus ('${before%%|*}' -> '${cur%%|*}'); it must only wake"
+pass "f4: the first key in NEAR_BLACK only wakes the screen (focus stayed on '${cur%%|*}')"
+key DPAD_LEFT
+cur=$(focus_after f4)
+if (( napps >= 2 )); then
+  [[ ${cur%%|*} != "${before%%|*}" ]] || fail "f4: the key after the waking one was swallowed (idle-swallow-stale)"
+  pass "f4: the next key after waking passes through"
+fi
+no_app_crash_yet "f4 idle"
 
 step "M3 Home: off as installed; turning on the Home watch makes Home open the dashboard; rollback restores"
 # The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV. Google TV's launcher holds HOME at priority 2
@@ -619,6 +661,21 @@ if ! in_front; then
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
 fi
 pass "m3: Home from another app opens the dashboard"
+# F4: the Home redirect works from DIM and from NEAR_BLACK, and comes back awake (idle_test 20 s still set).
+m3t=$(date +%s); sleep_until "$m3t" 25
+st=$(idle_of); [[ $st == DIM ]] || fail "m3-idle: DIM not reached before the Home check (state '$st')"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3-idle: Home from DIM did not bring the dashboard back ($(resumed | head -1))"
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "m3-idle: after Home from DIM the state is '$st', expected ACTIVE"
+pass "m3-idle: Home from DIM redirects and wakes the screen"
+m3t=$(date +%s); sleep_until "$m3t" 45
+black_shown || fail "m3-idle: NEAR_BLACK not reached before the Home check"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3-idle: Home from NEAR_BLACK did not bring the dashboard back ($(resumed | head -1))"
+black_shown && fail "m3-idle: after Home from NEAR_BLACK the screen is still black"
+pass "m3-idle: Home from NEAR_BLACK redirects and wakes the screen"
+sh_ content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true
+sleep 4   # outside the double-press window before the next check
 # The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
 # Settings, until another app comes up (HomeRedirect in :core has the timing cases).
 # A fresh redirect, then Home again about a second later (inside the 2.5 s window).
@@ -708,6 +765,10 @@ else
     || fail "m7: location insert refused"
   sh_ am force-stop "$PKG"
   iso() { date -u -d "$1" +%Y-%m-%dT%H:%M:%SZ; }
+  # qa-midnight-flake: an event 42 min out that lands on tomorrow in the emulator's zone shows as tomorrow's first,
+  # with no countdown. Then the countdown check is skipped (the alert check still runs).
+  etz=$(sh_ getprop persist.sys.timezone | tr -d '\r'); etz=${etz:-UTC}
+  same_day=""; [[ $(TZ=$etz date -d '+50 minutes' +%F) == $(TZ=$etz date +%F) ]] && same_day=1
   now=$(iso now); ev=$(iso '+42 minutes'); evend=$(iso '+102 minutes'); until=$(iso '+90 minutes')
   ws=$(iso '-2 days'); we=$(iso '+3 days')
   data=/data/user/0/$PKG/no_backup
@@ -724,9 +785,19 @@ else
   ui=$(ui_text); [[ -n $ui ]] || fail "m7: uiautomator dump failed"
   printf '%s\n' "$ui" > "$OUT/ui-m7-hero.xml"
   a exec-out screencap -p > "$SHOT_DIR/tv-home-m7-hero.png" || true
-  grep -qE 'content-desc="Hero now: [^"]*in (4[0-2]|3[0-9]) min"' <<<"$ui" \
-    || fail "m7: the hero does not show the next event with an 'in N min' countdown"
-  pass "m7: the hero shows the next event with a countdown"
+  for n in "Hero now: " "Hero card: "; do
+    grep -qF "content-desc=\"$n" <<<"$ui" || fail "m7: no '$n...' node in the hero (planted caches not shown)"
+  done
+  grep -oE '<node [^>]*content-desc="Hero (now|card|idle): [^"]*"[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
+    && fail "m7: a hero node is focusable (home-back-twice)"
+  pass "m7: the hero's Now and card nodes are shown and none is focusable"
+  if [[ -n $same_day ]]; then
+    grep -qE 'content-desc="Hero now: [^"]*in (4[0-2]|3[0-9]) min"' <<<"$ui" \
+      || fail "m7: the hero does not show the next event with an 'in N min' countdown"
+    pass "m7: the hero shows the next event with a countdown"
+  else
+    warn "m7: countdown check skipped: the planted event would fall after midnight in $etz (qa-midnight-flake)"
+  fi
   grep -qE 'content-desc="Hero card: Tornado Warning until [^"]+"' <<<"$ui" \
     || fail "m7: an active Tornado Warning does not take the context card"
   pass "m7: a severe alert overrides the context card"

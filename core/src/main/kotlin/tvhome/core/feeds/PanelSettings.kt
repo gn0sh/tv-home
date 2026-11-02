@@ -60,6 +60,14 @@ object SettingsValidator {
         return (values["value"] as? String)?.takeIf { it == TV_PROFILE_LG || it == TV_PROFILE_VIZIO }
     }
 
+    /** Seconds for the emulator QA idle override (`--bind seconds:i:20`): DIM after it, NEAR_BLACK after twice it. */
+    val IDLE_TEST_SECONDS = 5..600
+
+    fun idleTest(values: Map<String, Any?>): Int? {
+        if (values.keys != setOf("seconds")) return null
+        return (values["seconds"] as? Int)?.takeIf { it in IDLE_TEST_SECONDS }
+    }
+
     /** `--bind keyword:s:<text> --bind minutes:i:<1..180>`; the keyword rules are [TravelRule.of]'s. */
     fun travelRule(values: Map<String, Any?>): TravelRule? {
         if (values.keys != setOf("keyword", "minutes")) return null

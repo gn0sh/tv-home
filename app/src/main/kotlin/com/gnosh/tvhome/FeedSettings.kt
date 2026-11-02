@@ -42,6 +42,7 @@ object FeedSettings {
 
     private const val TV_PROFILE = "tv_profile"
     private const val TRAVEL = "travel"
+    private const val IDLE_TEST = "idle_test_s"
     private val lock = Any()
 
     private fun prefs(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -69,6 +70,15 @@ object FeedSettings {
     fun setTvProfile(context: Context, value: String) { prefs(context).edit().putString(TV_PROFILE, value).apply() }
 
     fun clearTvProfile(context: Context) { prefs(context).edit().remove(TV_PROFILE).apply() }
+
+    /** Emulator QA only: idle thresholds in seconds (DIM after it, NEAR_BLACK after twice it), or null (the profile's). */
+    fun idleTestSeconds(context: Context): Int? = runCatching {
+        prefs(context).takeIf { it.contains(IDLE_TEST) }?.getInt(IDLE_TEST, 0)
+    }.getOrNull()?.takeIf { it in tvhome.core.feeds.SettingsValidator.IDLE_TEST_SECONDS }
+
+    fun setIdleTestSeconds(context: Context, seconds: Int) { prefs(context).edit().putInt(IDLE_TEST, seconds).commit() }
+
+    fun clearIdleTestSeconds(context: Context) { prefs(context).edit().remove(IDLE_TEST).commit() }
 
     fun travelRules(context: Context): List<TravelRule> =
         TravelRules.decode(runCatching { prefs(context).getString(TRAVEL, null) }.getOrNull())

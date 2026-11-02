@@ -61,30 +61,78 @@ object Drift {
 
 enum class IdleState { ACTIVE, DIM, NEAR_BLACK }
 
+/** When the idle states begin. [of] is the profile's; [test] is the adb QA override (M7-F4 emulator check). */
+data class IdleTimings(val dimAfter: Duration, val nearBlackAfter: Duration?) {
+    companion object {
+        fun of(p: TvProfile) = IdleTimings(p.dimAfter, p.nearBlackAfter)
+
+        /** DIM after [seconds], NEAR_BLACK after twice that (only if the profile has a near-black state). */
+        fun test(p: TvProfile, seconds: Int) =
+            IdleTimings(Duration.ofSeconds(seconds.toLong()), p.nearBlackAfter?.let { Duration.ofSeconds(2L * seconds) })
+    }
+}
+
 /**
  * Idle state from the time of the last key press, on a monotonic millisecond clock (the app passes
  * `SystemClock.elapsedRealtime`). Pure apart from the remembered key time.
  */
-class IdleClock(private val profile: TvProfile, private val clockMs: () -> Long) {
+class IdleClock(private val timings: IdleTimings, private val clockMs: () -> Long) {
+    constructor(profile: TvProfile, clockMs: () -> Long) : this(IdleTimings.of(profile), clockMs)
+
     private var lastKeyMs: Long = clockMs()
 
     /** Call on every key event (any key wakes and resets). */
     fun onKey() { lastKeyMs = clockMs() }
 
-    fun state(): IdleState = stateFor(profile, Duration.ofMillis((clockMs() - lastKeyMs).coerceAtLeast(0)))
+    fun state(): IdleState = stateFor(timings, Duration.ofMillis((clockMs() - lastKeyMs).coerceAtLeast(0)))
 
     /** Time until the next state change, or null when none is coming (already at the last state). */
     fun nextChangeIn(): Duration? {
         val idle = Duration.ofMillis((clockMs() - lastKeyMs).coerceAtLeast(0))
-        return listOfNotNull(profile.dimAfter, profile.nearBlackAfter).firstOrNull { it > idle }?.minus(idle)
+        return listOfNotNull(timings.dimAfter, timings.nearBlackAfter).firstOrNull { it > idle }?.minus(idle)
     }
 
     companion object {
-        fun stateFor(profile: TvProfile, idle: Duration): IdleState = when {
-            profile.nearBlackAfter != null && idle >= profile.nearBlackAfter -> IdleState.NEAR_BLACK
-            idle >= profile.dimAfter -> IdleState.DIM
+        fun stateFor(profile: TvProfile, idle: Duration): IdleState = stateFor(IdleTimings.of(profile), idle)
+
+        fun stateFor(t: IdleTimings, idle: Duration): IdleState = when {
+            t.nearBlackAfter != null && idle >= t.nearBlackAfter -> IdleState.NEAR_BLACK
+            idle >= t.dimAfter -> IdleState.DIM
             else -> IdleState.ACTIVE
         }
+    }
+}
+
+/** What the home screen does with one key event while idle states apply. */
+data class KeyDecision(val consume: Boolean, val wake: Boolean)
+
+/**
+ * The idle key rules (ADR 0008 section 4), pure. ACTIVE: pass. DIM: wake and pass. NEAR_BLACK: wake; with
+ * [wakesOnly] the first key's press is consumed and the gate holds that key, so its repeats and its release are
+ * consumed too (OK would otherwise launch the invisible focused tile). While holding, only the held key's repeats
+ * (repeatCount > 0) and its release are consumed: a fresh press of it, or any other key, ends the hold and is handled
+ * normally, so a lost release can never swallow later keys. [clear] (on a wake from outside: resume, Home) ends it.
+ */
+class IdleKeyGate(private val wakesOnly: Boolean = true) {
+    private var held: Long? = null
+
+    val holding: Boolean get() = held != null
+
+    fun clear() { held = null }
+
+    fun onKey(state: IdleState, keyCode: Long, down: Boolean, repeatCount: Int): KeyDecision {
+        val h = held
+        if (h != null) {
+            if (keyCode == h && !down) { held = null; return KeyDecision(consume = true, wake = false) }
+            if (keyCode == h && repeatCount > 0) return KeyDecision(consume = true, wake = false)
+            held = null
+        }
+        if (state == IdleState.ACTIVE) return KeyDecision(consume = false, wake = false)
+        if (state == IdleState.NEAR_BLACK && wakesOnly && down) {
+            held = keyCode
+            return KeyDecision(consume = true, wake = true)
+        }
+        return KeyDecision(consume = false, wake = true)
     }
 }
 

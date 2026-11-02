@@ -96,3 +96,14 @@ class PanelSettingsTest {
         assertTrue(panelSwitches { true }.brief)
     }
 }
+
+class IdleTestSettingTest {
+    @Test fun secondsIsAnIntInRange() {
+        assertEquals(20, SettingsValidator.idleTest(mapOf("seconds" to 20)))
+        assertEquals(5, SettingsValidator.idleTest(mapOf("seconds" to 5)))
+        for (v in listOf<Map<String, Any?>>(
+            mapOf("seconds" to 4), mapOf("seconds" to 601), mapOf("seconds" to 20L), mapOf("seconds" to "20"),
+            mapOf("seconds" to 20, "x" to 1), emptyMap(),
+        )) assertNull(SettingsValidator.idleTest(v), "$v")
+    }
+}

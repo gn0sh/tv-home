@@ -23,6 +23,9 @@ import android.graphics.BitmapFactory
 import android.os.SystemClock
 import android.provider.Settings
 import android.text.format.DateFormat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -93,6 +96,9 @@ const val HERO_BACKDROP_FRACTION = 0.55f
 /** Content description prefix of the Now/Next line 1, read by the emulator QA check (scripts/ci/emulator-qa.sh). */
 const val HERO_NOW_DESC_PREFIX = "Hero now: "
 
+/** Content description prefix of the hero layer (followed by the IdleState name), read by the emulator QA check. */
+const val HERO_IDLE_DESC_PREFIX = "Hero idle: "
+
 /** Content description prefix of the context card, read by the emulator QA check. */
 const val HERO_CARD_DESC_PREFIX = "Hero card: "
 
@@ -113,11 +119,15 @@ fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modif
     val graph = remember(context) { (context.applicationContext as TvHomeApp).graph }
     val feeds = graph.feeds
     // Feed work starts only after the first frame is on screen and a short settle, never on the startup path (AC8). It
-    // runs on Default; the loops hold no state in the composition and stop when the hero leaves it.
-    LaunchedEffect(feeds) {
+    // runs on Default, only while the activity is STARTED (ADR 0008 section 1: nothing polls while Brian watches another
+    // app); returning restarts it, and LiveFeeds fetches only what is due. It stops when the hero leaves the composition.
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(feeds, owner) {
         withFrameNanos { }
-        delay(FEEDS_START_DELAY_MS)
-        withContext(Dispatchers.Default) { feeds.run() }
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            delay(FEEDS_START_DELAY_MS)
+            withContext(Dispatchers.Default) { feeds.run() }
+        }
     }
     val snap by feeds.snapshot.collectAsState()
     val agenda by graph.session.state.collectAsState()
@@ -140,7 +150,8 @@ fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modif
         text = if (dim) OledTokens.DIM_TEXT else resolved.text,
         secondary = if (dim) OledTokens.DIM_TEXT else resolved.secondaryText,
     )
-    Box(modifier.fillMaxSize()) {
+    // Not focusable; the description lets the emulator QA read the idle state (scripts/ci/emulator-qa.sh).
+    Box(modifier.fillMaxSize().semantics { contentDescription = HERO_IDLE_DESC_PREFIX + idle.value.name }) {
         HeroBackdrop(
             resolved, weather?.precipNow,
             scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
@@ -151,7 +162,7 @@ fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modif
             translationX = o.dx.dp.toPx()
             translationY = o.dy.dp.toPx()
         }
-        HeroTopStrip(glance, resolved, ink, drifting)
+        HeroTopStrip(glance, resolved, ink, dim, drifting)
         HeroNowNext(glance.nowNext, ink, drifting)
         HeroCard(glance.card, ink, drifting)
     }
@@ -205,7 +216,7 @@ internal fun rememberMinuteClock(): State<LocalDateTime> {
 
 /** Top strip: clock (40 sp) and date left, holiday badge after them; weather chip with any alert suffix right. */
 @Composable
-private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, drifting: Modifier) {
+private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boolean, drifting: Modifier) {
     Row(
         Modifier.zone(HeroZones.TOP_STRIP).then(drifting),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -215,7 +226,11 @@ private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, drifting
             Text(g.clock, color = rgb(ink.text), fontSize = GlanceTokens.CLOCK_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(g.date, color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, maxLines = 1)
             val badge = theme.badge
-            if (badge != null) {
+            if (badge != null && dim) {
+                // DIM: no bright pill, just the dim grey text (7:1 on the dimmed field, GlanceTokensTest).
+                Text(badge, color = rgb(OledTokens.DIM_TEXT), fontSize = GlanceTokens.BADGE_SP.sp, fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.6.sp, maxLines = 1)
+            } else if (badge != null) {
                 Text(
                     badge,
                     color = rgb(theme.backdropTop),

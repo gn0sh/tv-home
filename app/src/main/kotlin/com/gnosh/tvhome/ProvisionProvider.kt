@@ -25,7 +25,7 @@ import java.io.FileNotFoundException
  * - query: one row, column `configured` (0/1) and `last` (a fixed outcome name such as SAVED_CALENDAR). Never the value.
  * - delete: clears that secret. insert/update of a secret: refused (their values would travel as command-line arguments).
  * - Not a secret: `/location` (insert sets, delete clears the weather location), and the M7 settings `/panel`,
- *   `/tv_profile`, `/travel` (insert sets or adds, delete clears). Each is validated in `:core` ([SettingsValidator]):
+ *   `/tv_profile`, `/travel`, and `/idle_test` for emulator QA (insert sets or adds, delete clears). Each is validated in `:core` ([SettingsValidator]):
  *   exact keys, exact types, and a refused value stores nothing.
  */
 class ProvisionProvider : ContentProvider() {
@@ -69,6 +69,7 @@ class ProvisionProvider : ContentProvider() {
             listOf("panel") -> { FeedSettings.clearPanels(ctx); return 1 }
             listOf("tv_profile") -> { FeedSettings.clearTvProfile(ctx); return 1 }
             listOf("travel") -> { FeedSettings.clearTravelRules(ctx); return 1 }
+            listOf("idle_test") -> { FeedSettings.clearIdleTestSeconds(ctx); return 1 }
         }
         val key = keyOf(uri) ?: throw FileNotFoundException()
         last[key] = Provision.apply(secrets(), ProvisionCommand.Clear(key))
@@ -93,6 +94,11 @@ class ProvisionProvider : ContentProvider() {
             // `--bind value:s:lg` (or vizio)
             listOf("tv_profile") -> {
                 FeedSettings.setTvProfile(ctx, SettingsValidator.tvProfile(bound) ?: throw IllegalArgumentException("tv_profile"))
+                return uri
+            }
+            // `--bind seconds:i:20`: emulator QA only (scripts/ci/emulator-qa.sh), idle thresholds in seconds
+            listOf("idle_test") -> {
+                FeedSettings.setIdleTestSeconds(ctx, SettingsValidator.idleTest(bound) ?: throw IllegalArgumentException("idle_test"))
                 return uri
             }
             // `--bind keyword:s:Dentist --bind minutes:i:20` (adds, or replaces the same keyword; at most 10)

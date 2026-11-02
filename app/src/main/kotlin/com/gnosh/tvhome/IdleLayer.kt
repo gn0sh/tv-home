@@ -21,7 +21,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -36,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.tv.material3.Text
 import java.time.Duration
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +45,8 @@ import tvhome.core.ui.Drift
 import tvhome.core.ui.DriftOffset
 import tvhome.core.ui.HeroZones
 import tvhome.core.ui.IdleClock
+import tvhome.core.ui.IdleKeyGate
+import tvhome.core.ui.IdleTimings
 import tvhome.core.ui.IdleState
 import tvhome.core.ui.OledTokens
 import tvhome.core.ui.TvProfile
@@ -65,6 +67,8 @@ const val NEAR_BLACK_DESC = "Screen resting"
  */
 class IdleController(profile: TvProfile) {
     private var clock = IdleClock(profile, SystemClock::elapsedRealtime)
+    private val gate = IdleKeyGate(NEAR_BLACK_FIRST_KEY_WAKES_ONLY)
+
     /** Composition state, so the drift loop restarts when the resolved profile arrives. */
     var profile: TvProfile by mutableStateOf(profile)
         private set
@@ -75,43 +79,34 @@ class IdleController(profile: TvProfile) {
 
     /** Bumped when the scheduler must start again (it stops once the last state is reached). */
     internal val restarts = mutableIntStateOf(0)
-    private var swallowUp: Key? = null
 
-    /** The resolved profile arrived: start its clock now (counts as a key; it happens just after launch). */
-    fun useProfile(p: TvProfile) {
-        if (p == profile) return
+    /** The resolved profile (and the QA override, if set) arrived: start its clock now. */
+    fun useProfile(p: TvProfile, testSeconds: Int?) {
         profile = p
-        clock = IdleClock(p, SystemClock::elapsedRealtime)
+        clock = IdleClock(if (testSeconds != null) IdleTimings.test(p, testSeconds) else IdleTimings.of(p), SystemClock::elapsedRealtime)
         wake()
     }
 
-    /** Any key, a return to the screen, or the M3 Home redirect: full brightness and a fresh idle count. */
+    /** A return to the screen or the M3 Home redirect: full brightness, a fresh idle count, no key held. */
     fun wake() {
+        gate.clear()
+        restore()
+    }
+
+    private fun restore() {
         clock.onKey()
         if (_state.value != IdleState.ACTIVE) _state.value = IdleState.ACTIVE
         restarts.intValue++
     }
 
-    /** True when the event is consumed (only the first key, down and up, in NEAR_BLACK). */
+    /** True when the event is consumed ([IdleKeyGate]: only the first key in NEAR_BLACK, its repeats and release). */
     fun onPreviewKey(e: KeyEvent): Boolean {
-        val held = swallowUp
-        if (held != null && e.key == held) {
-            if (e.type == KeyEventType.KeyUp) swallowUp = null
-            clock.onKey()
-            return true
-        }
-        val was = _state.value
-        clock.onKey()
-        if (was == IdleState.ACTIVE) return false
-        wake()
-        if (was == IdleState.NEAR_BLACK && NEAR_BLACK_FIRST_KEY_WAKES_ONLY && e.type == KeyEventType.KeyDown) {
-            swallowUp = e.key
-            return true
-        }
-        return false
+        val d = gate.onKey(_state.value, e.key.keyCode, e.type == KeyEventType.KeyDown, e.nativeKeyEvent.repeatCount)
+        if (d.wake) restore() else clock.onKey()
+        return d.consume
     }
 
-    /** Runs while composed: moves [state] at each threshold, sleeping until the next one ([IdleClock.nextChangeIn]). */
+    /** Moves [state] at each threshold, sleeping until the next one ([IdleClock.nextChangeIn]). */
     internal suspend fun schedule() {
         while (true) {
             val s = clock.state()
@@ -142,21 +137,26 @@ class IdleController(profile: TvProfile) {
 
 /**
  * The idle controller for the home screen. The profile is resolved off the main thread after the first composition
- * (nothing on the first-frame path): the adb `tv_profile` setting, else the TV's EDID PnP id, else LG.
+ * (nothing on the first-frame path): the adb `tv_profile` setting, else the TV's EDID PnP id, else LG. The scheduler and
+ * the drift loop run only while the activity is STARTED (ADR 0008 section 1: nothing runs while Brian watches another
+ * app), and a resume wakes the screen.
  */
 @Composable
 fun rememberIdleController(): IdleController {
     val context = LocalContext.current
     val view = LocalView.current
+    val owner = LocalLifecycleOwner.current
     val idle = remember { IdleController(TvProfile.DEFAULT) }
     LaunchedEffect(Unit) {
-        val p = withContext(Dispatchers.IO) { runCatching { resolveProfile(context, view) }.getOrDefault(TvProfile.DEFAULT) }
-        idle.useProfile(p)
+        val (p, test) = withContext(Dispatchers.IO) {
+            runCatching { resolveProfile(context, view) to FeedSettings.idleTestSeconds(context) }
+                .getOrDefault(TvProfile.DEFAULT to null)
+        }
+        idle.useProfile(p, test)
     }
-    LaunchedEffect(idle.restarts.intValue) { idle.schedule() }
-    LaunchedEffect(idle.profile) { idle.driftLoop() }
+    LaunchedEffect(idle.restarts.intValue, owner) { owner.repeatOnLifecycle(Lifecycle.State.STARTED) { idle.schedule() } }
+    LaunchedEffect(idle.profile, owner) { owner.repeatOnLifecycle(Lifecycle.State.STARTED) { idle.driftLoop() } }
     // Coming back to the screen (Back from an app, the M3 Home redirect) is never met by a dim or black screen.
-    val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
         val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) idle.wake() }
         owner.lifecycle.addObserver(obs)
