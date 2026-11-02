@@ -513,3 +513,33 @@ def test_ssdp_discover_with_a_fake_socket():
                                 describer=lambda ip, loc: "Living Room" if ip == "192.168.68.90" else "x")
     assert found == [("192.168.68.90", "Living Room")]
     assert sock.sent[0][1] == ("239.255.255.250", 1900) and b"M-SEARCH" in sock.sent[0][0]
+
+
+def test_pc_remote_end_to_end_with_the_fake_vizio(env):
+    """LgVolume(VizioRemote) as load_vizio builds it, driven through the page's bridge, against the fake server."""
+    import threading
+
+    from tv_remote.pcremote import LgVolume, TvChoice, make_bridge
+    from test_pcremote import shell
+
+    tmp_path, ctx, fp, vault = env
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    tv = FakeVizio(ctx, volume=58)
+    asyncio.run_coroutine_threadsafe(tv.start(), loop).result(5)
+    vault.save(TOKEN, tv.port, fp)
+    vol = LgVolume(VizioRemote(HOST, vault, ports=(tv.port,)), timeout=5, name="Vizio", unknown_up="step")
+    choice = TvChoice(None)
+    choice.set("vizio")
+    sh, fake = shell()
+    try:
+        fns = {f.__name__: f for f in make_bridge(sh, None, choice, vol)}
+        assert fns["start"]()["vizio_paired"] is True
+        levels = [fns["volume"]("up").get("level") for _ in range(4)]
+        assert levels == [59, 60, 60, 60] and tv.volume == 60 and tv.highest == 60
+        assert fns["volume"]("mute")["muted"] is True
+        assert fake.lines == []  # nothing over adb
+    finally:
+        vol.close()
+        asyncio.run_coroutine_threadsafe(tv.stop(), loop).result(5)
+        loop.call_soon_threadsafe(loop.stop)

@@ -185,7 +185,7 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
 .vnote { display: none; font-size: 11px; color: var(--ink-3); }
 .vcard.vizio .bar { display: none; }
 .vcard.vizio .vnote { display: block; }
-.vcard.vizio .vnum { font-size: 20px; }
+.vcard.vizio .vnum { font-size: 17px; }
 </style>
 </head>
 <body>
@@ -237,7 +237,7 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
           <div class="vcard" id="vcard">
             <div class="vtop"><div class="vnum" id="vnum">&ndash;<small>vol</small></div><div class="via" id="via"></div></div>
             <div class="bar"><i id="vbar"></i></div>
-            <div class="vnote">Vol+ is one step per tap</div>
+            <div class="vnote">Run tv-remote-vizio-pair</div>
           </div>
           <div class="pair">
             <button class="key" data-vol="mute" aria-label="Mute" id="muteBtn"><span data-icon="mute"></span>Mute</button>
@@ -356,43 +356,55 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
   var vnum = document.getElementById("vnum"), vbar = document.getElementById("vbar"),
       vcard = document.getElementById("vcard"), via = document.getElementById("via"),
       muteBtn = document.getElementById("muteBtn");
+  // ---- the volume card: one per TV, shown for the current mode ----
+  var vizioPaired = false, vizioLevelKnown = false;
+  var cards = {
+    lg: { num: "&ndash;<small>vol</small>", via: "LG TV", bar: 0, muted: false },
+    vizio: { num: "&ndash;<small>vol</small>", via: "Vizio TV", bar: 0, muted: false }
+  };
+  function renderCard() {
+    var c = cards[mode || "lg"], unpaired = mode === "vizio" && !vizioPaired;
+    vcard.classList.toggle("vizio", unpaired); // hides the bar, shows how to pair
+    vcard.classList.toggle("muted", !unpaired && c.muted); muteBtn.classList.toggle("on", !unpaired && c.muted);
+    if (unpaired) {
+      vnum.textContent = "Pair the Vizio"; via.textContent = "";
+      vcard.setAttribute("aria-label", "Pair the Vizio: run tv-remote-vizio-pair");
+    } else {
+      vnum.innerHTML = c.num; via.textContent = c.via; vbar.style.width = c.bar + "%";
+      vcard.removeAttribute("aria-label");
+    }
+  }
   function showVolume(r) {
     if (!r) return;
+    var c = cards[r.tv === "vizio" ? "vizio" : "lg"];
     if (typeof r.level === "number") {
-      vnum.innerHTML = r.level + "<small>vol</small>";
-      vbar.style.width = Math.max(0, Math.min(100, r.level)) + "%";
-      vcard.classList.remove("muted"); muteBtn.classList.remove("on");
+      c.num = r.level + "<small>vol</small>";
+      c.bar = Math.max(0, Math.min(100, r.level));
+      c.muted = false;
     }
     if (typeof r.muted === "boolean") {
-      vcard.classList.toggle("muted", r.muted); muteBtn.classList.toggle("on", r.muted);
-      if (r.muted) vnum.innerHTML = "Muted";
+      c.muted = r.muted;
+      if (r.muted) c.num = "Muted";
     }
-    if (r.via === "googletv") via.textContent = "Google TV";
-    else if (r.via === "lg") via.textContent = "LG TV";
+    if (r.via === "googletv") c.via = "Google TV";
+    else if (r.via === "lg") c.via = "LG TV";
+    else if (r.via === "vizio") c.via = "Vizio TV";
+    renderCard();
   }
 
   // ---- LG | Vizio ----
   // The mode is unknown until start() says which TV was saved (vizio-repeat-before-start): until then Vol+ never
   // repeats and the switch is disabled, so a saved Vizio is never treated as the LG.
-  var mode = null, lgCard = null;
+  var mode = null;
   var segBtns = document.querySelectorAll(".seg [data-tv]");
   function enableSwitch() { segBtns.forEach(function (b) { b.disabled = false; }); }
   function applyMode(m) {
     if (m !== "lg" && m !== "vizio") return; // a missing or odd answer leaves the mode as it was
     if (m === mode) return;
     segBtns.forEach(function (b) { b.setAttribute("aria-checked", String(b.getAttribute("data-tv") === m)); });
-    if (m === "vizio") {
-      lgCard = { num: vnum.innerHTML, via: via.textContent, muted: vcard.classList.contains("muted") };
-      vcard.classList.add("vizio"); vcard.classList.remove("muted"); muteBtn.classList.remove("on");
-      vnum.textContent = "Vizio";
-      via.textContent = "via HDMI-CEC";
-      vcard.setAttribute("aria-label", "Vizio (via HDMI-CEC)");
-    } else {
-      vcard.classList.remove("vizio"); vcard.removeAttribute("aria-label");
-      if (lgCard) { vnum.innerHTML = lgCard.num; via.textContent = lgCard.via; vcard.classList.toggle("muted", lgCard.muted); }
-    }
     mode = m;
     document.documentElement.setAttribute("data-tv", m);
+    renderCard();
   }
   segBtns.forEach(function (b) {
     b.addEventListener("click", function () {
@@ -407,10 +419,12 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
       });
     });
   });
-  // Vizio volume cannot be read back, so nothing caps it: Vol+ is one step per tap there, never held to repeat.
-  // Vol+ repeats only when the mode is known to be LG.
+  // Vol+ repeats while held only when the cap guards it: on the LG, or on a paired Vizio that reported its level
+  // on the last step. Otherwise (mode unknown, Vizio not paired, or level unknown) it is one step per tap.
   function repeats(el) {
-    return el.hasAttribute("data-hold") && !(mode !== "lg" && el.getAttribute("data-vol") === "up");
+    if (!el.hasAttribute("data-hold")) return false;
+    if (el.getAttribute("data-vol") !== "up") return true;
+    return mode === "lg" || (mode === "vizio" && vizioPaired && vizioLevelKnown);
   }
 
   // ---- the bridge ----
@@ -426,9 +440,10 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
     return call("volume", cmd).then(function (r) {
       if (!r) return;
       // A late reply from the other TV after a switch is not shown (stale-status-after-switch).
-      if ((mode === "vizio" && r.via !== "vizio") || (mode === "lg" && r.via === "vizio")) return;
+      if (r.tv && r.tv !== mode) return;
+      if (r.tv === "vizio" && cmd !== "mute") vizioLevelKnown = r.ok && typeof r.level === "number";
       show(r);
-      if (r.via !== "vizio" && mode === "lg") showVolume(r);
+      showVolume(r);
     });
   }
   function sendApp(pkg) { return call("app", pkg).then(show); }
@@ -530,9 +545,11 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
     call("start").then(function (r) {
       if (!r) return;
       if (r.apps && r.apps.length) drawApps(r.apps);
-      via.textContent = r.lg ? "LG TV" : "Google TV";
+      cards.lg.via = r.lg ? "LG TV" : "Google TV";
+      vizioPaired = r.vizio_paired === true;
       startAnswered = true;
       if (mode === null) applyMode(r.tv); // never overrides a switch made meanwhile (start-overwrites-toggle)
+      renderCard();
       enableSwitch();
       show(r);
       setConn(r.ok ? "ready" : "offline");

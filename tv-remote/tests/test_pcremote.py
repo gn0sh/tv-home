@@ -19,8 +19,8 @@ LG_HOST = "192.168.68.61"
 class RemoteApi:
     """Test adapter: the five bridge functions as attributes, as the page sees them."""
 
-    def __init__(self, tv, lg, choice=None):
-        for f in make_bridge(tv, lg, choice):
+    def __init__(self, tv, lg, choice=None, vz=None):
+        for f in make_bridge(tv, lg, choice, vz):
             setattr(self, f.__name__, f)
 
 
@@ -354,7 +354,7 @@ def test_volume_goes_to_the_lg_and_not_to_adb():
     api, fake, vol = lg_api(lg)
     try:
         r = api.volume("up")
-        assert r == {"ok": True, "status": "Volume 11", "via": "lg", "level": 11}
+        assert r == {"ok": True, "status": "Volume 11", "via": "lg", "level": 11, "tv": "lg"}
         assert api.volume("down")["level"] == 10
         assert lg.calls == ["up", "down"] and fake.lines == []
     finally:
@@ -375,7 +375,7 @@ def test_mute_toggles_on_the_lg():
     lg = FakeLg(muted=False)
     api, fake, vol = lg_api(lg)
     try:
-        assert api.volume("mute") == {"ok": True, "status": "Muted", "via": "lg", "muted": True}
+        assert api.volume("mute") == {"ok": True, "status": "Muted", "via": "lg", "muted": True, "tv": "lg"}
         assert api.volume("mute")["muted"] is False
     finally:
         vol.close()
@@ -402,7 +402,7 @@ def test_volume_up_never_falls_back_to_adb():
         r = api.volume("up")
     finally:
         vol.close()
-    assert r == {"ok": False, "status": "The LG did not answer. Volume up was not sent.", "via": "none"}
+    assert r == {"ok": False, "status": "The LG did not answer. Volume up was not sent.", "via": "none", "tv": "lg"}
     assert fake.lines == []
     sh, fake = shell()
     r = RemoteApi(sh, None).volume("up")
@@ -695,16 +695,27 @@ def test_unsaved_choice_still_switches(tmp_path):
     assert r["ok"] and "Not saved" in r["status"] and choice.name == "vizio"
 
 
-@pytest.mark.parametrize("cmd,key", [("up", "VOLUME_UP"), ("down", "VOLUME_DOWN"), ("mute", "VOLUME_MUTE")])
-def test_vizio_mode_sends_adb_keys_and_never_calls_the_lg(cmd, key):
+@pytest.mark.parametrize("cmd,key", [("down", "VOLUME_DOWN"), ("mute", "VOLUME_MUTE")])
+def test_unpaired_vizio_sends_down_and_mute_as_adb_keys_and_never_calls_the_lg(cmd, key):
     lg_calls = []
     choice = TvChoice(None)
     choice.set("vizio")
     sh, fake = shell()
     r = RemoteApi(sh, lambda c: lg_calls.append(c) or "ok 11", choice).volume(cmd)
-    assert r["ok"] and r["via"] == "vizio" and "Vizio (via HDMI-CEC)" in r["status"]
+    assert r["ok"] and r["via"] == "googletv" and r["tv"] == "vizio" and r["pair"] is True
+    assert "tv-remote-vizio-pair" in r["status"]
     assert fake.lines == [f"input keyevent KEYCODE_{key}"]
     assert lg_calls == []
+
+
+def test_unpaired_vizio_up_is_not_sent_and_says_how_to_pair():
+    choice = TvChoice(None)
+    choice.set("vizio")
+    sh, fake = shell()
+    r = RemoteApi(sh, lambda c: "ok 11", choice).volume("up")
+    assert r == {"ok": False, "status": "Pair the Vizio: run tv-remote-vizio-pair.", "via": "none", "tv": "vizio",
+                 "pair": True}
+    assert fake.lines == []
 
 
 def test_vizio_mode_does_not_touch_a_real_lg_volume_object():
@@ -720,7 +731,7 @@ def test_vizio_mode_does_not_touch_a_real_lg_volume_object():
     finally:
         vol.close()
     assert lg.calls == [] and lg.volume == 10
-    assert len(fake.lines) == 3  # the second up came within 400 ms and was dropped
+    assert fake.lines == ["input keyevent KEYCODE_VOLUME_DOWN", "input keyevent KEYCODE_VOLUME_MUTE"]  # no up
 
 
 def test_lg_mode_is_unchanged_after_switching_back():
@@ -730,24 +741,69 @@ def test_lg_mode_is_unchanged_after_switching_back():
     api = RemoteApi(sh, lambda c: lg_calls.append(c) or "ok 11", choice)
     api.set_tv("vizio")
     api.set_tv("lg")
-    assert api.volume("up") == {"ok": True, "status": "Volume 11", "via": "lg", "level": 11}
+    assert api.volume("up") == {"ok": True, "status": "Volume 11", "via": "lg", "level": 11, "tv": "lg"}
     assert lg_calls == ["up"] and fake.lines == []
 
 
-def test_vizio_up_backstop_drops_a_second_up_within_400_ms():
-    clock = Clock()
-    choice = TvChoice(None, clock=clock)
+class FakeVizioVolume:
+    """Stands in for LgVolume(VizioRemote, name="Vizio", unknown_up="step")."""
+
+    def __init__(self, replies):
+        self.replies, self.calls, self.level_known = list(replies), [], None
+
+    def __call__(self, cmd):
+        self.calls.append(cmd)
+        reply = self.replies.pop(0)
+        if cmd in ("up", "down"):
+            self.level_known = reply[3:].isdigit() if reply.startswith("ok ") else False
+        return reply
+
+
+def vizio_api(vz, clock=None, lg=None):
+    choice = TvChoice(None, clock=clock or Clock())
     choice.set("vizio")
     sh, fake = shell()
-    api = RemoteApi(sh, None, choice)
-    assert api.volume("up")["ok"]
+    return RemoteApi(sh, lg, choice, vz), fake, choice
+
+
+def test_paired_vizio_volume_goes_to_smartcast_with_the_level():
+    lg_calls = []
+    vz = FakeVizioVolume(["ok 21", "ok 20", "ok muted"])
+    api, fake, _ = vizio_api(vz, lg=lambda c: lg_calls.append(c) or "ok 1")
+    assert api.volume("up") == {"ok": True, "status": "Volume 21", "via": "vizio", "level": 21, "tv": "vizio"}
+    assert api.volume("down")["level"] == 20
+    assert api.volume("mute")["muted"] is True
+    assert vz.calls == ["up", "down", "mute"] and fake.lines == [] and lg_calls == []
+
+
+def test_paired_vizio_at_cap_and_errors():
+    vz = FakeVizioVolume(["ok 60", "error the Vizio did not answer", "error the Vizio did not answer",
+                          "error the Vizio's certificate changed; pair it again"])
+    api, fake, _ = vizio_api(vz, clock=Clock())
+    assert api.volume("up")["status"] == "Volume 60 (the most this remote allows)"
+    r = api.volume("up")
+    assert r["ok"] is False and r["status"] == "The Vizio did not answer. Volume up was not sent." and fake.lines == []
+    r = api.volume("down")  # down falls back to the adb key
+    assert r["ok"] and r["via"] == "googletv" and fake.lines == ["input keyevent KEYCODE_VOLUME_DOWN"]
+    r = api.volume("mute")
+    assert "run tv-remote-vizio-pair again" in r["status"]
+
+
+def test_vizio_up_backstop_only_while_the_level_is_unknown():
+    clock = Clock()
+    vz = FakeVizioVolume(["ok -", "ok -", "ok 31", "ok 32", "ok 33"])
+    api, fake, _ = vizio_api(vz, clock=clock)
+    assert api.volume("up")["ok"]  # level unknown after this
     clock.t += 0.2
     r = api.volume("up")
-    assert r["ok"] is False and "One step per tap" in r["status"]
-    assert api.volume("down")["ok"] and api.volume("down")["ok"]  # down is not limited
+    assert r["ok"] is False and "One step per tap" in r["status"] and vz.calls == ["up"]
     clock.t += 0.25
-    assert api.volume("up")["ok"]
-    assert fake.lines.count("input keyevent KEYCODE_VOLUME_UP") == 2
+    assert api.volume("up")["ok"]  # the second "ok -"
+    clock.t += 0.5
+    assert api.volume("up")["level"] == 31  # level known again
+    clock.t += 0.05
+    assert api.volume("up")["level"] == 32  # a held button repeats: the cap now guards it
+    assert api.volume("up")["level"] == 33
 
 
 def test_no_adb_fallback_if_switched_to_vizio_while_the_lg_was_asked():
