@@ -88,3 +88,23 @@ Google TV, so `KEYCODE_VOLUME_*` over adb does nothing to the sound.
   (status via `textContent`).
 - The taskbar button uses its own AppUserModelID (`gnosh.tv-remote`); a pinned "TV Remote" shortcut and the running
   window may show as two taskbar buttons. Cosmetic.
+
+## Addendum (2026-11-02): LG | Vizio toggle
+Brian sometimes plugs the Google TV into a Vizio TV. A segmented control in the header ("LG | Vizio") picks which TV
+the volume buttons drive. Everything else (power, D-pad, apps, text) goes to the Google TV either way.
+
+- The choice is kept in `%LOCALAPPDATA%\tv-remote\remote-app.json` as `{"tv": "lg"|"vizio"}` (nothing secret).
+  A missing, unreadable or unexpected file means LG. The page switches through a sixth bridge function, `set_tv`,
+  allowlisted to `lg`/`vizio` with its arity checked like the others.
+- **LG mode is unchanged** (LG over SSAP, cap 60, Vol+ only to the LG).
+- **Vizio mode** sends `KEYCODE_VOLUME_UP/DOWN/MUTE` over the same adb shell; the Google TV passes them to the Vizio over
+  HDMI-CEC when its volume control is set to CEC/Auto. The LG code is never called in this mode (no SSAP, no
+  connection attempt), because the LG may be off or unplugged.
+- **Why Vizio Vol+ has no cap but is single-step.** The 60 cap (ADR 0003) needs the current level, which only the LG's
+  SSAP API reports. There is no network pairing with the Vizio: SmartCast pairing would create and store a new
+  credential (a PIN shown on the TV, then an auth token), which is a hard stop without Brian's go-ahead, and HDMI-CEC
+  volume is one-way, so the level cannot be read. Without a level there is nothing to cap against. Instead, the page
+  never repeats Vol+ while held in Vizio mode: each tap is one step, the same as one press on a physical remote, so
+  the volume can only climb as fast as someone deliberately taps. Vol- and Mute may repeat. This reverses
+  "adb-volume-uncapped" only for Vizio mode, and only one step per tap, which the user chooses by switching modes.
+- If CEC volume does not reach the Vizio, the fallback is a SmartCast pairing later, on Brian's go-ahead.

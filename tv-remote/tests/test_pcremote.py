@@ -1,6 +1,7 @@
 """The PC on-screen remote's bridge (pcremote.py), against fake adb processes and a fake LG. No device is touched."""
 
 import inspect
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -9,7 +10,7 @@ import pytest
 
 from tv_remote import pcremote
 from tv_remote.devices import DeviceUnreachable, LgStatus, NotPaired
-from tv_remote.pcremote import SEALED, AdbShell, LgVolume, make_bridge
+from tv_remote.pcremote import SEALED, AdbShell, LgVolume, TvChoice, make_bridge
 
 SERIAL = "192.168.68.71:5555"
 LG_HOST = "192.168.68.61"
@@ -18,8 +19,8 @@ LG_HOST = "192.168.68.61"
 class RemoteApi:
     """Test adapter: the five bridge functions as attributes, as the page sees them."""
 
-    def __init__(self, tv, lg):
-        for f in make_bridge(tv, lg):
+    def __init__(self, tv, lg, choice=None):
+        for f in make_bridge(tv, lg, choice):
             setattr(self, f.__name__, f)
 
 
@@ -181,9 +182,9 @@ def test_serial_must_be_ip_port():
         AdbShell("adb", "192.168.68.71:5555 && calc")
 
 
-def test_the_bridge_is_five_named_functions_and_a_sealed_api_object():
+def test_the_bridge_is_six_named_functions_and_a_sealed_api_object():
     names = [f.__name__ for f in make_bridge(shell()[0], None)]
-    assert names == ["start", "key", "app", "text", "volume"]
+    assert names == ["start", "key", "app", "text", "volume", "set_tv"]
     assert dir(SEALED) == []
     for attr in ("__class__", "__dict__", "_tv", "start", "__init__"):
         assert getattr(SEALED, attr, None) is None
@@ -515,7 +516,7 @@ def test_page_is_self_contained_and_matches_the_allowlist():
     assert "fetch(" not in html and "XMLHttpRequest" not in html and "WebSocket" not in html
     page_keys = set(re.findall(r'data-key="([A-Z_]+)"', html))
     assert page_keys == set(pcremote.KEYS)
-    for method in ("start", "key", "app", "text", "volume"):
+    for method in ("start", "key", "app", "text", "volume", "set_tv"):
         assert f'"{method}"' in html
 
 
@@ -641,3 +642,138 @@ def test_lock_down_failure_is_logged(monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="tv_remote.pcremote"):
         pcremote._lock_down(Window())
     assert "could not lock the window down" in caplog.text
+
+
+# ---- LG | Vizio toggle (ADR 0006 addendum) ----
+
+def test_tv_choice_defaults_to_lg_and_persists(tmp_path):
+    path = tmp_path / "tv-remote" / "remote-app.json"
+    assert TvChoice(path).name == "lg"  # missing file
+    sh, fake = shell()
+    api = RemoteApi(sh, None, TvChoice(path))
+    r = api.set_tv("vizio")
+    assert r == {"ok": True, "status": "Volume buttons now drive the Vizio.", "tv": "vizio"}
+    assert json.loads(path.read_text()) == {"tv": "vizio"}
+    assert TvChoice(path).name == "vizio"  # next launch
+    assert RemoteApi(sh, None, TvChoice(path)).start()["tv"] == "vizio"
+    api.set_tv("lg")
+    assert TvChoice(path).name == "lg"
+
+
+@pytest.mark.parametrize("content", ["", "{not json", '"vizio"', '{"tv": "sony"}', '{"tv": ["vizio"]}', "[1]",
+                                     '{"tv": "VIZIO"}', "\x00\xff"])
+def test_corrupt_settings_file_means_lg(tmp_path, content):
+    path = tmp_path / "remote-app.json"
+    path.write_text(content, encoding="utf-8", errors="surrogateescape")
+    assert TvChoice(path).name == "lg"
+
+
+@pytest.mark.parametrize("bad", ["sony", "LG", "Vizio", "", None, 1, ["vizio"], "vizio; rm"])
+def test_set_tv_allowlist(tmp_path, bad):
+    choice = TvChoice(tmp_path / "remote-app.json")
+    r = RemoteApi(shell()[0], None, choice).set_tv(bad)
+    assert r["ok"] is False and choice.name == "lg" and not (tmp_path / "remote-app.json").exists()
+
+
+def test_set_tv_arity_through_the_real_dispatcher(tmp_path):
+    from webview.util import js_bridge_call
+
+    choice = TvChoice(tmp_path / "remote-app.json")
+    for params in ([], ["vizio", "lg"]):
+        window = BridgeWindow(make_bridge(shell()[0], None, choice), SEALED)
+        js_bridge_call(window, "set_tv", params, "1")
+        assert window.answered.wait(5)
+        assert "wrong call" in window.results[0] and "Traceback" not in window.results[0]
+    assert choice.name == "lg"
+
+
+def test_unsaved_choice_still_switches(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    choice = TvChoice(blocker / "remote-app.json")  # parent is a file: cannot save
+    r = RemoteApi(shell()[0], None, choice).set_tv("vizio")
+    assert r["ok"] and "Not saved" in r["status"] and choice.name == "vizio"
+
+
+@pytest.mark.parametrize("cmd,key", [("up", "VOLUME_UP"), ("down", "VOLUME_DOWN"), ("mute", "VOLUME_MUTE")])
+def test_vizio_mode_sends_adb_keys_and_never_calls_the_lg(cmd, key):
+    lg_calls = []
+    choice = TvChoice(None)
+    choice.set("vizio")
+    sh, fake = shell()
+    r = RemoteApi(sh, lambda c: lg_calls.append(c) or "ok 11", choice).volume(cmd)
+    assert r["ok"] and r["via"] == "vizio" and "Vizio (via HDMI-CEC)" in r["status"]
+    assert fake.lines == [f"input keyevent KEYCODE_{key}"]
+    assert lg_calls == []
+
+
+def test_vizio_mode_does_not_touch_a_real_lg_volume_object():
+    lg = FakeLg(10)
+    choice = TvChoice(None)
+    choice.set("vizio")
+    sh, fake = shell()
+    vol = LgVolume(lg, timeout=5)
+    try:
+        api = RemoteApi(sh, vol, choice)
+        for cmd in ("up", "up", "down", "mute"):
+            api.volume(cmd)
+    finally:
+        vol.close()
+    assert lg.calls == [] and lg.volume == 10
+    assert len(fake.lines) == 3  # the second up came within 400 ms and was dropped
+
+
+def test_lg_mode_is_unchanged_after_switching_back():
+    lg_calls = []
+    choice = TvChoice(None)
+    sh, fake = shell()
+    api = RemoteApi(sh, lambda c: lg_calls.append(c) or "ok 11", choice)
+    api.set_tv("vizio")
+    api.set_tv("lg")
+    assert api.volume("up") == {"ok": True, "status": "Volume 11", "via": "lg", "level": 11}
+    assert lg_calls == ["up"] and fake.lines == []
+
+
+def test_vizio_up_backstop_drops_a_second_up_within_400_ms():
+    clock = Clock()
+    choice = TvChoice(None, clock=clock)
+    choice.set("vizio")
+    sh, fake = shell()
+    api = RemoteApi(sh, None, choice)
+    assert api.volume("up")["ok"]
+    clock.t += 0.2
+    r = api.volume("up")
+    assert r["ok"] is False and "One step per tap" in r["status"]
+    assert api.volume("down")["ok"] and api.volume("down")["ok"]  # down is not limited
+    clock.t += 0.25
+    assert api.volume("up")["ok"]
+    assert fake.lines.count("input keyevent KEYCODE_VOLUME_UP") == 2
+
+
+def test_no_adb_fallback_if_switched_to_vizio_while_the_lg_was_asked():
+    choice = TvChoice(None)
+    sh, fake = shell()
+
+    def lg(cmd):
+        choice.set("vizio")  # the user switches while the LG call is in flight
+        return "error the LG did not answer"
+
+    r = RemoteApi(sh, lg, choice).volume("down")
+    assert r["ok"] is False and "now on the Vizio" in r["status"]
+    assert fake.lines == []
+
+
+def test_settings_replace_is_retried_once(tmp_path, monkeypatch):
+    real = pcremote.os.replace
+    tries = []
+
+    def flaky(a, b):
+        tries.append(1)
+        if len(tries) == 1:
+            raise PermissionError("held by a scanner")
+        return real(a, b)
+
+    monkeypatch.setattr(pcremote.os, "replace", flaky)
+    choice = TvChoice(tmp_path / "remote-app.json")
+    assert choice.set("vizio") is True and len(tries) == 2
+    assert TvChoice(tmp_path / "remote-app.json").name == "vizio"

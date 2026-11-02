@@ -1,4 +1,4 @@
-"""The PC on-screen remote (ADR 0006): a pywebview window whose page talks to this module only through the five
+"""The PC on-screen remote (ADR 0006): a pywebview window whose page talks to this module only through the six
 functions of make_bridge, registered with ``window.expose``; the ``js_api`` object is SEALED, so page script cannot
 walk to anything else. No HTTP server, no listening port.
 
@@ -59,6 +59,10 @@ APPS: tuple[tuple[str, str], ...] = (
 )
 PACKAGES = frozenset(pkg for _, pkg in APPS)
 VOLUME_KEYS = {"up": "VOLUME_UP", "down": "VOLUME_DOWN", "mute": "VOLUME_MUTE"}
+# Which TV the Google TV is plugged into, for volume (ADR 0006 addendum). Everything else goes to the Google TV.
+TV_NAMES = ("lg", "vizio")
+VIZIO_UP_GAP = 0.4  # seconds between Vizio volume ups; faster ones are dropped (nothing caps the Vizio)
+SETTINGS_FILE = "remote-app.json"  # under %LOCALAPPDATA%\tv-remote; holds only {"tv": "lg"|"vizio"}
 # No leading '-', which `input text` would read as an option (input-text-leading-dash).
 TEXT_RE = re.compile(r"\A[A-Za-z0-9 .,@_][A-Za-z0-9 .,@_-]*\Z")
 TEXT_MAX = 100
@@ -294,6 +298,65 @@ def load_lg() -> LgVolume | None:
         return None
 
 
+class TvChoice:
+    """The TV the volume buttons drive: "lg" (default) or "vizio", kept in a small JSON file so it survives a restart.
+
+    A missing, unreadable or unexpected file means "lg". The file holds nothing secret. path None: memory only."""
+
+    def __init__(self, path: Path | None, *, clock: Callable[[], float] = time.monotonic):
+        self._path, self._clock = path, clock
+        self._lock = threading.Lock()
+        self._name = self._load()
+        self._last_vizio_up: float | None = None
+
+    def vizio_up_allowed(self) -> bool:
+        """At most one Vizio volume up per VIZIO_UP_GAP seconds: the Python backstop for one step per tap."""
+        with self._lock:
+            now = self._clock()
+            if self._last_vizio_up is not None and now - self._last_vizio_up < VIZIO_UP_GAP:
+                return False
+            self._last_vizio_up = now
+            return True
+
+    def _load(self) -> str:
+        if self._path is None:
+            return "lg"
+        try:
+            import json
+
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+            name = data.get("tv") if isinstance(data, dict) else None
+            return name if name in TV_NAMES else "lg"
+        except Exception:  # noqa: BLE001  any problem with the file: the default
+            return "lg"
+
+    @property
+    def name(self) -> str:
+        with self._lock:
+            return self._name
+
+    def set(self, name: str) -> bool:
+        """Switch (name already allowlisted). True when the choice was also saved."""
+        with self._lock:
+            self._name = name
+            if self._path is None:
+                return True
+            try:
+                import json
+
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self._path.with_suffix(".tmp")
+                tmp.write_text(json.dumps({"tv": name}), encoding="utf-8")
+                try:
+                    os.replace(tmp, self._path)
+                except PermissionError:  # settings-replace-retry: a scanner or indexer briefly holding the file
+                    time.sleep(0.05)
+                    os.replace(tmp, self._path)
+                return True
+            except OSError:
+                return False
+
+
 # ---- the bridge the page calls (window.pywebview.api.*) ----
 
 def _reply(ok: bool, status: str, **extra: Any) -> dict[str, Any]:
@@ -311,17 +374,17 @@ def _guard(fn: Callable[..., dict[str, Any]], want: int, backends: tuple[Any, ..
         return _reply(False, "Something went wrong (" + type(exc).__name__ + "). Try again.")
 
 
-def _start(tv: AdbShell, lg: Any) -> dict[str, Any]:
+def _start(tv: AdbShell, lg: Any, choice: TvChoice) -> dict[str, Any]:
     apps = [{"name": n, "pkg": p, "installed": None} for n, p in APPS]
     if not tv.connect():
-        return _reply(False, tv.offline_message, apps=apps, lg=lg is not None, serial=tv.serial)
+        return _reply(False, tv.offline_message, apps=apps, lg=lg is not None, serial=tv.serial, tv=choice.name)
     have = tv.packages()
     status = f"Ready: {tv.serial}."
     if have is not None:
         for a in apps:
             a["installed"] = a["pkg"] in have
         status += " Dimmed apps are not on the TV."
-    return _reply(True, status, apps=apps, lg=lg is not None, serial=tv.serial)
+    return _reply(True, status, apps=apps, lg=lg is not None, serial=tv.serial, tv=choice.name)
 
 
 def _key(tv: AdbShell, code: object) -> dict[str, Any]:
@@ -347,9 +410,20 @@ def _text(tv: AdbShell, text: object) -> dict[str, Any]:
     return _reply(*tv.send(line))
 
 
-def _volume(tv: AdbShell, lg: Callable[[str], str] | None, cmd: object) -> dict[str, Any]:
+VIZIO_SAID = {"up": "Volume up", "down": "Volume down", "mute": "Mute"}
+
+
+def _volume(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice, cmd: object) -> dict[str, Any]:
     if not isinstance(cmd, str) or cmd not in VOLUME_KEYS:
         return _reply(False, "That button is not on this remote.")
+    if choice.name == "vizio":
+        # No pairing with the Vizio: the adb volume key, which the Google TV passes on over HDMI-CEC. The LG is never
+        # contacted in this mode (it may be off or unplugged). Up is one step per tap; the page does not repeat it,
+        # and this drops an up that comes too soon after the last one (vizio-one-step-js-only).
+        if cmd == "up" and not choice.vizio_up_allowed():
+            return _reply(False, "One step per tap for Vizio volume up.", via="vizio")
+        ok, status = tv.send(volume_key_line(cmd))
+        return _reply(ok, f"{VIZIO_SAID[cmd]} sent to the Vizio (via HDMI-CEC)." if ok else status, via="vizio")
     if lg is None:
         if cmd == "up":  # adb volume has no cap (adb-volume-uncapped), so up goes to the LG or nowhere
             return _reply(False, "Volume up needs the LG, and it is not set up.", via="none")
@@ -374,6 +448,8 @@ def _volume(tv: AdbShell, lg: Callable[[str], str] | None, cmd: object) -> dict[
     lg_said = "The LG" + reason[6:] if reason.startswith("the LG") else "The LG: " + reason
     if cmd == "up":
         return _reply(False, f"{lg_said}. Volume up was not sent.", via="none")
+    if choice.name != "lg":  # switched to Vizio while the LG was being asked (stale-mode-fallback): send nothing
+        return _reply(False, f"{lg_said}. Not sent: the remote is now on the Vizio.", via="none")
     ok, status = tv.send(volume_key_line(cmd))
     if ok:
         return _reply(True, f"{lg_said}. Sent to the Google TV instead.", via="googletv")
@@ -401,16 +477,28 @@ class _Sealed:
 SEALED = _Sealed()
 
 
-def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None) -> tuple[Callable[..., dict[str, Any]], ...]:
-    """The five functions the page may call, registered with ``window.expose`` (finding jsapi-private-dispatch).
+def _set_tv(choice: TvChoice, name: object) -> dict[str, Any]:
+    if not isinstance(name, str) or name not in TV_NAMES:
+        return _reply(False, "That TV is not on this remote.")
+    saved = choice.set(name)
+    label = "LG" if name == "lg" else "Vizio"
+    return _reply(True, f"Volume buttons now drive the {label}." + ("" if saved else " (Not saved for next time.)"),
+                  tv=name)
+
+
+def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None,
+                choice: TvChoice | None = None) -> tuple[Callable[..., dict[str, Any]], ...]:
+    """The six functions the page may call, registered with ``window.expose`` (finding jsapi-private-dispatch).
 
     The backends live only in these closures. The page reaches a function only by its exact name in the exposed
     table; a dotted name such as ``key.__globals__`` is not in the table and falls through to the walk from
     SEALED, which finds nothing.
     """
 
+    choice = choice if choice is not None else TvChoice(None)
+
     def start(*args):
-        return _guard(_start, 0, (tv, lg), args)
+        return _guard(_start, 0, (tv, lg, choice), args)
 
     def key(*args):
         return _guard(_key, 1, (tv,), args)
@@ -422,9 +510,12 @@ def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None) -> tuple[Callable
         return _guard(_text, 1, (tv,), args)
 
     def volume(*args):
-        return _guard(_volume, 1, (tv, lg), args)
+        return _guard(_volume, 1, (tv, lg, choice), args)
 
-    return start, key, app, text, volume
+    def set_tv(*args):
+        return _guard(_set_tv, 1, (choice,), args)
+
+    return start, key, app, text, volume, set_tv
 
 
 # ---- the window ----
@@ -588,7 +679,8 @@ def main(argv: list[str] | None = None) -> None:
         window = webview.create_window("TV Remote", html=ui_html(), js_api=SEALED,
                                        width=width, height=height, min_size=(340, 400),
                                        background_color="#0B0D12", text_select=False)
-        window.expose(*make_bridge(tv, lg))
+        choice = TvChoice(Path(os.environ["LOCALAPPDATA"]) / "tv-remote" / SETTINGS_FILE)
+        window.expose(*make_bridge(tv, lg, choice))
         window.events.loaded += lambda: _lock_down(window)
         try:
             webview.start(private_mode=True, icon=icon_path())

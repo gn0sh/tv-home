@@ -92,6 +92,22 @@ it under 60); the line under the buttons says which.
 should happen and the remote should stay as it is. If the window changes to a web page, close it, reopen TV Remote, and
 tell the team; the file `%LOCALAPPDATA%\tv-remote\remote-app.log` says why.
 
+**LG or Vizio.** When the Google TV is plugged into the Vizio, tap **Vizio** in the switch at the top of the remote
+(tap **LG** to go back). It only changes where Vol+, Vol- and Mute go; every other button works the same either way.
+The remote remembers the choice next time it opens. With Vizio picked:
+- Volume goes to the Google TV as ordinary volume key presses, and the Google TV passes them to the Vizio over
+  HDMI-CEC. The LG is never contacted, so it can be off or unplugged.
+- The remote cannot read the Vizio's volume, so the card says "Vizio (via HDMI-CEC)" instead of a number, and there is
+  no 60 limit. To keep it safe, **Vol+ moves one step per tap** (holding it does not repeat). Vol- and Mute repeat
+  as usual.
+- If the Vizio's volume does not respond: on the Google TV open Settings > Remotes & Accessories > Set up remote
+  buttons > Volume control (approximately; the names vary by model, see
+  [Google's help page](https://support.google.com/chromecast/answer/10094150)) and pick the option that controls the
+  TV over HDMI (CEC or Auto), not infrared. Also check that CEC is on in the Vizio's own settings (usually System >
+  CEC) and on the Google TV (Settings > Display & Sound > HDMI-CEC, approximately).
+- If CEC volume still does not work with the Vizio, the team can later pair the remote with the Vizio over the
+  network (SmartCast). That needs a pairing code shown on the Vizio and a stored key, so it waits for your go-ahead.
+
 **To update, or to set it up the first time**, in PowerShell from the tv-home folder:
 ```
 git pull
