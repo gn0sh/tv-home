@@ -24,3 +24,11 @@ fun BodyFetcher.fetchNow(url: String): IcsFetchResult = runSuspend { fetch(url) 
 /** The events of a Complete outcome; fails the test for anything else. */
 fun tvhome.core.calendar.ParseOutcome.completeEvents(): List<tvhome.core.calendar.EventInstance> =
     (this as? tvhome.core.calendar.ParseOutcome.Complete)?.events ?: throw AssertionError("not Complete: $this")
+
+/** Test resources under `feeds/`. Leading `//` lines are the fixture's provenance header and are stripped. */
+object Fixtures {
+    fun text(name: String): String {
+        val raw = Fixtures::class.java.getResourceAsStream("/feeds/$name")!!.use { it.readBytes().toString(Charsets.UTF_8) }
+        return raw.lineSequence().dropWhile { it.trimStart().startsWith("//") }.joinToString("\n")
+    }
+}

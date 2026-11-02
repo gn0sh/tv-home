@@ -1,0 +1,94 @@
+// PROVENANCE: hand-written fixture, NOT a captured response (sandbox proxy blocks api.weather.gov, 2026-11-02).
+// Shape follows the NWS API docs (GeoJSON FeatureCollection, default application/geo+json) and the CAP fields in
+// docs/architecture/tv-home.md 11.1 (event, severity, urgency, certainty, headline, onset, ends, expires,
+// messageType, status). Values are invented. Replace with a trimmed capture from task M7-D1 before B3 is merged.
+// Leading "//" lines are stripped by the test loader (Fixtures.text); the parser never sees them.
+{
+  "@context": ["https://geojson.org/geojson-ld/geojson-context.jsonld", {"@version": "1.1"}],
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.hand.1",
+      "type": "Feature",
+      "geometry": null,
+      "properties": {
+        "id": "urn:oid:2.49.0.1.840.0.hand.1",
+        "areaDesc": "Montgomery, TN",
+        "sent": "2026-04-14T23:10:00-05:00",
+        "effective": "2026-04-14T23:10:00-05:00",
+        "onset": "2026-04-14T23:10:00-05:00",
+        "expires": "2026-04-14T23:45:00-05:00",
+        "ends": "2026-04-14T23:45:00-05:00",
+        "status": "Actual",
+        "messageType": "Alert",
+        "category": "Met",
+        "severity": "Extreme",
+        "certainty": "Observed",
+        "urgency": "Immediate",
+        "event": "Tornado Warning",
+        "headline": "Tornado Warning issued April 14 at 11:10PM CDT until April 14 at 11:45PM CDT by NWS Nashville TN"
+      }
+    },
+    {
+      "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.hand.2",
+      "type": "Feature",
+      "geometry": null,
+      "properties": {
+        "onset": "2026-04-14T18:00:00-05:00",
+        "expires": "2026-04-15T01:00:00-05:00",
+        "ends": "2026-04-15T07:00:00-05:00",
+        "status": "Actual",
+        "messageType": "Update",
+        "severity": "Severe",
+        "certainty": "Possible",
+        "urgency": "Future",
+        "event": "Flood Watch",
+        "headline": "Flood Watch issued April 14 at 6:00PM CDT until April 15 at 7:00AM CDT by NWS Nashville TN"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "expires": "2026-04-15T03:00:00-05:00",
+        "ends": null,
+        "status": "Actual",
+        "messageType": "Alert",
+        "severity": "Moderate",
+        "event": "Wind Advisory"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "expires": "2026-04-14T20:00:00-05:00",
+        "ends": "2026-04-14T20:00:00-05:00",
+        "status": "Actual",
+        "messageType": "Alert",
+        "severity": "Minor",
+        "event": "Dense Fog Advisory"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "expires": "2026-04-15T01:00:00-05:00",
+        "status": "Actual",
+        "messageType": "Cancel",
+        "severity": "Severe",
+        "event": "Severe Thunderstorm Warning"
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "expires": "2026-04-15T01:00:00-05:00",
+        "status": "Test",
+        "messageType": "Alert",
+        "severity": "Extreme",
+        "event": "Tornado Warning"
+      }
+    }
+  ],
+  "title": "Current watches, warnings, and advisories for 36.53 N, 87.36 W",
+  "updated": "2026-04-15T04:12:00+00:00"
+}
