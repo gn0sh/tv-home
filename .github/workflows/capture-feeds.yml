@@ -4,6 +4,8 @@
 name: capture-feeds
 
 on:
+  push:
+    branches: [capture-feeds-run]
   workflow_dispatch:
     inputs:
       alert_area:
@@ -20,7 +22,7 @@ jobs:
     timeout-minutes: 5
     env:
       NWS_UA: "tvhome/1 (+https://github.com/gn0sh/tv-home)"
-      AREA: ${{ inputs.alert_area }}
+      AREA: ${{ inputs.alert_area || 'TX' }}
     steps:
       - name: Fetch feeds
         shell: bash
