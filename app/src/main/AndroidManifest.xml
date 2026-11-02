@@ -41,6 +41,35 @@
             </intent-filter>
         </activity>
 
+        <!-- M3, both OFF as installed (android:enabled="false"), so installing changes nothing about Home or the mic.
+             scripts/tv-home-takeover.ps1, run by Brian himself, turns one on with `pm enable` and makes it the
+             default, and its -Rollback undoes it. HomeEntry: the remote's Home button opens the dashboard. MicEntry:
+             with Google Assistant switched off, the assist and voice keys open Ask Claude, listening. Neither has a
+             permission guard: like any launcher, they only bring the dashboard or the Ask view to the front. -->
+        <activity-alias
+            android:name=".HomeEntry"
+            android:targetActivity=".AgendaActivity"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".MicEntry"
+            android:targetActivity=".AgendaActivity"
+            android:enabled="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <action android:name="android.intent.action.SEARCH_LONG_PRESS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- Put a secret on the device over adb (architecture section 5). No intent-filter. Only holders of DUMP
              (the adb shell user; third-party apps cannot get it) may start it. -->
         <activity

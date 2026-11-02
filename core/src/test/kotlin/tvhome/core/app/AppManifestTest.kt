@@ -54,9 +54,33 @@ class AppManifestTest {
         assertTrue(intent.kids("data").isEmpty())
     }
 
-    /** Becoming the default home is M3 (a hard stop): no HOME category anywhere yet. */
-    @Test fun noHomeCategory() {
-        assertFalse(File(app, "src/main/AndroidManifest.xml").readText().contains("android.intent.category.HOME"))
+    /**
+     * M3 (a hard stop): Home and the mic keys reach the app only through two aliases that are OFF as installed, so an
+     * install changes nothing until Brian runs the takeover script. HOME appears in HomeEntry and nowhere else.
+     */
+    @Test fun homeAndMicEntriesAreDisabledAliases() {
+        val aliases = application.kids("activity-alias")
+        assertEquals(setOf(".HomeEntry", ".MicEntry"), aliases.map { it.attr("name") }.toSet())
+        for (a in aliases) {
+            assertEquals(".AgendaActivity", a.attr("targetActivity"))
+            assertEquals("false", a.attr("enabled"), "${a.attr("name")} must be off as installed")
+            assertEquals("true", a.attr("exported"))
+            assertNull(a.attr("permission"))
+        }
+        val home = aliases.single { it.attr("name") == ".HomeEntry" }.kids("intent-filter").single()
+        assertEquals(listOf("android.intent.action.MAIN"), home.kids("action").map { it.attr("name") })
+        assertEquals(
+            setOf("android.intent.category.HOME", "android.intent.category.DEFAULT"),
+            home.kids("category").map { it.attr("name") }.toSet(),
+        )
+        val mic = aliases.single { it.attr("name") == ".MicEntry" }.kids("intent-filter").single()
+        assertEquals(
+            setOf("android.intent.action.ASSIST", "android.intent.action.VOICE_COMMAND", "android.intent.action.SEARCH_LONG_PRESS"),
+            mic.kids("action").map { it.attr("name") }.toSet(),
+        )
+        assertEquals(listOf("android.intent.category.DEFAULT"), mic.kids("category").map { it.attr("name") })
+        val text = File(app, "src/main/AndroidManifest.xml").readText()
+        assertEquals(1, Regex("android\\.intent\\.category\\.HOME").findAll(text).count())
     }
 
     @Test fun agendaIsAOnlyLeanbackLauncherEntry() {
@@ -93,6 +117,7 @@ class AppManifestTest {
         )
         assertEquals(listOf(".ProvisionProvider"), application.kids("provider").map { it.attr("name") })
         assertTrue(application.kids("service").isEmpty() && application.kids("receiver").isEmpty())
+        assertEquals(setOf(".HomeEntry", ".MicEntry"), application.kids("activity-alias").map { it.attr("name") }.toSet())
     }
 
     @Test fun referencedResourcesExist() {
