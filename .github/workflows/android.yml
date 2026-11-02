@@ -307,14 +307,19 @@ jobs:
       # AC8 baseline (spec M7-1.5: cold start before and after): pull requests only. Builds the merge base's release APK,
       # unsigned (no signing secrets exist on pull_request), from a git worktree, with that tree's own wrapper,
       # verification metadata and gradle-quiet.sh. The emulator job signs it with the same throwaway key.
+      # Only against main (its wrapper and verification metadata are already reviewed there). A failed base build is
+      # not a PR failure: the path stays empty, nothing is uploaded, and the emulator QA reports "not compared".
       - name: Build base APK (AC8 baseline)
         id: base
-        if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request'
+        if: steps.detect.outputs.present == 'true' && github.event_name == 'pull_request' && github.base_ref == 'main'
+        continue-on-error: true
         env:
+          BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          [ "$BASE_REF" = main ] || { echo "::notice::base is $BASE_REF, not main; no AC8 baseline"; exit 0; }
           mb=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           echo "AC8 baseline: merge base $mb"
           git worktree add --detach "$RUNNER_TEMP/base" "$mb"
@@ -328,10 +333,12 @@ jobs:
           shopt -s nullglob
           apks=(app/build/outputs/apk/release/*.apk)
           [ "${#apks[@]}" -eq 1 ] || { echo "::error::base build: expected one release APK, found ${#apks[@]}"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/base-apk"
+          mkdir -p "$RUNNER_TEMP/base-apk" "$RUNNER_TEMP/base-apk-unzipped"
           cp "${apks[0]}" "$RUNNER_TEMP/base-apk/tv-home-base.apk"
-          "$GITHUB_WORKSPACE/scripts/ci/scan-secrets.sh" "$RUNNER_TEMP/assemble-base.log"
           ./gradlew --stop >/dev/null 2>&1 || true
+          # Scanned like the PR APK (dex and resources, plus the build log) before it can be uploaded.
+          unzip -q -o "$RUNNER_TEMP/base-apk/tv-home-base.apk" -d "$RUNNER_TEMP/base-apk-unzipped"
+          "$GITHUB_WORKSPACE/scripts/ci/scan-secrets.sh" "$RUNNER_TEMP/base-apk-unzipped" "$RUNNER_TEMP/assemble-base.log"
           echo "path=$RUNNER_TEMP/base-apk/tv-home-base.apk" >> "$GITHUB_OUTPUT"
 
       - name: Upload base APK (AC8 baseline)
@@ -418,9 +425,9 @@ jobs:
             --out "$RUNNER_TEMP/qa-signed.apk" "$RUNNER_TEMP/aligned.apk"
           "$bt/apksigner" verify "$RUNNER_TEMP/qa-signed.apk"
           # The AC8 baseline APK gets the same throwaway key, so it installs over the PR APK (same signer).
-          base=("$RUNNER_TEMP"/base-apk/*.apk)
-          if [ "${#base[@]}" -eq 1 ]; then
-            "$bt/zipalign" -f -p 4 "${base[0]}" "$RUNNER_TEMP/aligned-base.apk"
+          base="$RUNNER_TEMP/base-apk/tv-home-base.apk"
+          if [ -f "$base" ]; then
+            "$bt/zipalign" -f -p 4 "$base" "$RUNNER_TEMP/aligned-base.apk"
             "$bt/apksigner" sign --ks "$RUNNER_TEMP/qa-throwaway.jks" --ks-pass env:QA_PW --key-pass env:QA_PW \
               --v4-signing-enabled false \
               --out "$RUNNER_TEMP/qa-base-signed.apk" "$RUNNER_TEMP/aligned-base.apk"

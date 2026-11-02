@@ -104,7 +104,8 @@ network() { # on|off
 # Each prints TotalTime and WaitTime. The limit (MAX_COLD_MS) is unchanged; 5 samples make the median robust to the
 # swiftshader runner's noise (same code measured 979-4180 ms across runs with 3 samples).
 COLD_RUNS=5
-COLD_MEDIAN=""
+COLD_MEDIAN=""; COLD_TIMES=()
+median_of() { sort -n | awk '{a[NR]=$1} END {if (NR % 2) print a[(NR+1)/2]; else print int((a[NR/2]+a[NR/2+1])/2)}'; }
 cold_start() { # $1 = label, $2 = "nolimit" to skip the MAX_COLD_MS check (the baseline); sets COLD_MEDIAN
   local out t w times=() i
   for ((i = 0; i <= COLD_RUNS; i++)); do
@@ -123,7 +124,7 @@ cold_start() { # $1 = label, $2 = "nolimit" to skip the MAX_COLD_MS check (the b
   local median; median=$(printf '%s\n' "${times[@]}" | sort -n | sed -n "$(( (COLD_RUNS + 1) / 2 ))p")
   echo "$1 cold start TotalTime ms: ${times[*]} (median $median, limit $MAX_COLD_MS)"
   echo "$1 ${times[*]} median=$median" >> "$OUT/cold-start.txt"
-  COLD_MEDIAN=$median
+  COLD_MEDIAN=$median; COLD_TIMES=("${times[@]}")
   [[ ${2:-} == nolimit ]] && return 0
   (( median < MAX_COLD_MS )) || fail "$1: median cold start ${median} ms is not under ${MAX_COLD_MS} ms (AC8)"
   if [[ $OFFLINE_VERIFIED == yes ]]; then pass "$1: cold start median ${median} ms, app offline (AC8-offline VERIFIED)"
@@ -187,26 +188,38 @@ step "AC8 cold start, network off, no cache, not set up"
 sh_ pm clear "$PKG" >/dev/null || true
 network off
 cold_start "offline-not-set-up"
-pr_median=$COLD_MEDIAN
-# AC8 before/after (spec M7-1.5): the merge base's APK, same state (pm clear, network off), same method. The PR is
-# measured first, on the freshly booted emulator, so any warm-up advantage goes to the base, not the PR.
+# AC8 before/after (spec M7-1.5): the merge base's APK, same state (pm clear, network off), same method. Blocks are
+# interleaved PR, base, PR, base (the PR block above is the first), and the pooled 10-run medians are compared, so
+# emulator drift during the job hits both sides. The PR goes first in each pair (strict). If the gate trips, one more
+# PR/base pair is measured and pooled before failing. Every number is printed.
+pr_times=("${COLD_TIMES[@]}"); base_times=()
+use_apk() { # $1 = apk, $2 = label
+  a install --no-incremental -r -g "$1" 2>&1 | tr -d '\r' | grep -q Success || fail "AC8 baseline: installing the $2 APK failed"
+  sh_ pm clear "$PKG" >/dev/null || true
+  network off
+}
+ac8_pair() { # $1 = round; a PR block then a base block (the first round's PR block is the one above)
+  if (( $1 > 1 )); then use_apk "$APK" PR; cold_start "pr-offline-not-set-up-$1" nolimit; pr_times+=("${COLD_TIMES[@]}"); fi
+  use_apk "$BASE_APK" base; cold_start "base-offline-not-set-up-$1" nolimit; base_times+=("${COLD_TIMES[@]}")
+}
+ac8_compare() { # sets delta; prints everything
+  pr_pooled=$(printf '%s\n' "${pr_times[@]}" | median_of); base_pooled=$(printf '%s\n' "${base_times[@]}" | median_of)
+  delta=$(( pr_pooled - base_pooled ))
+  echo "AC8 before/after: PR runs ${pr_times[*]} (median $pr_pooled); base runs ${base_times[*]} (median $base_pooled); delta ${delta} ms (max +${MAX_REGRESSION_MS})"
+  echo "baseline pr=[${pr_times[*]}] base=[${base_times[*]}] pr_median=$pr_pooled base_median=$base_pooled delta=$delta" >> "$OUT/cold-start.txt"
+}
 if [[ -n $BASE_APK && -f $BASE_APK ]]; then
-  a install --no-incremental -r -g "$BASE_APK" 2>&1 | tr -d '\r' | grep -q Success || fail "AC8 baseline: base APK install failed"
-  sh_ pm clear "$PKG" >/dev/null || true
-  network off
-  cold_start "base-offline-not-set-up" nolimit
-  base_median=$COLD_MEDIAN
-  a install --no-incremental -r -g "$APK" 2>&1 | tr -d '\r' | grep -q Success || fail "AC8 baseline: reinstalling the PR APK failed"
-  sh_ pm clear "$PKG" >/dev/null || true
-  network off
-  delta=$(( pr_median - base_median ))
-  echo "AC8 before/after: base median ${base_median} ms, PR median ${pr_median} ms, delta ${delta} ms (max +${MAX_REGRESSION_MS})"
-  echo "baseline base=$base_median pr=$pr_median delta=$delta" >> "$OUT/cold-start.txt"
-  (( delta <= MAX_REGRESSION_MS )) || fail "AC8: PR cold start median ${pr_median} ms is ${delta} ms over the base's ${base_median} ms (max ${MAX_REGRESSION_MS})"
+  ac8_pair 1; ac8_pair 2; ac8_compare
+  if (( delta > MAX_REGRESSION_MS )); then
+    warn "AC8: delta ${delta} ms over ${MAX_REGRESSION_MS}; measuring one more PR/base pair before deciding"
+    ac8_pair 3; ac8_compare
+  fi
+  use_apk "$APK" PR
+  (( delta <= MAX_REGRESSION_MS )) || fail "AC8: PR cold start median ${pr_pooled} ms is ${delta} ms over the base's ${base_pooled} ms (max ${MAX_REGRESSION_MS})"
   pass "AC8: PR cold start within ${MAX_REGRESSION_MS} ms of the merge base (delta ${delta} ms)"
   sh_ am start -W -n "$MAIN" >/dev/null; sleep 3   # the screen checks below expect the PR app up
 else
-  note "AC8 baseline NOT COMPARED: no base APK (not a pull request, or the merge base has no app)"
+  note "AC8 baseline NOT COMPARED: no base APK (not a PR against main, or the base did not build)"
 fi
 expect_text "offline-not-set-up" "Calendar not set up"
 a exec-out screencap -p > "$SHOT_DIR/tv-home-home.png"
