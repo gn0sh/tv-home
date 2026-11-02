@@ -9,6 +9,18 @@
 .PARAMETER Key     calendar_url (default) or anthropic_api_key
 .PARAMETER Serial  adb device serial or ip:port; needed only if more than one device is connected
 .PARAMETER Clear   remove the stored value instead of setting one
+.NOTES
+  Non-secret settings are plain adb commands (a refused value stores nothing). $P = content://com.gnosh.tvhome.provision
+    Weather location:  adb shell content insert --uri $P/location --bind lat:d:36.53 --bind lon:d:-87.36
+    Panel off/on:      adb shell content insert --uri $P/panel --bind id:s:alerts --bind on:b:false
+                       (id: weather, alerts, games, brief; on: true or false. Brief ships off.)
+    All panels reset:  adb shell content delete --uri $P/panel
+    TV profile:        adb shell content insert --uri $P/tv_profile --bind value:s:lg      (lg or vizio)
+    Profile auto:      adb shell content delete --uri $P/tv_profile
+    Travel rule:       adb shell content insert --uri $P/travel --bind keyword:s:Dentist --bind minutes:i:20
+                       (keyword 1-40 chars, minutes 1-180, at most 10 rules; same keyword replaces)
+    Clear travel:      adb shell content delete --uri $P/travel
+  Get-Help .\scripts\provision.ps1 -Full shows this.
 #>
 [CmdletBinding()]
 param(

@@ -147,3 +147,20 @@ dashboard in the TV's app settings, Android switches it off; run `-TurnOn` again
 To undo: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
 By hand, with the remote: press Home twice quickly, open Settings from the TV's own home, then System >
 Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.
+
+## Home screen panels: switches, TV profile, travel times (optional)
+None of these are secrets, so they are plain adb commands (connect first, as in steps 1 and 2). A value the TV does
+not accept is refused and nothing is stored. The same list prints with `scripts/provision.sh -h`.
+```
+$P = "content://com.gnosh.tvhome.provision"
+```
+- **Turn a panel off or on** (weather, alerts, games, brief; the brief ships off):
+  `adb shell content insert --uri $P/panel --bind id:s:alerts --bind on:b:false`.
+  Back to the defaults: `adb shell content delete --uri $P/panel`.
+- **TV profile** (burn-in protection; LG is the default and the safer one):
+  `adb shell content insert --uri $P/tv_profile --bind value:s:vizio` (or `lg`). Back to automatic:
+  `adb shell content delete --uri $P/tv_profile`.
+- **Travel time** ("Leave by 5:40" instead of "in 42 min" for events whose title contains the word):
+  `adb shell content insert --uri $P/travel --bind keyword:s:Dentist --bind minutes:i:20`. Keyword up to 40
+  characters, 1 to 180 minutes, at most 10 rules; the same keyword again replaces its time. Remove all:
+  `adb shell content delete --uri $P/travel`.

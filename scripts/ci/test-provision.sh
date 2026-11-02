@@ -44,4 +44,12 @@ set +e; out=$(echo "$secret" | FAKE_WRITE_OUT="Error: Unknown authority com.gnos
 
 # 5. no am start fallback anywhere
 ! grep -q 'am start' "$t/argv.log" || fail "am start used"
+# 6. -h lists every non-secret settings path and touches no device
+: > "$t/argv.log"
+h=$(run -h)
+for w in /location /panel /tv_profile /travel "id:s:alerts" "on:b:false" "value:s:lg" "minutes:i:20"; do
+  grep -qF -- "$w" <<<"$h" || fail "help lacks $w"
+done
+[[ ! -s $t/argv.log ]] || fail "-h ran adb"
+grep -qF -- "/travel --bind keyword:s:Dentist" "$here/provision.ps1" || fail "provision.ps1 help lacks the travel rule"
 echo "provision.sh tests passed"

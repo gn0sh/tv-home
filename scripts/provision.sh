@@ -3,12 +3,29 @@
 # Usage: provision.sh [-k calendar_url|anthropic_api_key] [-s SERIAL] [-c]   (-c = clear)
 # The value is read from stdin, or from the env var PROVISION_VALUE (kept off argv; unset right after reading).
 # Set PROVISION_CHECK_FEED=1 to download a calendar feed once and print counts only.
+# -h prints the adb commands for the non-secret settings (location, panel switches, TV profile, travel rules).
 set -euo pipefail
 umask 077
 
+settings_help() {
+  cat <<'TXT'
+Non-secret settings (not secrets, so plain adb arguments are fine; a refused value stores nothing):
+  P=content://com.gnosh.tvhome.provision
+  Weather location:  adb shell content insert --uri $P/location --bind lat:d:36.53 --bind lon:d:-87.36
+  Panel off/on:      adb shell content insert --uri $P/panel --bind id:s:alerts --bind on:b:false
+                     (id: weather, alerts, games, brief; on: true or false. Brief ships off.)
+  All panels reset:  adb shell content delete --uri $P/panel
+  TV profile:        adb shell content insert --uri $P/tv_profile --bind value:s:lg      (lg or vizio)
+  Profile auto:      adb shell content delete --uri $P/tv_profile
+  Travel rule:       adb shell content insert --uri $P/travel --bind keyword:s:Dentist --bind minutes:i:20
+                     (keyword 1-40 chars, minutes 1-180, at most 10 rules; same keyword replaces)
+  Clear travel:      adb shell content delete --uri $P/travel
+TXT
+}
+
 key=calendar_url; serial=""; clear=0
-while getopts "k:s:c" o; do
-  case $o in k) key=$OPTARG ;; s) serial=$OPTARG ;; c) clear=1 ;; *) echo "usage: provision.sh [-k key] [-s serial] [-c]" >&2; exit 2 ;; esac
+while getopts "k:s:ch" o; do
+  case $o in k) key=$OPTARG ;; s) serial=$OPTARG ;; c) clear=1 ;; h) settings_help; exit 0 ;; *) echo "usage: provision.sh [-k key] [-s serial] [-c] [-h]" >&2; exit 2 ;; esac
 done
 case $key in calendar_url|anthropic_api_key) ;; *) echo "ERROR: unknown key" >&2; exit 2 ;; esac
 [[ -z $serial || $serial =~ ^[A-Za-z0-9:._-]+$ ]] || { echo "ERROR: odd serial" >&2; exit 2; }
