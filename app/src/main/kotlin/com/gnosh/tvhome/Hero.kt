@@ -65,6 +65,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import tvhome.core.feeds.GameDay
+import tvhome.core.feeds.PanelPolicies
+import tvhome.core.feeds.PanelView
+import tvhome.core.feeds.view
 import tvhome.core.feeds.Precip
 import tvhome.core.ui.HeroMotif
 import tvhome.core.ui.HeroTheme
@@ -99,13 +102,15 @@ fun HeroLayer(label: () -> String, modifier: Modifier = Modifier) {
     val snap by feeds.snapshot.collectAsState()
     val zone = ZoneId.systemDefault()
     val instant = Instant.now()
-    val game = GameDay.select(snap.games, instant, zone)
+    // M7-B4: values are stamped; the panel rule (weather hidden at 2 h) moved from LiveFeeds to view().
+    val weather = (view(snap.weather, PanelPolicies.WEATHER, true, instant) as? PanelView.Shown)?.value
+    val game = GameDay.select(snap.games?.value.orEmpty(), instant, zone)
     // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).
     val resolved = HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game)
     val gameLine = game?.let { GameDay.line(it, instant, zone) }
     Box(modifier.fillMaxSize()) {
-        HeroBackdrop(resolved, snap.weather?.precipNow, Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION))
-        HeroTopBar(resolved, now, gameLine, snap.weather?.chip)
+        HeroBackdrop(resolved, weather?.precipNow, Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION))
+        HeroTopBar(resolved, now, gameLine, weather?.chip)
         HeroText(resolved, label)
     }
 }
