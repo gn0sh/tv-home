@@ -1,16 +1,20 @@
 # tv-home status
 
 Feature: tv-home (custom Google TV home screen). Priority: Brian 2026-10-31 23:47Z: install the dashboard ASAP within usage (first claim on this thread).
-Stage (2026-11-01 20:05Z): M2 tiles (PR #3), M2b calendar tile + full screen (PR #4), M2c dock row (PR #5) and M1b lean Ask Claude (PR #6) all INSTALLED on Brian's Google TV. Brian provisioned a dedicated spend-limited API key; first live question worked (it recommended The Office). LG BX found at 192.168.68.80 (MAC 58:FD:B1:C2:7B:EE), PAIRED over wss 3001, volume tested 7->8->7; ws 3000 not needed. Unverified on device: full-screen event-row navigation, Up-restore to a scrolled app tile, Open on 2 services (M1b AC5), AC8-offline. Next (when Brian asks): M1b-2 ask during playback, M6 voice reskin, web search for Ask Claude.
+Stage (2026-11-02 09:30Z): M2 row edit mode, hero, feeds and Blender art (PRs #9-#13) installed on Brian's TV 01:39Z.
+PR #14 (PC on-screen remote, Ask opens listening) and PR #15 (M3 Home watch, tile a11y follow-ups) are green and
+reviewed, waiting for Brian to merge, type "install", and run `scripts/tv-home-takeover.ps1 -TurnOn`. Next: the on-TV
+checks in spec M3.1 (launcherx). The mic button cannot be taken over (platform), so it stays Google Assistant.
+Earlier stage (2026-11-01 20:05Z): M2 tiles (PR #3), M2b calendar tile + full screen (PR #4), M2c dock row (PR #5) and M1b lean Ask Claude (PR #6) all INSTALLED on Brian's Google TV. Brian provisioned a dedicated spend-limited API key; first live question worked (it recommended The Office). LG BX found at 192.168.68.80 (MAC 58:FD:B1:C2:7B:EE), PAIRED over wss 3001, volume tested 7->8->7; ws 3000 not needed. Unverified on device: full-screen event-row navigation, Up-restore to a scrolled app tile, Open on 2 services (M1b AC5), AC8-offline. Next (when Brian asks): M1b-2 ask during playback, M6 voice reskin, web search for Ask Claude.
 Earlier stage (2026-11-01 15:25Z): M1 INSTALLED on Brian's Google TV (T11, his typed OK 15:04Z) and provisioned by Brian; agenda shows his calendar. Signed APK from run 41318532029, cert SHA-256 18:E2:7C:A1:DF:5A:EA:B8:4C:E4:65:8E:0E:A3:94:02:67:77:1F:71:DE:9C:4B:49:07:96:F2:7C:2C:4B:64:2A. adb (platform-tools) at %LOCALAPPDATA%\tv-home-tools on his PC. PS 5.1 signing fix merged (PR #2). Next (when usage allows): M2 launcher (Home button), AC8-offline check on the real TV, LG volume per card.
 Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on claude/project-thread-i5nn8b). T8 provisioning and T7 signing scripts approved (2dd6d92). Remaining M1: first CI run + T9 emulator QA after the Nov 1 minutes reset (reminder set for 01:00Z), PR to main, then Brian runs the signing script and T11 install (hard stop). M1c: Brian (21:38Z) said push ahead cheaply on Opus. C1 server, C4 Google TV, C3 LG built and approved (4eb785d, 200 tests). C2 waits on M1b B1 (services.json). C5 (Brian typed OK 22:56Z): installed on his PC (uv 0.11.32, 200 tests, MCP registered user scope). Google TV 192.168.68.71 paired; status/open/keys/idle-20s verified on screen by Brian. LG 192.168.68.68 (MAC 58:DB:09:A4:36:B8, unconfirmed) refuses wss 3001, only ws 3000 open: LG is OLED65BXPUA (2020), webOS 5.6.2-21; 3001 refused with screen on, 3000 open; not paired, no code changed. Turn on via Wi-Fi now on. Decision card to Brian 23:18Z: update LG firmware (rec) / allow unencrypted LG-only exception (needs security review) / skip LG. Deco reservations pending (Google TV uses a private MAC). M4 PC game streaming added to spec (later). Spec at 7d04d4e covers M1, M1b (Ask Claude + ask-while-playing), M1c (control from Claude). Architecture + ADRs 0001-0003 merged fb24a2a. Order: M1 -> M1c -> M1b (architect rec: M1c needs no API key or spending). Mockup shown to Brian: https://claude.ai/artifact/L8f5rSyjZGA46d5BuJEier
 
 ## Blockers
-- Usage pacing: NORMAL as of 2026-11-01 12:24Z (83%, under pace).
-- No Android SDK in the cloud sandbox (dl.google.com blocked). APKs build in GitHub Actions; private-repo minutes reset 2026-11-01 00:00Z.
+- None for the team. Platform facts from PR #15 CI (API 34): a HOME alias + `set-home-activity` loses to the stock
+  launcher's priority-2 HOME filter; an accessibility key filter never receives HOME, SEARCH or ASSIST.
 
 ## Waiting on the CEO
-- (none open)
+- Merge #14 then #15, type install, run -TurnOn (yes/no) | https://github.com/gn0sh/tv-home/pull/14 , https://github.com/gn0sh/tv-home/pull/15 | merge both, type "install" in the thread, then `.\scripts\tv-home-takeover.ps1 -TurnOn` | asked 2026-11-02 08:30Z in the "Build Google TV dashboard" thread | default: nothing changes on the TV
 
 ## Problem-key ledger
 | Key | Returns | Source |
@@ -35,6 +39,10 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | old-dtstart-recurrence-missing | 1 | security review |
 | offline-not-really-off, qa-silent-degrade | 1 | T9 review (fixed 3054ab3; AC8-offline NOT VERIFIED on emulator) |
 | blocking-in-suspend, fetcher-customize-loosens-tls, redactor-over-redacts, pii-in-data-class-tostring | 1 | M1 core reviews |
+
+| home-recovery-unreachable | 3 | PR #15 security (key filter, hold-Home, Home watch); escape defined as a tested policy (HomeRedirect in :core: double press + crash-loop pause), approved |
+| home-redirect-crash-loop | 2 | PR #15 security, then code review (limit unreachable); fixed with init guard + tests |
+| home-dead-on-start-failure, a11y-list-regex-too-strict, rollback-file-not-per-serial, home-set-stale, a11y-event-breadth, m3-staying-reset-overlay, m3-boot-claim, m3-launcher-unverified (open: on-TV) | 1 | PR #15 reviews |
 
 ## Run ledger
 | Date | Role | Model/effort | Task | Outcome |
@@ -91,3 +99,7 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | 2026-11-01 | frontend-engineer | opus | M1b lean Ask Claude | done; 4 fixes after review |
 | 2026-11-01 | security-engineer + code-reviewer | opus | M1b review + delta | approve (1 medium fixed) -> approve |
 | 2026-11-01 | manager + RC on Brian's PC | - | M2/M2b/M2c installs, LG pairing | installed; M1b adb install blocked by PC classifier, Brian ran it; LG paired |
+| 2026-11-02 | security-engineer | opus | PR #15 M3 key filter | request changes (home-recovery-unreachable high) -> approve |
+| 2026-11-02 | code-reviewer | opus | PR #15 M3 key filter | request changes; then superseded (key filter never receives HOME) `waste:superseded` |
+| 2026-11-02 | security-engineer | opus | PR #15 Home watch fresh + 2 deltas | request changes -> request changes (CI timing) -> approve |
+| 2026-11-02 | code-reviewer | opus | PR #15 Home watch fresh + delta | request changes (burst limit unreachable) -> approve with nits |
