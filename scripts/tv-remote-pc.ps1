@@ -29,7 +29,7 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 # A form that sees every key before its buttons do (arrow keys would otherwise move between buttons), except while
 # the text box has focus.
-Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
 using System;
 using System.Windows.Forms;
 public class TvRemoteForm : Form {
@@ -60,7 +60,7 @@ function Start-TvShell {
     $c.FileName = $Adb; $c.Arguments = "connect $Serial"; $c.UseShellExecute = $false; $c.CreateNoWindow = $true
     $c.RedirectStandardOutput = $true; $c.RedirectStandardError = $true
     $cp = [System.Diagnostics.Process]::Start($c)
-    [void]$cp.WaitForExit(5000)
+    [void]$cp.WaitForExit(2000)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Adb
     $psi.Arguments = "-s $Serial shell"
@@ -77,19 +77,27 @@ function Start-TvShell {
     $script:shell = $p
 }
 
+# All of this runs on the window's thread, so a TV that is off must not freeze it press after press
+# (ui-freeze-unreachable): one reconnect attempt per press (about 2.3 s at most), and none for 10 s after one failed,
+# so presses made meanwhile are dropped with a message rather than queued and replayed later.
+$script:failedAt = [DateTime]::MinValue
 function Send-Tv([string]$line) {
-    for ($try = 0; $try -lt 2; $try++) {
-        try {
-            if ($null -eq $script:shell -or $script:shell.HasExited) { Start-TvShell }
-            $script:shell.StandardInput.WriteLine($line)
-            $script:shell.StandardInput.Flush()
-            $status.Text = 'Connected to ' + $Serial
-            return
-        } catch {
-            $script:shell = $null
+    $offline = "Can't reach the TV at $Serial. Is it on and on the home Wi-Fi? (Retrying in a few seconds.)"
+    try {
+        if ($null -eq $script:shell -or $script:shell.HasExited) {
+            if (([DateTime]::Now - $script:failedAt).TotalSeconds -lt 10) { $status.Text = $offline; return }
+            $status.Text = 'Connecting...'; $status.Refresh()
+            Start-TvShell
         }
+        $script:shell.StandardInput.WriteLine($line)
+        $script:shell.StandardInput.Flush()
+        # A write reaches the local adb; it does not prove the TV acted (stale-connected-status), so say "Sent".
+        $status.Text = 'Sent to ' + $Serial
+    } catch {
+        $script:shell = $null
+        $script:failedAt = [DateTime]::Now
+        $status.Text = $offline
     }
-    $status.Text = "Can't reach the TV at $Serial. Is it on and on the home Wi-Fi?"
 }
 
 function Send-Key([string]$code) {
@@ -105,7 +113,8 @@ function Send-App([string]$pkg) {
 function Send-Text([string]$text) {
     $t = $text.Trim()
     if ($t.Length -eq 0) { return }
-    if ($t.Length -gt 100 -or $t -notmatch '\A[A-Za-z0-9 .,@_-]+\z') {
+    # No leading '-', which input would read as an option (input-text-leading-dash).
+    if ($t.Length -gt 100 -or $t -notmatch '\A[A-Za-z0-9 .,@_][A-Za-z0-9 .,@_-]*\z') {
         $status.Text = 'Text can only use letters, numbers, spaces and . , - _ @ (up to 100).'
         return
     }
@@ -185,9 +194,9 @@ $status.Font = New-Object System.Drawing.Font('Segoe UI', 10)
 $status.Text = 'Connecting...'
 $form.Controls.Add($status)
 
-# Keyboard: arrows, Enter = OK, Backspace = Back, Escape = Home. In the text box, Enter sends the text and Escape
+# Keyboard: arrows, Enter = OK (KeyData names it Return: enter-key-return), Backspace = Back, Escape = Home. In the text box, Enter sends the text and Escape
 # leaves the box.
-$keyMap = @{ Up = 'DPAD_UP'; Down = 'DPAD_DOWN'; Left = 'DPAD_LEFT'; Right = 'DPAD_RIGHT'; Enter = 'DPAD_CENTER'; Back = 'BACK'; Escape = 'HOME' }
+$keyMap = @{ Up = 'DPAD_UP'; Down = 'DPAD_DOWN'; Left = 'DPAD_LEFT'; Right = 'DPAD_RIGHT'; Enter = 'DPAD_CENTER'; Return = 'DPAD_CENTER'; Back = 'BACK'; Escape = 'HOME' }
 $form.add_RemoteKey({
     param($s, $e)
     $k = [string]$e.KeyData
@@ -200,8 +209,8 @@ $box.Add_KeyDown({
 })
 $form.Add_Shown({
     $form.ActiveControl = $null
-    try { Start-TvShell; $status.Text = 'Connected to ' + $Serial }
-    catch { $status.Text = "Can't reach the TV at $Serial. Is it on and on the home Wi-Fi?" }
+    try { Start-TvShell; $status.Text = 'Ready: ' + $Serial }
+    catch { $script:failedAt = [DateTime]::Now; $status.Text = "Can't reach the TV at $Serial. Is it on and on the home Wi-Fi?" }
 })
 $form.Add_FormClosed({
     if ($script:shell -and -not $script:shell.HasExited) {
