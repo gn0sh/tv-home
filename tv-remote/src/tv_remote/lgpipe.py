@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import weakref
 
 from .devices import CertificateChanged, DeviceRefused, DeviceUnreachable, LgBackend, NotPaired
 
@@ -18,10 +19,34 @@ VOLUME_CAP = 60  # the same cap as lg_volume (ADR 0003)
 COMMANDS = ("up", "down", "mute")
 
 
+_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def lock_for(lg: LgBackend) -> asyncio.Lock:
+    """One lock per TV per event loop: commands to the same TV run one at a time (volume-cap-race)."""
+    loop = asyncio.get_running_loop()
+    held = _LOCKS.get(lg)
+    if held is None or held[0] is not loop:
+        held = (loop, asyncio.Lock())
+        _LOCKS[lg] = held
+    return held[1]
+
+
 async def handle(lg: LgBackend, line: str) -> str:
     cmd = line.strip().lower()
     if cmd not in COMMANDS:
         return "error unknown command"
+    # Read, step and clamp are one unit (volume-cap-race): two presses at 59 must not both step, and a caller that
+    # gives up (timeout, window closing) must not cancel it between a step up and the clamp, so it is shielded.
+    return await asyncio.shield(_locked(lg, cmd))
+
+
+async def _locked(lg: LgBackend, cmd: str) -> str:
+    async with lock_for(lg):
+        return await _run(lg, cmd)
+
+
+async def _run(lg: LgBackend, cmd: str) -> str:
     try:
         if cmd == "mute":
             st = await lg.status()
@@ -38,6 +63,9 @@ async def handle(lg: LgBackend, line: str) -> str:
                     current = await lg.set_volume(VOLUME_CAP)
                 return "ok " + str(current)
         level = await lg.volume_step(cmd)
+        if cmd == "up" and level is None:
+            # The TV did not say where it landed; look, so a step of more than one cannot stay above the cap.
+            level = (await lg.status()).volume
         if level is not None and level > VOLUME_CAP:
             level = await lg.set_volume(VOLUME_CAP)
         return "ok " + ("-" if level is None else str(level))

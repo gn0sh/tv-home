@@ -246,7 +246,7 @@ class LgVolume:
 
     def close(self, wait: float = 1.5) -> None:
         """Shutdown (shutdown-linger): refuse new presses, cancel waiting ones at once, close the LG's websocket and
-        HTTP session (lg-session-leak), then stop the loop. Bounded by ``wait`` seconds."""
+        HTTP session (lg-session-leak), then stop the loop. Bounded by about 2 x ``wait`` seconds."""
         with self._lock:
             if self._closed:
                 return
@@ -256,8 +256,20 @@ class LgVolume:
             fut.cancel()
         closer = getattr(self._lg, "close", None)
         if closer is not None:
+            from .lgpipe import lock_for
+
+            async def close_after_current():
+                # A command already running finishes its clamp first; one stuck on a TV that does not answer is
+                # given up on after `wait` (it has nothing to clamp: the TV is not acting on it either).
+                lock = lock_for(self._lg)
+                try:
+                    await asyncio.wait_for(lock.acquire(), wait)
+                except asyncio.TimeoutError:
+                    pass
+                await closer()
+
             try:
-                asyncio.run_coroutine_threadsafe(closer(), self._loop).result(timeout=wait)
+                asyncio.run_coroutine_threadsafe(close_after_current(), self._loop).result(timeout=wait * 2)
             except Exception:  # noqa: BLE001  a TV that does not answer must not hold the exit
                 pass
         self._loop.call_soon_threadsafe(self._loop.stop)

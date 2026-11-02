@@ -114,3 +114,63 @@ def test_serve_until_eof():
 
     run(serve(FakeLg(5), read_line, out.append))
     assert out == ["ok 6", "ok muted"]
+
+
+class SlowLg(FakeLg):
+    """A TV that takes a moment for each request, and records the highest volume it ever reached."""
+
+    def __init__(self, volume, step=1):
+        super().__init__(volume)
+        self.step, self.highest = step, volume
+
+    async def status(self):
+        await asyncio.sleep(0.01)
+        return await super().status()
+
+    async def volume_step(self, direction):
+        await asyncio.sleep(0.02)
+        level = await super().volume_step(direction)
+        self.highest = max(self.highest, level)
+        return level
+
+
+def test_two_concurrent_ups_at_59_never_pass_the_cap():
+    lg = SlowLg(59)
+
+    async def both():
+        return await asyncio.gather(handle(lg, "up"), handle(lg, "up"))
+
+    assert sorted(run(both())) == ["ok 60", "ok 60"]
+    assert lg.volume == 60 and lg.highest == 60
+    assert lg.calls == ["up"]  # the second press saw 60 and did not step
+
+
+def test_a_cancel_between_step_and_clamp_still_clamps():
+    lg = SlowLg(59, step=3)  # lands on 62, so the clamp is needed
+
+    async def press_then_give_up():
+        task = asyncio.ensure_future(handle(lg, "up"))
+        await asyncio.sleep(0.015)  # inside volume_step
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0.1)  # the shielded command runs on
+
+    run(press_then_give_up())
+    assert lg.volume == 60 and lg.calls == ["up", ("set", 60)]
+
+
+def test_unknown_level_after_a_step_is_read_and_clamped():
+    lg = FakeLg(59)
+    lg.step = 3
+    real_step = lg.volume_step
+
+    async def step_without_level(direction):
+        await real_step(direction)
+        return None
+
+    lg.volume_step = step_without_level
+    assert run(handle(lg, "up")) == "ok 60"
+    assert lg.volume == 60
