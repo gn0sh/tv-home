@@ -269,7 +269,11 @@ $work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 $fit = [math]::Max(0.6, [math]::Min(1.0, ($work.Height - 50) / 960.0))
 if ($fit -lt 1.0) {
     $form.Scale((New-Object System.Drawing.SizeF([single]$fit, [single]$fit)))
-    foreach ($c in @($form) + @($form.Controls)) { $c.Font = New-Object System.Drawing.Font($c.Font.FontFamily, [single]($c.Font.Size * $fit)) }
+    # Read every size first: a child that inherits the form's font would otherwise shrink twice.
+    $sizes = @{}; foreach ($c in @($form.Controls)) { $sizes[$c] = $c.Font }
+    $formFont = $form.Font
+    $form.Font = New-Object System.Drawing.Font($formFont.FontFamily, [single]($formFont.Size * $fit))
+    foreach ($c in @($form.Controls)) { $f = $sizes[$c]; $c.Font = New-Object System.Drawing.Font($f.FontFamily, [single]($f.Size * $fit)) }
 }
 $form.Add_Shown({
     $form.ActiveControl = $null
