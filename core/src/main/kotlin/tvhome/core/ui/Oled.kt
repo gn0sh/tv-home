@@ -98,4 +98,22 @@ object OledTokens {
     const val DIM_TEXT = 0xBEBEBE
     const val NEAR_BLACK_BG = 0x000000
     const val NEAR_BLACK_CLOCK = 0x9A9A9A
+
+    /** The backdrop's brightness in DIM (black scrim at 1 - this), against the active [GlanceTokens.BACKDROP_BRIGHTNESS]. */
+    const val DIM_BACKDROP_BRIGHTNESS = DIM_FIELD_ALPHA
+
+    /** Banner and icon images on the tiles in DIM. */
+    const val DIM_IMAGE_ALPHA = DIM_FIELD_ALPHA
+
+    /** Focus ring in DIM: the focused tile sits still for minutes, so its ring is not left at full brightness. */
+    const val DIM_FOCUS_RING = 0x5B7AA8
+
+    /** Near-black clock size (sp): the one thing left on screen. */
+    const val NEAR_BLACK_CLOCK_SP = 40
 }
+
+/**
+ * The home screen's theme in DIM: every text colour goes to [OledTokens.DIM_TEXT] and the focus ring to
+ * [OledTokens.DIM_FOCUS_RING]. Fills stay (they are already dark); sizes are unchanged, so nothing moves.
+ */
+fun HomeTheme.dimmed(): HomeTheme = copy(text = OledTokens.DIM_TEXT, secondaryText = OledTokens.DIM_TEXT, focusRing = OledTokens.DIM_FOCUS_RING)
