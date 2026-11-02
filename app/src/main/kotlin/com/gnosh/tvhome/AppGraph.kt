@@ -13,6 +13,8 @@ import tvhome.core.assistant.FileCountStore
 import tvhome.core.calendar.IcsCalendarSource
 import tvhome.core.calendar.IcsFetcher
 import tvhome.core.calendar.IcsParse
+import tvhome.core.feeds.HttpFeedFetcher
+import tvhome.core.feeds.LiveFeeds
 import tvhome.core.secrets.SecretKey
 import tvhome.core.secrets.SecretStore
 import tvhome.core.state.AgendaRefresher
@@ -42,6 +44,12 @@ class AppGraph(app: Application) {
         zone = { ZoneId.systemDefault() },
         clock = { Instant.now() },
     )
+
+    /**
+     * Hero live feeds (M2f): weather and game schedules, in memory only. Nothing runs until the hero starts [LiveFeeds.run]
+     * after its first frame. The location comes from [FeedSettings] (set over adb, never in source).
+     */
+    val feeds = LiveFeeds(HttpFeedFetcher(), location = { FeedSettings.location(app) })
 
     /**
      * Ask Claude (M1b lean). The key is read from [secrets] per call and goes only into the request header. The daily

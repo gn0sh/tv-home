@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,10 +48,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
+import java.time.Instant
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.sin
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import tvhome.core.feeds.GameDay
+import tvhome.core.feeds.Precip
 import tvhome.core.ui.HeroMotif
 import tvhome.core.ui.HeroTheme
 import tvhome.core.ui.Tokens
@@ -71,14 +78,31 @@ const val HERO_SUBTITLE = "Press OK to open"
  */
 @Composable
 fun HeroLayer(label: () -> String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     val now by rememberMinuteClock()
-    val theme = remember(now.toLocalDate(), now.hour) { HeroTheme.at(now.toLocalDate(), now.toLocalTime()) }
+    val feeds = remember(context) { (context.applicationContext as TvHomeApp).graph.feeds }
+    // Feed work starts only after the first frame is on screen and a short settle, never on the startup path (AC8). It
+    // runs on Default; the loops hold no state in the composition and stop when the hero leaves it.
+    LaunchedEffect(feeds) {
+        withFrameNanos { }
+        delay(FEEDS_START_DELAY_MS)
+        withContext(Dispatchers.Default) { feeds.run() }
+    }
+    val snap by feeds.snapshot.collectAsState()
+    val zone = ZoneId.systemDefault()
+    val instant = Instant.now()
+    val game = GameDay.select(snap.games, instant, zone)
+    // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).
+    val resolved = HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game)
+    val gameLine = game?.let { GameDay.line(it, instant, zone) }
     Box(modifier.fillMaxSize()) {
-        HeroBackdrop(theme, Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION))
-        HeroTopBar(theme, now)
-        HeroText(theme, label)
+        HeroBackdrop(resolved, snap.weather?.precipNow, Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION))
+        HeroTopBar(resolved, now, gameLine, snap.weather?.chip)
+        HeroText(resolved, label)
     }
 }
+
+private const val FEEDS_START_DELAY_MS = 1500L
 
 /**
  * The current local time. Driven by the system's minute tick and by time and time-zone changes (no `delay`), so it stays
@@ -109,33 +133,42 @@ private fun rememberMinuteClock(): State<LocalDateTime> {
 private val CLOCK_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("h:mm a")
 
 @Composable
-private fun HeroTopBar(theme: HeroTheme, now: LocalDateTime) {
+private fun HeroTopBar(theme: HeroTheme, now: LocalDateTime, gameLine: String?, weather: String?) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val badge = theme.badge
-        if (badge != null) {
-            Text(
-                badge,
-                color = Color(theme.backdropTop or OPAQUE),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.6.sp,
-                modifier = Modifier
-                    .background(Color(theme.accent or OPAQUE), RoundedCornerShape(50))
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-            )
-        } else {
-            Box(Modifier)
+        Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            val badge = theme.badge
+            if (badge != null) {
+                Text(
+                    badge,
+                    color = Color(theme.backdropTop or OPAQUE),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.6.sp,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .background(Color(theme.accent or OPAQUE), RoundedCornerShape(50))
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+            if (gameLine != null) {
+                Text(gameLine, color = Color(theme.text or OPAQUE), fontSize = 20.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
-        Text(
-            CLOCK_FORMAT.format(now),
-            color = Color(theme.text or OPAQUE),
-            fontSize = 24.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            if (weather != null) {
+                Text(weather, color = Color(theme.secondaryText or OPAQUE), fontSize = 20.sp, maxLines = 1)
+            }
+            Text(
+                CLOCK_FORMAT.format(now),
+                color = Color(theme.text or OPAQUE),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 
@@ -175,12 +208,12 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  * - `drawWithCache` builds the brushes and the hill and moon paths once per size and theme, not per frame.
  * - First frame stays cheap: only the gradient and the bottom fade are drawn until the first frame has been shown; the
  *   motif and the animation start after that (cold-start budget, AC8).
- * - Only Christmas animates (slow snowfall). The loop ticks about 15 times a second with a delay, not every vsync, and
+ * - Only Christmas animates (slow snowfall), plus the rain or snow overlay while it is falling now. The loop ticks about 15 times a second with a delay, not every vsync, and
  *   does not run at all when the system animator scale is 0 (snow-uiautomator-idle: QA sets that so uiautomator can
  *   reach an idle state; it also honours the user's "remove animations" choice).
  */
 @Composable
-private fun HeroBackdrop(theme: HeroTheme, modifier: Modifier) {
+private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, modifier: Modifier) {
     val context = LocalContext.current
     val frozen = remember(context) { animationsFrozen(context) }
     var ready by remember { mutableStateOf(false) }
@@ -189,7 +222,7 @@ private fun HeroBackdrop(theme: HeroTheme, modifier: Modifier) {
         withFrameNanos { } // the first frame has been drawn with the plain gradient
         ready = true
     }
-    val animate = ready && !frozen && theme.motif == HeroMotif.SNOW
+    val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || precip != null)
     LaunchedEffect(animate) {
         if (!animate) return@LaunchedEffect
         val t0 = SystemClock.elapsedRealtime()
@@ -219,6 +252,13 @@ private fun HeroBackdrop(theme: HeroTheme, modifier: Modifier) {
                             HeroMotif.DAY -> { drawSun(theme, 0.80f, 0.34f, 0.07f, 0.22f); drawClouds(0.22f) }
                             HeroMotif.SUNSET -> drawSun(theme, 0.74f, 0.88f, 0.14f, 0.34f)
                             HeroMotif.STARS -> drawStars(theme, moon)
+                            HeroMotif.GAME -> drawSun(theme, 0.80f, 0.36f, 0.08f, 0.22f)
+                        }
+                        // Weather motif overlay (never a theme change): particles only when it is falling now.
+                        when (precip) {
+                            Precip.SNOW -> if (theme.motif != HeroMotif.SNOW) drawSnow(tick.longValue)
+                            Precip.RAIN -> drawRain(tick.longValue)
+                            null -> Unit
                         }
                     }
                     drawRect(fade)
@@ -331,6 +371,20 @@ private fun hillPath(w: Float, h: Float): Path = Path().apply {
     cubicTo(w * 0.85f, h * 0.80f, w * 0.95f, h * 0.86f, w, h * 0.83f)
     lineTo(w, h)
     close()
+}
+
+private fun DrawScope.drawRain(tickNs: Long) {
+    val t = tickNs / 1_000_000_000.0
+    for (i in 0 until 70) {
+        val speed = 0.6 + 0.5 * frac(i * 0.37f)
+        val y = ((frac(i * 0.7548776f + 0.2f) + t * speed) % 1.0).toFloat()
+        val x = size.width * frac(i * 0.6180339f + 0.05f) - y * size.width * 0.02f
+        val len = size.height * (0.03f + 0.03f * frac(i * 0.53f))
+        drawLine(
+            Color(0xFFAFC8F0).copy(alpha = 0.25f + 0.2f * frac(i * 0.29f)),
+            Offset(x, size.height * y), Offset(x - len * 0.2f, size.height * y + len), strokeWidth = 2f,
+        )
+    }
 }
 
 private fun frac(x: Float): Float = x - kotlin.math.floor(x)
