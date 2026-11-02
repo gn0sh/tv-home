@@ -93,6 +93,14 @@ class AppManifestTest {
         assertNull(cfg.attr("canRequestTouchExplorationMode"))
     }
 
+    /** a11y-event-breadth: the Home watch reads only an event's type, package and class, never its text or source. */
+    @Test fun homeWatchReadsNoEventContent() {
+        val src = File(app, "src/main/kotlin/com/gnosh/tvhome/HomeWatchService.kt").readText()
+        for (bad in listOf(".text", "getText", ".source", "getSource", "contentDescription", "rootInActiveWindow", "windows", "Log.")) {
+            assertFalse(src.contains(bad), "HomeWatchService must not use $bad")
+        }
+    }
+
     @Test fun agendaIsAOnlyLeanbackLauncherEntry() {
         val a = component("activity", ".AgendaActivity")
         assertEquals("true", a.attr("exported"))

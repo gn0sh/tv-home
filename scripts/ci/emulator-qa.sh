@@ -624,6 +624,15 @@ if ! in_front; then
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
 fi
 pass "m3: Home from another app opens the dashboard"
+# The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
+# Settings; the next Home press goes back to redirecting.
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front && fail "m3: a quick second Home did not leave the TV's own home showing"
+resumed | head -1 | grep -q 'tvlauncher' || fail "m3: a quick second Home did not show the TV's own home ($(resumed | head -1))"
+pass "m3: Home twice quickly leaves the TV's own home (and its Settings) showing"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3: the next Home after the double press did not open the dashboard ($(resumed | head -1))"
+pass "m3: the next Home press opens the dashboard again"
 if (( napps >= 2 )); then
   start=$(focus_after m3); start_name=${start%%|*}
   key DPAD_RIGHT; key DPAD_RIGHT

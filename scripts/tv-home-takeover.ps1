@@ -63,7 +63,7 @@ function Get-TvA11yList {
     $v = Adb @('shell', 'settings', 'get', 'secure', 'enabled_accessibility_services')
     if ($v -eq 'null' -or $v -eq '') { return '' }
     if ($v -notmatch $A11yListRe) {
-        throw "The TV's accessibility list has an unexpected form; stopping without changes. To turn it off with the remote: open Settings from the dashboard's app row, then System > Accessibility > Dashboard Home button."
+        throw "The TV's accessibility list has an unexpected form; stopping without changes. To turn it off with the remote: press Home twice quickly, open Settings, then System > Accessibility > Dashboard Home button."
     }
     return $v
 }

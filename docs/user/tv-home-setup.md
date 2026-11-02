@@ -94,15 +94,17 @@ shows what it will change and asks you to type YES):
 .\scripts\tv-home-takeover.ps1 -TurnOn
 ```
 The remote's Home button, and turning the TV on, then open the dashboard, with focus on the first tile. You will see
-the TV's own home for a moment first; that is expected. Holding Home still opens the TV's quick panel, and Back on the
-dashboard's row stays on the dashboard.
+the TV's own home for a moment first; that is expected. Back on the dashboard's row stays on the dashboard.
+
+**To reach the TV's own home** (its Settings gear, apps and inputs): press Home twice quickly. It stays until the next
+Home press.
 
 How it works: "Dashboard Home button" in the TV's accessibility settings notices when the TV's own home comes up and
-opens the dashboard. It sees only which app came to the front, never what is on screen. (Google TV does not let
+opens the dashboard. It is told which app comes to the front, never what is on screen, and keeps nothing. (Google TV does not let
 another app be the real home, and the system handles the Home and mic keys before any app could catch them, so the
 mic button stays Google Assistant; Ask Claude is on the dashboard and on the PC remote.) If you ever "Force stop" the
 dashboard in the TV's app settings, Android switches it off; run `-TurnOn` again.
 
 To undo: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
-By hand, with the remote: open Settings from the dashboard's app row, then System > Accessibility, and turn off
-"Dashboard Home button". Or uninstall the dashboard.
+By hand, with the remote: press Home twice quickly, open Settings from the TV's own home, then System >
+Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.
