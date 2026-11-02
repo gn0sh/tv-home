@@ -273,7 +273,7 @@ if ($fit -lt 1.0) {
     $sizes = @{}; foreach ($c in @($form.Controls)) { $sizes[$c] = $c.Font }
     $formFont = $form.Font
     $form.Font = New-Object System.Drawing.Font($formFont.FontFamily, [single]($formFont.Size * $fit))
-    foreach ($c in @($form.Controls)) { $f = $sizes[$c]; $c.Font = New-Object System.Drawing.Font($f.FontFamily, [single]($f.Size * $fit)) }
+    foreach ($c in @($form.Controls)) { $f = $sizes[$c]; $c.Font = New-Object System.Drawing.Font($f.FontFamily, [single][math]::Max(8, $f.Size * $fit)) }
 }
 $form.Add_Shown({
     $form.ActiveControl = $null
