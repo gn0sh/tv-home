@@ -51,6 +51,7 @@ class FakeVizio:
         self.report_level, self.delay, self.step = True, 0.0, 1
         self.pair_started = None
         self.highest = volume
+        self.report_mute, self.cname, self.hashval, self.token_reply = True, "volume", 77, TOKEN
 
     async def start(self):
         app = web.Application()
@@ -79,7 +80,7 @@ class FakeVizio:
         if (method, path) == ("PUT", "/pairing/pair"):
             if body.get("PAIRING_REQ_TOKEN") != 424242 or body.get("RESPONSE_VALUE") != PIN:
                 return fail("PAIRING_DENIED")
-            return ok(ITEM={"AUTH_TOKEN": TOKEN})
+            return ok(ITEM={"AUTH_TOKEN": self.token_reply})
         if (method, path) == ("PUT", "/pairing/cancel"):
             return ok()
         if not self.authed(request):
@@ -95,6 +96,8 @@ class FakeVizio:
                     self.volume = max(0, self.volume - 1)
                 elif k["CODE"] in (2, 3):
                     self.muted = k["CODE"] == 3
+                elif k["CODE"] == 4:
+                    self.muted = not self.muted
             return ok()
         if path == "/menu_native/dynamic/tv_settings/audio/volume":
             if method == "PUT":
@@ -102,12 +105,15 @@ class FakeVizio:
                     return fail("INVALID_PARAMETER")
                 self.volume = body["VALUE"]
                 return ok()
-            item = {"HASHVAL": 77, "CNAME": "volume", "TYPE": "T_VALUE_ABS_V1", "NAME": "Volume"}
+            item = {"HASHVAL": self.hashval, "CNAME": self.cname, "TYPE": "T_VALUE_ABS_V1", "NAME": "Volume"}
             if self.report_level:
                 item["VALUE"] = self.volume
             return ok(ITEMS=[item])
         if path == "/menu_native/dynamic/tv_settings/audio/mute":
-            return ok(ITEMS=[{"HASHVAL": 78, "VALUE": "On" if self.muted else "Off"}])
+            item = {"HASHVAL": 78, "CNAME": "mute"}
+            if self.report_mute:
+                item["VALUE"] = "On" if self.muted else "Off"
+            return ok(ITEMS=[item])
         return web.Response(status=404)
 
 
@@ -314,6 +320,145 @@ def test_unknown_level_takes_one_step_for_the_vizio_but_not_the_lg_rule(env):
     step, refuse, keys = run_with(env, body, volume=30)
     assert step == "ok -" and keys == [1]
     assert refuse == "error the Vizio did not report its volume"
+
+
+def test_unknown_level_ups_stop_after_two_in_a_row(env):
+    """vizio-unknown-level-uncapped: a Vizio that never reports its level gets at most 2 ups in a row."""
+    async def body(tv, remote):
+        tv.report_level = False
+        replies = [await vizio(remote, "up") for _ in range(10)]
+        stuck = tv.volume
+        tv.report_level = True
+        after = await vizio(remote, "up")  # a level was read: the count starts again
+        tv.report_level = False
+        again = [await vizio(remote, "up") for _ in range(3)]
+        return replies, stuck, after, again
+
+    replies, stuck, after, again = run_with(env, body, volume=55)
+    assert replies[:2] == ["ok -", "ok -"]
+    assert set(replies[2:]) == {"error the Vizio did not report its volume"} and stuck == 57
+    assert after == "ok 58" and again[:2] == ["ok -", "ok -"] and again[2].startswith("error")
+
+
+def test_mute_with_unknown_state_sends_the_toggle_key(env):
+    async def body(tv, remote):
+        tv.report_mute = False
+        return await vizio(remote, "mute"), tv.keys, tv.muted
+
+    assert run_with(env, body) == ("ok -", [4], True)
+
+
+def test_items_are_used_only_under_their_own_cname(env):
+    async def body(tv, remote):
+        tv.cname = "picture_mode"
+        return await vizio(remote, "up"), tv.keys
+
+    assert run_with(env, body, volume=30) == ("ok -", [1])  # the level was not believed; one unknown step
+
+
+def test_a_bool_hashval_is_not_used(env):
+    async def body(tv, remote):
+        tv.hashval = True
+        with pytest.raises(DeviceRefused):
+            await remote.set_volume(60)
+        return [r for r in tv.requests if r[0] == "PUT"]
+
+    assert run_with(env, body) == []
+
+
+def _plain_http(got):
+    async def steal(request):
+        got.append((request.headers.get("AUTH"), await request.text()))
+        return ok()
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", steal)
+    return app
+
+
+def test_a_redirect_is_refused_and_auth_never_follows_it(env):
+    """vizio-redirect-token-leak: a 3xx is DeviceRefused, and nothing is sent where it points."""
+    tmp_path, ctx, fp, vault = env
+    got = []
+
+    async def go():
+        runner = web.AppRunner(_plain_http(got))
+        await runner.setup()
+        site = web.TCPSite(runner, HOST, 0)
+        await site.start()
+        plain = site._server.sockets[0].getsockname()[1]
+        tv = FakeVizio(ctx)
+        real = tv.route
+
+        async def route(request):
+            if request.path == "/key_command/":
+                raise web.HTTPTemporaryRedirect(f"http://{HOST}:{plain}/steal")
+            return await real(request)
+
+        tv.route = route
+        await tv.start()
+        vault.save(TOKEN, tv.port, fp)
+        remote = VizioRemote(HOST, vault, ports=(tv.port,))
+        try:
+            with pytest.raises(DeviceRefused):
+                await remote.set_mute(True)
+            return await vizio(remote, "up")
+        finally:
+            await remote.close()
+            await tv.stop()
+            await runner.cleanup()
+
+    assert asyncio.run(go()) == "error the Vizio refused"
+    assert got == []
+
+
+def test_a_body_sent_in_pieces_is_read_whole(env):
+    """vizio-partial-body-read."""
+    tmp_path, ctx, fp, vault = env
+
+    async def go():
+        tv = FakeVizio(ctx, volume=30)
+        real = tv.route
+
+        async def route(request):
+            if not request.path.endswith("audio/volume") or request.method != "GET":
+                return await real(request)
+            data = json.dumps({"STATUS": {"RESULT": "SUCCESS"}, "ITEMS": [
+                {"CNAME": "volume", "HASHVAL": 77, "VALUE": 30, "PAD": "x" * 5000}]}).encode()
+            resp = web.StreamResponse()
+            resp.content_type = "application/json"
+            await resp.prepare(request)
+            await resp.write(data[:40])
+            await asyncio.sleep(0.1)
+            await resp.write(data[40:])
+            await resp.write_eof()
+            return resp
+
+        tv.route = route
+        await tv.start()
+        vault.save(TOKEN, tv.port, fp)
+        remote = VizioRemote(HOST, vault, ports=(tv.port,))
+        try:
+            return (await remote.status()).volume
+        finally:
+            await remote.close()
+            await tv.stop()
+
+    assert asyncio.run(go()) == 30
+
+
+@pytest.mark.parametrize("token", ["abc\r\nX-Injected: 1", "", "a" * 129, "tok en", "\x1b[2J"])
+def test_a_strange_token_is_not_stored(env, token):
+    """vizio-token-unvalidated: the token goes into a header later, so only [A-Za-z0-9._-]{1,128} is kept."""
+    async def body(tv, remote):
+        tv.token_reply = token
+        await remote.start_pairing()
+        with pytest.raises(DeviceRefused):
+            await remote.finish_pairing(PIN)
+        return None
+
+    run_with(env, body, paired=False)
+    assert not env[3].paired()
 
 
 def test_not_paired(env):

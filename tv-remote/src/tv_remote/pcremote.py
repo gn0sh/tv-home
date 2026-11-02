@@ -486,6 +486,8 @@ def _interpret(tv: AdbShell, choice: TvChoice, reply: str, cmd: str, name: str, 
         if value.isdigit():
             limit = " (the most this remote allows)" if int(value) >= VOLUME_CAP else ""
             return _reply(True, f"Volume {value}{limit}", via=via, level=int(value), tv=mode)
+        if cmd == "mute":  # the Vizio did not say whether it was muted, so it toggled (vizio-mute-unknown)
+            return _reply(True, "Mute pressed", via=via, tv=mode)
         return _reply(True, "Volume changed", via=via, tv=mode)
     the = "the " + name
     reason = reply[6:] if reply.startswith("error ") else ""

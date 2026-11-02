@@ -19,7 +19,10 @@ VOLUME_CAP = 60  # the same cap as lg_volume (ADR 0003)
 COMMANDS = ("up", "down", "mute")
 
 
+UNKNOWN_UPS_MAX = 2  # ups in a row from an unknown level, then refuse (vizio-unknown-level-uncapped)
+
 _LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_UNKNOWN_UPS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()  # per TV, reset once a level is read
 
 
 def lock_for(lg: LgBackend) -> asyncio.Lock:
@@ -54,14 +57,22 @@ async def _run(lg: LgBackend, cmd: str, name: str = "LG", step_unknown: bool = F
     try:
         if cmd == "mute":
             st = await lg.status()
+            toggle = getattr(lg, "toggle_mute", None)
+            if st.muted is None and step_unknown and toggle is not None:
+                await toggle()  # the Vizio did not say (vizio-mute-unknown): let the TV flip it
+                return "ok -"
             await lg.set_mute(not bool(st.muted))
             return "ok " + ("muted" if not st.muted else "unmuted")
         if cmd == "up":
             # The cap is checked before stepping, as lg_volume does (server.py, finding volume-step-cap): never step
             # up from an unknown level, and never step past 60.
             current = (await lg.status()).volume
-            if current is None and not step_unknown:
+            unknown_ups = _UNKNOWN_UPS.get(lg, 0) if current is None else 0
+            _UNKNOWN_UPS[lg] = unknown_ups
+            if current is None and (not step_unknown or unknown_ups >= UNKNOWN_UPS_MAX):
                 return f"error {the} did not report its volume"
+            if current is None:
+                _UNKNOWN_UPS[lg] = unknown_ups + 1  # before stepping: a step that errors after sending still counts
             if current is not None and current >= VOLUME_CAP:
                 if current > VOLUME_CAP:
                     current = await lg.set_volume(VOLUME_CAP)
@@ -70,6 +81,8 @@ async def _run(lg: LgBackend, cmd: str, name: str = "LG", step_unknown: bool = F
         if cmd == "up" and level is None:
             # The TV did not say where it landed; look, so a step of more than one cannot stay above the cap.
             level = (await lg.status()).volume
+        if level is not None:
+            _UNKNOWN_UPS[lg] = 0
         if level is not None and level > VOLUME_CAP:
             level = await lg.set_volume(VOLUME_CAP)
         return "ok " + ("-" if level is None else str(level))

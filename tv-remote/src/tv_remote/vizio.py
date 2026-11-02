@@ -56,6 +56,7 @@ CONNECT_TIMEOUT = 4.0
 REQUEST_TIMEOUT = 5.0
 MAX_BODY = 256 * 1024
 PIN_RE = re.compile(r"\A\d{4}\Z")
+TOKEN_RE = re.compile(r"\A[A-Za-z0-9._-]{1,128}\Z")  # goes into an HTTP header: nothing else is accepted
 _NOT_PAIRED = {"requires_pairing", "blocked", "auth_failed", "unauthorized"}
 
 
@@ -176,11 +177,17 @@ class VizioRemote:
         url = f"https://{self.host}:{port}{path}"
         sent = False
         try:
-            async with self._session.request(method, url, headers=headers,
+            # Never follow a redirect (vizio-redirect-token-leak): aiohttp would resend AUTH, even over plain http.
+            async with self._session.request(method, url, headers=headers, allow_redirects=False,
                                              data=None if body is None else json.dumps(body)) as resp:
                 sent = True
-                raw = await resp.content.read(MAX_BODY + 1)
                 status = resp.status
+                raw = b""
+                while len(raw) <= MAX_BODY:  # to EOF, however the TV splits it (vizio-partial-body-read)
+                    chunk = await resp.content.read(MAX_BODY + 1 - len(raw))
+                    if not chunk:
+                        break
+                    raw += chunk
         except BaseException as exc:
             await self.close()
             if ctx.tv_pin_mismatch:
@@ -195,7 +202,7 @@ class VizioRemote:
             raise DeviceRefused("The Vizio sent too much data.")
         if status in (401, 403):
             raise NotPaired("vizio")
-        if status != 200:
+        if status != 200:  # 3xx included: a redirect is refused, never followed
             raise DeviceRefused("The Vizio refused the request.")
         try:
             data = json.loads(raw.decode("utf-8"))
@@ -205,7 +212,8 @@ class VizioRemote:
         if result in _NOT_PAIRED:
             raise NotPaired("vizio")
         if result != "success":
-            raise DeviceRefused(f"The Vizio answered {result[:30] or 'without a result'}.")
+            shown = re.sub(r"[^a-z0-9_ ]", "", result[:30])  # the TV's text: no terminal escapes (vizio-cli-terminal-escape)
+            raise DeviceRefused(f"The Vizio answered {shown or 'without a result'}.")
         return data
 
     def _creds(self) -> tuple[int, str, str]:
@@ -225,14 +233,23 @@ class VizioRemote:
         await self._authed("PUT", KEY_COMMAND,
                            {"KEYLIST": [{"CODESET": CODESET_VOLUME, "CODE": KEYS[name], "ACTION": "KEYPRESS"}]})
 
-    async def _volume_item(self) -> dict[str, Any] | None:
-        data = await self._authed("GET", VOLUME_SETTING)
+    async def _item(self, path: str, cname: str) -> dict[str, Any] | None:
+        """The setting's item, only if it names itself `cname` (vizio-item-cname): VALUE and HASHVAL are read from
+        nothing else."""
+        data = await self._authed("GET", path)
         items = _get(data, "items")
-        return items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else None
+        item = items[0] if isinstance(items, list) and items and isinstance(items[0], dict) else None
+        name = _get(item, "cname")
+        return item if isinstance(name, str) and name.lower() == cname else None
+
+    async def _volume_item(self) -> dict[str, Any] | None:
+        return await self._item(VOLUME_SETTING, "volume")
 
     @staticmethod
     def _level(item: dict[str, Any] | None) -> int | None:
         value = _get(item, "value")
+        if isinstance(value, bool):
+            return None
         try:
             level = int(value)
         except (TypeError, ValueError):
@@ -243,9 +260,7 @@ class VizioRemote:
         level = self._level(await self._volume_item())
         muted = None
         try:
-            data = await self._authed("GET", MUTE_SETTING)
-            items = _get(data, "items")
-            value = _get(items[0], "value") if isinstance(items, list) and items else None
+            value = _get(await self._item(MUTE_SETTING, "mute"), "value")
             if isinstance(value, str) and value.lower() in ("on", "off"):
                 muted = value.lower() == "on"
         except DeviceRefused:
@@ -263,7 +278,7 @@ class VizioRemote:
         level = max(0, min(100, int(level)))
         item = await self._volume_item()
         hashval = _get(item, "hashval")
-        if not isinstance(hashval, int):
+        if not isinstance(hashval, int) or isinstance(hashval, bool):
             raise DeviceRefused("The Vizio did not give its volume setting.")
         await self._authed("PUT", VOLUME_SETTING, {"REQUEST": "MODIFY", "HASHVAL": hashval, "VALUE": level})
         read = self._level(await self._volume_item())
@@ -271,6 +286,10 @@ class VizioRemote:
 
     async def set_mute(self, muted: bool) -> None:
         await self._key("mute_on" if muted else "mute_off")
+
+    async def toggle_mute(self) -> None:
+        """For when the mute state is unknown (vizio-mute-unknown): the TV flips it."""
+        await self._key("mute_toggle")
 
     # -- pairing ------------------------------------------------------------------------------------------------------
 
@@ -310,10 +329,12 @@ class VizioRemote:
                 "RESPONSE_VALUE": pin}
         try:  # pinned to the certificate seen at start: the PIN goes to the same TV
             data = await self._request("PUT", PAIR_FINISH, body, port=p.port, pin=p.fp, token=None)
-        except DeviceRefused:
+        except CertificateChanged:
+            raise
+        except (DeviceRefused, NotPaired):  # pair-notpaired-uncaught
             return "The Vizio did not accept that PIN. Run tv-remote-vizio-pair again for a new PIN."
         token = _get(_get(data, "item", {}), "auth_token")
-        if not isinstance(token, str) or not token:
+        if not isinstance(token, str) or not TOKEN_RE.match(token):  # vizio-token-unvalidated
             raise DeviceRefused("The Vizio did not complete pairing.")
         try:
             await asyncio.to_thread(self._vault.save, token, p.port, p.fp)
