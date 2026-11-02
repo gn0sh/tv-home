@@ -535,6 +535,10 @@ else
       fi
       pass "re-entry: Down from '$far' reached the Ask button"; key DPAD_UP; cur=$(focus_after re-entry)
       [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach the Calendar tile (now '$cur')" ;;
+    "Quiet mode"*|"Watch the game on "*)
+      # M7: the Watch and Quiet pills sit right-aligned in the dock band, so Down from a far-right tile may land there.
+      pass "re-entry: Down from '$far' reached a dock pill ('${cur%%|*}')"; key DPAD_UP; cur=$(focus_after re-entry)
+      [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the '${cur%%|*}' pill did not reach the Calendar tile (now '$cur')" ;;
     *) fail "re-entry: Down from '$far' did not reach the dock (focused node: '$cur')" ;;
   esac
   key DPAD_UP
@@ -546,8 +550,12 @@ else
   [[ -n $cur && ${cur%%|*} != "$far" ]] || fail "re-entry: Left after coming back did not move focus (now '${cur%%|*}')"
   back=${cur%%|*}
   pass "re-entry: Down, Up returned to '$far', and Left moved on to '$back'"
-  # Same through the Ask button: Down, Down, Up (to Calendar), Up (to the row), Right moves.
-  key DPAD_DOWN; key DPAD_DOWN
+  # Same through the Ask button: Down, Down, Up (to Calendar), Up (to the row), Right moves. A first Down that lands on
+  # the M7 Watch or Quiet pill goes Up to Calendar first (Up from a pill is set to Calendar).
+  key DPAD_DOWN
+  cur=$(focus_after re-entry)
+  case ${cur%%|*} in "Quiet mode"*|"Watch the game on "*) key DPAD_UP ;; esac
+  key DPAD_DOWN
   cur=$(focus_after re-entry)
   if [[ -z ${cur%%|*} ]]; then  # the Ask button hides focus from uiautomator: confirm with OK, then Back
     key DPAD_CENTER; sleep 1
@@ -902,7 +910,73 @@ else
   in_front && fail "m7: one Back with the M7 hero full does not leave the app (home-back-twice)"
   pass "m7: one Back returns home (leaves the app)"
   no_app_crash_yet "m7 hero"
-  sh_ rm -f "$data/agenda-cache.json" "$data/panels/alerts.json"
+
+  # ---- M7 Q2 (F5, F6): Watch pill only on game day with a mapped, installed app; dock focus order; Quiet ----
+  yt=com.google.android.youtube.tv
+  sh_ rm -f "$data/panels/alerts.json"   # the game card, not the alert, for this part
+  if ! sh_ pm path "$yt" 2>/dev/null | grep -q '^package:'; then
+    warn "M7 Watch pill NOT VERIFIED on the emulator: $yt is not installed on this image"
+  elif [[ $(TZ=$etz date -d '+100 minutes' +%F) != $(TZ=$etz date +%F) ]]; then
+    warn "M7 Watch pill check skipped: a game 90 min out would fall after midnight in $etz"
+  else
+    q2_restart() { sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 8; }
+    watch_shown() { ui_text | grep -qF 'content-desc="Watch the game on YouTube"'; }
+    sh_ content insert --uri "content://$PKG.provision/watch" --bind networks:s:"YouTube=$yt" --bind defaults:s:predators=YouTube \
+      || fail "q2: watch map insert refused"
+    # No game: no pill, even with the map set.
+    sh_ rm -f "$data/panels/games.json"
+    q2_restart
+    watch_shown && fail "q2: the Watch pill shows with no game today"
+    pass "q2: no game today, no Watch pill"
+    gstart=$(iso '+90 minutes')
+    games='{"v":1,"at":"'$now'","data":[{"team":"predators","start":"'$gstart'","opponent":"QA Opponent","home":true,"phase":"UPCOMING"}]}'
+    printf '%s' "$games" | a shell "cat > $data/panels/games.json"
+    sh_ chown "$uid:$uid" "$data/panels/games.json"; sh_ chmod 600 "$data/panels/games.json"; sh_ restorecon "$data/panels/games.json" >/dev/null 2>&1 || true
+    q2_restart
+    watch_shown || fail "q2: an upcoming game today with a mapped, installed app shows no Watch pill"
+    pass "q2: game day with a mapped, installed app shows the Watch pill"
+    # Focus order (R1): apps row > Calendar > Ask > Watch > Quiet.
+    first=$(focus_after q2)
+    case ${first%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*|"Quiet mode"*|"Watch the game on "*) fail "q2: first focus is '${first%%|*}', not the apps row (R1)" ;; esac
+    key DPAD_DOWN; cur=$(focus_after q2)
+    [[ ${cur%%|*} == Calendar,* ]] || fail "q2: Down from the first tile reached '${cur%%|*}', not the Calendar tile"
+    key DPAD_DOWN; cur=$(focus_after q2)
+    case ${cur%%|*} in ""|"${ASK_DESC_PREFIX}"*) ;; *) fail "q2: Down from Calendar reached '${cur%%|*}', not the Ask pill" ;; esac
+    key DPAD_RIGHT; cur=$(focus_after q2)
+    [[ ${cur%%|*} == "Watch the game on YouTube" ]] || fail "q2: Right from Ask reached '${cur%%|*}', not the Watch pill"
+    key DPAD_RIGHT; cur=$(focus_after q2)
+    [[ ${cur%%|*} == "Quiet mode, off"* ]] || fail "q2: Right from Watch reached '${cur%%|*}', not the Quiet pill"
+    key DPAD_RIGHT; cur=$(focus_after q2)
+    [[ ${cur%%|*} == "Quiet mode, off"* ]] || fail "q2: the Quiet pill is not last in the dock band (Right moved to '${cur%%|*}')"
+    pass "q2: focus order apps row > Calendar > Ask > Watch > Quiet (last)"
+    # Quiet: OK hides titles on the next redraw, shows the marker, survives a restart; OK again restores.
+    ui=$(ui_text); grep -qF 'QA Dentist' <<<"$ui" || fail "q2: the planted event title is not on screen before Quiet (test setup)"
+    key DPAD_CENTER; sleep 2
+    ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-q2-quiet.xml"
+    grep -qF 'QA Dentist' <<<"$ui" && fail "q2: an event title is still on screen with Quiet on"
+    grep -qF 'resource-id="hero_quiet"' <<<"$ui" || fail "q2: no visible Quiet marker with Quiet on"
+    grep -qF 'Quiet mode, on' <<<"$ui" || fail "q2: the Quiet pill does not say on"
+    pass "q2: Quiet hides event titles on the next redraw and shows the marker"
+    q2_restart
+    ui=$(ui_text)
+    grep -qF 'resource-id="hero_quiet"' <<<"$ui" && ! grep -qF 'QA Dentist' <<<"$ui" || fail "q2: Quiet did not survive a restart"
+    pass "q2: Quiet survives a restart"
+    sh_ content insert --uri "content://$PKG.provision/quiet" --bind on:b:false || fail "q2: quiet off over adb refused"
+    q2_restart
+    ui=$(ui_text); grep -qF 'QA Dentist' <<<"$ui" || fail "q2: titles did not come back with Quiet off"
+    pass "q2: Quiet off shows titles again"
+    # The map is required: without it, no pill on the same game day.
+    sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
+    q2_restart
+    watch_shown && fail "q2: the Watch pill shows with no watch map"
+    pass "q2: no watch map, no Watch pill"
+    sh_ input keyevent KEYCODE_BACK; sleep 2
+    in_front && fail "q2: one Back with the pills showing does not leave the app (home-back-twice)"
+    no_app_crash_yet "m7 q2"
+  fi
+  sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
+  sh_ content insert --uri "content://$PKG.provision/quiet" --bind on:b:false >/dev/null 2>&1 || true
+  sh_ rm -f "$data/agenda-cache.json" "$data/panels/alerts.json" "$data/panels/games.json"
   sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
   network on
   a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog

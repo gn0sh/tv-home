@@ -50,6 +50,9 @@ class AgendaActivity : ComponentActivity() {
     private val layoutStore by lazy { AppLayoutStore(applicationContext) }
     private var entry by mutableStateOf(HomeEntry(0, null))
 
+    /** M7-F6 Quiet mode, read on IO each time the screen starts (so an adb toggle applies); null until then. */
+    private var quiet by mutableStateOf<Boolean?>(null)
+
     /** M3: [ACTION_ASK] opens Ask Claude; anything else (Home, the launcher entry) shows the row. */
     private fun targetOf(intent: Intent?): String? = if (intent?.action == ACTION_ASK) HomeEntry.ASK else null
 
@@ -99,6 +102,7 @@ class AgendaActivity : ComponentActivity() {
             theme = withContext(Dispatchers.IO) { InstalledApps.loadTheme(applicationContext) }
             layout = withContext(Dispatchers.IO) { runCatching { layoutStore.load() }.getOrNull() } ?: SavedLayout()
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch { quiet = withContext(Dispatchers.IO) { FeedSettings.quiet(applicationContext) } }
                 launch {
                     val density = resources.displayMetrics.density
                     val w = (theme.tileWidthDp * density).toInt()
@@ -127,7 +131,9 @@ class AgendaActivity : ComponentActivity() {
                 }
             }
             val model = remember(state, is24h, minute) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h) }
-            val tile = remember(state, is24h, minute) { calendarTile(state, Instant.now(), ZoneId.systemDefault(), is24h) }
+            // Titles stay hidden until the stored Quiet value has loaded (null), so a guest never sees one flash.
+            val hideTitles = quiet != false
+            val tile = remember(state, is24h, minute, hideTitles) { calendarTile(state, Instant.now(), ZoneId.systemDefault(), is24h, hideTitles) }
             HomeScreen(
                 apps = apps,
                 theme = theme,
@@ -141,6 +147,11 @@ class AgendaActivity : ComponentActivity() {
                 ask = askHost,
                 layout = layout,
                 entry = entry,
+                quiet = quiet,
+                onQuietToggle = {
+                    val q = quiet
+                    if (q != null) { quiet = !q; FeedSettings.setQuiet(applicationContext, !q) } // prefs already loaded; apply() writes async
+                },
                 onLayoutChange = { next ->
                     // Unknown packages stay in the stored order and hidden set (layout-prune-transient): only display
                     // filters them. apply() updates the in-memory prefs at once and writes in call order, so saves

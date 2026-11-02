@@ -164,3 +164,9 @@ $P = "content://com.gnosh.tvhome.provision"
   `adb shell content insert --uri $P/travel --bind keyword:s:Dentist --bind minutes:i:20`. Keyword up to 40
   characters, 1 to 180 minutes, at most 10 rules; the same keyword again replaces its time. Remove all:
   `adb shell content delete --uri $P/travel`.
+- **Watch pill** (game days: opens the app that carries the game): map network names to apps, and optionally a
+  default network per team: `adb shell content insert --uri $P/watch --bind networks:s:'ESPN+=com.espn.gtv' --bind defaults:s:'predators=ESPN+'`.
+  Up to 32 networks and 8 teams, names up to 40 characters; one bad entry refuses the whole line. Remove:
+  `adb shell content delete --uri $P/watch`. No mapping, or the app not installed, means no Watch pill.
+- **Quiet mode** (hides event titles; the Quiet pill at the end of the dock does the same):
+  `adb shell content insert --uri $P/quiet --bind on:b:true` (or `false`).

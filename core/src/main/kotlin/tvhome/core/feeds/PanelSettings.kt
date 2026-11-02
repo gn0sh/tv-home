@@ -82,6 +82,51 @@ object SettingsValidator {
         return seconds
     }
 
+    /**
+     * The watch map over adb (M7-F5): `--bind networks:s:ESPN+=com.espn.gtv;Peacock=com.peacocktv.peacockandroid`,
+     * optionally `--bind defaults:s:predators=ESPN+`. Stricter than [WatchMap.parse], which drops bad entries: here any
+     * bad entry refuses the whole insert, so nothing half-applied is stored. Returns the two texts to store (defaults ""
+     * when absent), each re-parsed by [WatchMap.parse] on read.
+     */
+    fun watchMap(values: Map<String, Any?>): Pair<String, String>? {
+        if (values.keys != setOf("networks") && values.keys != setOf("networks", "defaults")) return null
+        val networks = values["networks"] as? String ?: return null
+        val defaults = if ("defaults" in values) values["defaults"] as? String ?: return null else ""
+        if (networks.length > MAX_WATCH_TEXT || defaults.length > MAX_WATCH_TEXT) return null
+        val nets = watchPairs(networks) ?: return null
+        if (nets.isEmpty() || nets.size > WatchMap.MAX_NETWORKS) return null
+        if (nets.any { (name, pkg) -> !watchName(name) || !WatchMap.validPackage(pkg) }) return null
+        if (nets.map { it.first.lowercase(java.util.Locale.ROOT) }.toSet().size != nets.size) return null
+        val defs = if (defaults.isEmpty()) emptyList() else watchPairs(defaults) ?: return null
+        if (defs.size > WatchMap.MAX_TEAMS) return null
+        if (defs.any { (team, net) -> !TEAM_KEY.matches(team) || !watchName(net) }) return null
+        if (defs.map { it.first }.toSet().size != defs.size) return null
+        return networks to defaults
+    }
+
+    private const val MAX_WATCH_TEXT = 4096
+    private val TEAM_KEY = Regex("""[a-z0-9-]{1,32}""")
+
+    private fun watchName(n: String) = n.isNotEmpty() && n == n.trim() && n.length <= Feeds.LABEL_CAP && n.none { it.isISOControl() }
+
+    /** `a=b;c=d` exactly: every part has a non-empty key and value, no empty parts. Null when malformed. */
+    private fun watchPairs(text: String): List<Pair<String, String>>? =
+        text.split(';').map { part ->
+            val i = part.indexOf('=')
+            if (i <= 0 || i == part.length - 1) return null
+            part.substring(0, i) to part.substring(i + 1)
+        }
+
+    /** The packages a stored networks text names (valid ones only), for the installed check off the main thread. */
+    fun watchPackages(networks: String?): Set<String> =
+        networks.orEmpty().split(';').mapNotNull { p -> p.substringAfter('=', "").trim().takeIf { WatchMap.validPackage(it) } }.toSet()
+
+    /** `--bind on:b:true`: Quiet mode on or off (M7-F6). */
+    fun quiet(values: Map<String, Any?>): Boolean? {
+        if (values.keys != setOf("on")) return null
+        return values["on"] as? Boolean
+    }
+
     /** `--bind keyword:s:<text> --bind minutes:i:<1..180>`; the keyword rules are [TravelRule.of]'s. */
     fun travelRule(values: Map<String, Any?>): TravelRule? {
         if (values.keys != setOf("keyword", "minutes")) return null

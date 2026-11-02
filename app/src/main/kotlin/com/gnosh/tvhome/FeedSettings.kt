@@ -6,6 +6,7 @@ import tvhome.core.feeds.PanelId
 import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.SettingsValidator
 import tvhome.core.feeds.TravelRules
+import tvhome.core.feeds.WatchMap
 import tvhome.core.feeds.panelSwitches
 import tvhome.core.ui.TravelRule
 
@@ -45,6 +46,9 @@ object FeedSettings {
     private const val TRAVEL = "travel"
     private const val IDLE_TEST = "idle_test_s"
     private const val IDLE_TEST_AT = "idle_test_at"
+    private const val WATCH_NETWORKS = "watch_networks"
+    private const val WATCH_DEFAULTS = "watch_defaults"
+    private const val QUIET = "quiet"
     private val lock = Any()
 
     private fun prefs(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -88,6 +92,27 @@ object FeedSettings {
     }
 
     fun clearIdleTestSeconds(context: Context) { prefs(context).edit().remove(IDLE_TEST).remove(IDLE_TEST_AT).commit() }
+
+    /** M7-F5: the watch map (validated on insert, re-parsed with WatchMap's limits here). Off the main thread. */
+    fun watchMap(context: Context): WatchMap = runCatching {
+        val p = prefs(context)
+        WatchMap.parse(p.getString(WATCH_NETWORKS, null), p.getString(WATCH_DEFAULTS, null))
+    }.getOrDefault(WatchMap.EMPTY)
+
+    /** The valid package names the stored watch map names (for the installed check). */
+    fun watchPackages(context: Context): Set<String> =
+        runCatching { SettingsValidator.watchPackages(prefs(context).getString(WATCH_NETWORKS, null)) }.getOrDefault(emptySet())
+
+    fun setWatchMap(context: Context, networks: String, defaults: String) {
+        prefs(context).edit().putString(WATCH_NETWORKS, networks).putString(WATCH_DEFAULTS, defaults).commit()
+    }
+
+    fun clearWatchMap(context: Context) { prefs(context).edit().remove(WATCH_NETWORKS).remove(WATCH_DEFAULTS).commit() }
+
+    /** M7-F6: Quiet mode (survives restart). Off the main thread. */
+    fun quiet(context: Context): Boolean = runCatching { prefs(context).getBoolean(QUIET, false) }.getOrDefault(false)
+
+    fun setQuiet(context: Context, on: Boolean) { prefs(context).edit().putBoolean(QUIET, on).apply() }
 
     fun travelRules(context: Context): List<TravelRule> =
         TravelRules.decode(runCatching { prefs(context).getString(TRAVEL, null) }.getOrNull())
