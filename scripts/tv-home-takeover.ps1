@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
-  Makes the Google TV remote's Home button open the dashboard (-TurnOn), or undoes that (-Rollback). Run it yourself in your own PowerShell window; it changes a setting on the TV.
+  Makes the Google TV remote's Home button open the dashboard (-TurnOn), or undoes that (-Rollback).
+  Run it yourself in your own PowerShell window; it changes a setting on the TV.
 .DESCRIPTION
-  -TurnOn:   turns on the app's key service ("Dashboard Home button") in the TV's accessibility settings. It
+  -TurnOn:   turns on the app's Home watch ("Dashboard Home button") in the TV's accessibility settings. It
              appends to the list already there (saved to a rollback file first), so nothing else is switched off.
              The service reads no screen content: it sees only that the TV's own home came to the front, and then
              opens the dashboard (a brief flash of the TV's home first). The mic button stays Google Assistant.
@@ -109,7 +110,7 @@ if ($Rollback) {
     exit 0
 }
 
-Confirm-Change ("This will change a setting on the TV:`n - Home: the remote's Home button (and turning the TV on) opens the dashboard.`nUndo any time with: .\scripts\tv-home-takeover.ps1 -Rollback")
+Confirm-Change ("This will change a setting on the TV:`n - Home: the remote's Home button opens the dashboard (press Home twice quickly for the TV's own home).`nUndo any time with: .\scripts\tv-home-takeover.ps1 -Rollback")
 $list = Get-TvA11yList
 if ($null -eq $saved.a11y) {
     $on = Adb @('shell', 'settings', 'get', 'secure', 'accessibility_enabled')

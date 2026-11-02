@@ -93,8 +93,9 @@ shows what it will change and asks you to type YES):
 ```
 .\scripts\tv-home-takeover.ps1 -TurnOn
 ```
-The remote's Home button, and turning the TV on, then open the dashboard, with focus on the first tile. You will see
-the TV's own home for a moment first; that is expected. Back on the dashboard's row stays on the dashboard.
+The remote's Home button then opens the dashboard, with focus on the first tile. You will see the TV's own home for a
+moment first; that is expected. (Right after the TV starts up you may still land on the TV's own home; press Home.)
+Back on the dashboard's row also comes back to the dashboard, after the same flash.
 
 **To reach the TV's own home** (its Settings gear, apps and inputs): press Home twice quickly. It stays until you open
 an app; after that, Home opens the dashboard again.

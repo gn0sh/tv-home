@@ -5,10 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
+import tvhome.core.home.HomeRedirect
 
 /**
- * M3 Home button: when the TV's own home screen comes up (the Home button, or after boot), this brings the dashboard
- * to the front, with focus on its first tile. There is a brief flash of the TV's home first.
+ * M3 Home button: when the TV's own home screen comes up (the Home button), this brings the dashboard to the front,
+ * with focus on its first tile. There is a brief flash of the TV's home first.
  *
  * Why not something firmer: Google TV's launcher declares HOME at priority 2, so "set-home-activity" cannot win
  * (home-role-priority), and the system handles Home (and the assistant keys) before an accessibility key filter sees
@@ -16,48 +17,42 @@ import android.view.accessibility.AccessibilityEvent
  * and acts only on the TV's default home activity (found in [onServiceConnected]); every other event is dropped at
  * once. No window content, nothing stored or logged.
  *
- * Ways out (home-recovery-unreachable): pressing Home twice quickly leaves the TV's own home showing (its Settings gear,
- * apps and inputs), and the redirect stops for a while if it keeps firing, as it would if the dashboard crashed on
- * start (home-redirect-crash-loop).
+ * When to redirect, and the ways out (Home twice quickly; a pause in a crash loop), is [HomeRedirect] in :core.
  */
 class HomeWatchService : AccessibilityService() {
-    /** The TV's own home activity (package to class); null: nothing to watch. */
-    private var home: Pair<String, String>? = null
-    private var lastRedirect = 0L
-    private val recent = ArrayDeque<Long>()
-    private var pausedUntil = 0L
+    /** The TV's own home: its package and the class names its window may report (an alias and its target). */
+    private var homePkg: String? = null
+    private var homeClasses: Set<String> = emptySet()
 
-    /** After a double press: the TV's own home stays, even if it reports itself again, until another app comes up. */
-    private var staying = false
+    /** Packages of apps the user opens from a launcher; one coming up ends a double-press stay (m3-staying-reset-overlay). */
+    private var apps: Set<String> = emptySet()
+    private val policy = HomeRedirect()
 
     override fun onServiceConnected() {
         val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
         // The default home only (home-set-stale): not Settings' FallbackHome or a setup wizard, which also declare HOME.
         val def = packageManager.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo
-        home = def?.takeIf { it.packageName != packageName && it.packageName != "android" }?.let { it.packageName to it.name }
+            ?.takeIf { it.packageName != packageName && it.packageName != "android" }
+        homePkg = def?.packageName
+        homeClasses = listOfNotNull(def?.name, def?.targetActivity).toSet()
+        apps = packageManager.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0,
+        ).mapNotNull { it.activityInfo?.packageName }.toSet() + packageName
         // Not narrowed with serviceInfo.packageNames: on API 34 that left uiautomator with a null root in our own
         // window (CI, PR #15). Events from other apps are dropped at the first lines of onAccessibilityEvent.
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        val target = home ?: return
-        val pkg = event.packageName?.toString()
-        if (pkg != target.first) {
-            // Another app came up (not a system overlay such as the volume bar): the next Home redirects again.
-            if (pkg != null && pkg != SYSTEM_UI) staying = false
+        val home = homePkg ?: return
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg != home) {
+            // Dialogs, the keyboard, the Assistant overlay or the screensaver do not end a stay; an app does.
+            if (pkg in apps) policy.onAppShown()
             return
         }
-        if (event.className?.toString() != target.second || staying) return
-        val now = SystemClock.elapsedRealtime()
-        if (now < pausedUntil) return
-        // A second Home within the window after a redirect: leave the TV's own home showing (home-redirect-while-browsing:
-        // it may report itself again while its tabs are browsed, so it stays until another app comes up).
-        if (now - lastRedirect < DOUBLE_PRESS_MS) { lastRedirect = 0L; staying = true; return }
-        while (recent.isNotEmpty() && now - recent.first() > BURST_MS) recent.removeFirst()
-        if (recent.size >= BURST_MAX) { pausedUntil = now + PAUSE_MS; recent.clear(); return }
-        recent.addLast(now)
-        lastRedirect = now
+        if (event.className?.toString() !in homeClasses) return
+        if (!policy.onHomeShown(SystemClock.elapsedRealtime())) return
         runCatching {
             startActivity(
                 Intent(this, AgendaActivity::class.java)
@@ -68,16 +63,4 @@ class HomeWatchService : AccessibilityService() {
     }
 
     override fun onInterrupt() = Unit
-
-    private companion object {
-        /** Home pressed again within this long after a redirect keeps the TV's own home. */
-        const val DOUBLE_PRESS_MS = 2_500L
-
-        /** A crash loop restarts every second or two; a person rarely presses Home that often. More than [BURST_MAX] redirects within [BURST_MS] pauses redirecting for [PAUSE_MS]. */
-        const val BURST_MAX = 6
-        const val BURST_MS = 10_000L
-        const val PAUSE_MS = 120_000L
-
-        const val SYSTEM_UI = "com.android.systemui"
-    }
 }

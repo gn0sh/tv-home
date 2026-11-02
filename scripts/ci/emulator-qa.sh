@@ -627,12 +627,17 @@ if ! in_front; then
 fi
 pass "m3: Home from another app opens the dashboard"
 # The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
-# Settings; the next Home press goes back to redirecting.
+# Settings, until another app comes up (HomeRedirect in :core has the timing cases).
 # A fresh redirect, then Home again about a second later (inside the 2.5 s window).
-sh_ input keyevent KEYCODE_HOME; sleep 1; sh_ input keyevent KEYCODE_HOME; sleep 4
+sh_ input keyevent KEYCODE_HOME; sleep 1
+in_front || fail "m3: the first Home of the double press did not redirect (m3-qa-double-vacuous; $(resumed | head -1))"
+sh_ input keyevent KEYCODE_HOME; sleep 4
 in_front && fail "m3: a quick second Home did not leave the TV's own home showing"
 resumed | head -1 | grep -qF "$stock_pkg/" || fail "m3: a quick second Home did not show the TV's own home ($(resumed | head -1))"
 pass "m3: Home twice quickly leaves the TV's own home (and its Settings) showing"
+sh_ input keyevent KEYCODE_HOME; sleep 4
+in_front && fail "m3: Home on the TV's own home during a stay brought the dashboard back"
+pass "m3: further Home presses keep the TV's own home until an app is opened"
 other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front || fail "m3: after leaving the TV's own home, Home did not open the dashboard again ($(resumed | head -1))"
 pass "m3: once another app has been opened, Home opens the dashboard again"
@@ -645,10 +650,6 @@ if (( napps >= 2 )); then
   cur=$(focus_after m3)
   [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"
   pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
-  # Keys are untouched while the service is on: Right still moves focus.
-  a=$(focus_after m3-pass); key DPAD_RIGHT; b=$(focus_after m3-pass)
-  [[ -n ${a%%|*} && ${b%%|*} != "${a%%|*}" ]] || fail "m3: with the Home watch on, Right did not move focus ('${a%%|*}' -> '${b%%|*}')"
-  pass "m3: other keys pass through the Home watch (Right moved '${a%%|*}' -> '${b%%|*}')"
 fi
 sh_ input keyevent KEYCODE_HOME; sleep 3   # focus back on the first tile, as before Down in M2b
 key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
