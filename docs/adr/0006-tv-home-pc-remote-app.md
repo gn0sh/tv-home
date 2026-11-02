@@ -17,24 +17,36 @@ Google TV, so `KEYCODE_VOLUME_*` over adb does nothing to the sound.
 - The UI is one self-contained HTML/CSS/JS page shipped in the package, loaded with `create_window(html=...)`. No CDN,
   no fonts or images fetched (icons are inline SVG drawn in the page). pywebview starts its bottle HTTP server only for
   local file URLs or `http_server=True`; neither is used, so **no port is opened**.
-- The page reaches Python only through pywebview's `js_api` bridge. `RemoteApi` has exactly five public methods
-  (`start`, `key`, `app`, `text`, `volume`; pywebview skips `_` names and the tests check that nothing else is public).
-  Every argument is checked in Python against fixed allowlists: the 17 key codes of the classic remote, its 12 app
+- The page reaches Python only through five functions, `start`, `key`, `app`, `text` and `volume`, made by
+  `make_bridge` as closures over the backends and registered with `window.expose`. **Not a `js_api` object with
+  private attributes** (security finding jsapi-private-dispatch): pywebview 6.2.1's `util.js_bridge_call` looks a
+  call up by exact name among exposed functions and otherwise walks the dotted name from `js_api` with plain
+  `getattr`, `_` and dunder names included. pywebview's skipping of `_` names applies only to what it advertises
+  to the page, not to what it dispatches, so `_tv._popen` or `key.__globals__.update` would have worked. `js_api`
+  is therefore `SEALED`, an object on which every attribute lookup fails (not even `__class__`), so the walk ends at
+  once. A test drives the real `js_bridge_call` with private, dunder and dotted names.
+- The page must not be replaced by another page, which would get the same bridge: it refuses drops itself
+  (`dragenter`/`dragover`/`drop` cancelled). On Windows, once the page has loaded, the app also sets WebView2's
+  `AllowExternalDrop = false` and cancels every later `NavigationStarting`. pywebview already turns off WebView2's
+  context menu, dev tools and browser accelerator keys when not in debug mode.
+- Every argument is checked in Python against fixed allowlists: the 17 key codes of the classic remote, its 12 app
   packages, text matching the classic remote's rule, and `up|down|mute`.
 - Google TV: the same mechanism as the classic remote, unchanged: adb from `%LOCALAPPDATA%\tv-home-tools`, `adb
   connect`, one long-lived `adb -s <serial> shell` fed `input keyevent`, `input text '...'` and `monkey -p <pkg> -c
   android.intent.category.LEANBACK_LAUNCHER 1` lines, a bounded `pm list packages` at start to dim missing apps, a 10 s
   backoff after a failed connect (presses dropped, not queued), and the same single-instance mutex name
-  (`Local\gnosh-tv-remote`), so the old and new remotes never run at once. adb runs with `CREATE_NO_WINDOW`.
+  (`Local\gnosh-tv-remote`), created owned so the classic remote's `WaitOne(0)` fails while the app runs; the old
+  and new remotes never run at once. adb runs with `CREATE_NO_WINDOW`.
 - Volume and Mute: `lgpipe.handle` in-process, on one private asyncio loop thread, with `LgRemote` built from
   `%APPDATA%\tv-remote` as `lgpipe.main` does (wss 3001 only, pinned certificate, 8 permissions, cap 60 per ADR 0003).
   If the LG is not configured, or `handle` returns an error, the adb VOLUME key is sent instead and the status says
-  which. After the LG fails to answer, it is skipped for 10 s; at most 2 volume presses wait on the LG and more are
+  which, except when the LG did not report its volume: lgpipe then refuses to step up (as `lg_volume` does,
+  finding volume-step-cap), and the adb key is not sent either. After the LG fails to answer, it is skipped for 10 s; at most 2 volume presses wait on the LG and more are
   dropped, so a TV that is off never replays a burst of volume changes later.
 - Status text shows only the Google TV's adb address (as the classic remote did) and lgpipe's fixed reasons. Anything
   else from the LG path (unexpected text) shows as "did not work". The LG address, client key, certificate and DPAPI
   files never reach the page.
-- Launch: `scripts/install-remote-shortcut.ps1` runs `uv sync --locked --project tv-remote` and points the icon at
+- Launch: `scripts/install-remote-shortcut.ps1` runs `uv sync --locked --no-dev --project tv-remote` and points the icon at
   `tv-remote\.venv\Scripts\tv-remote-app.exe`. uv's docs: gui-scripts "are wrapped by a GUI executable so they can be
   started without a console" on Windows. This avoids depending on `uvw.exe`, which we could not confirm ships with
   every uv release, and `uv run` (a console program) would flash a window. `-Classic` keeps the PowerShell remote.
@@ -52,7 +64,14 @@ Google TV, so `KEYCODE_VOLUME_*` over adb does nothing to the sound.
 - Electron/Tauri: a new toolchain and a large download for one window.
 
 ## Consequences and risks
-- First run needs `uv sync` to download pywebview, pythonnet, clr-loader, cffi and bottle (all hashed in `uv.lock`).
+- First run needs `uv sync` to download pywebview, pythonnet, clr-loader, cffi, bottle and proxy_tools (all hashed in
+  `uv.lock`). **proxy_tools 0.1.0 is published only as a source archive** (no wheel): its sdist is hash-pinned, but uv
+  builds it on Brian's PC, and the build backend it fetches for that is not pinned by `uv.lock`. Accepted for one
+  2014 package of a few lines; if it matters later, vendor a wheel or pin build dependencies with
+  `[tool.uv] build-constraint-dependencies`.
+- Window size comes from `webview.screens` read before `webview.start` (logical pixels); the app never changes its
+  own DPI awareness (pywebview does that when the window starts). On close, waiting volume presses are cancelled and
+  the LG websocket and HTTP session are closed (`LgRemote.close`), bounded at about 1.5 s.
 - pythonnet needs .NET Framework 4.7.2+ (built into Windows 10/11) and WebView2 Runtime (preinstalled; if missing,
   the app shows a start-up error box). Not verified on Brian's PC from the Linux sandbox; first-run check is on him.
 - No Content-Security-Policy meta on the page: pywebview injects its bridge script into the page, and a strict CSP
