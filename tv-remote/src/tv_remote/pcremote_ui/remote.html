@@ -49,7 +49,7 @@ body {
 .col { display: flex; flex-direction: column; gap: 16px; width: 356px; }
 
 /* header */
-.head { display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 4px; }
+.head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 38px; padding: 0 2px; }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: 15px; letter-spacing: .2px; color: var(--ink); }
 .brand svg { width: 22px; height: 22px; }
 .pill { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px; border-radius: 14px;
@@ -172,6 +172,19 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
   display: flex; align-items: center; justify-content: center; transition: color .2s; }
 .status.bad { color: #ff8c8c; }
 #remote.landscape .head { margin-bottom: 2px; }
+
+/* LG | Vizio: which TV the volume buttons drive */
+.seg { display: flex; padding: 3px; gap: 2px; height: 36px; border-radius: 18px; background: rgba(0,0,0,.32);
+  border: 1px solid var(--edge); }
+.seg button { min-width: 62px; padding: 0 12px; border-radius: 15px; font-size: 13px; font-weight: 650;
+  color: var(--ink-3); letter-spacing: .2px; transition: background .15s, color .15s, box-shadow .15s; }
+.seg button[aria-checked="true"] { color: var(--accent-ink); background: linear-gradient(180deg, #ffc443, #f0a400);
+  box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+.seg button:active { transform: scale(.96); }
+.vnote { display: none; font-size: 11px; color: var(--ink-3); }
+.vcard.vizio .bar { display: none; }
+.vcard.vizio .vnote { display: block; }
+.vcard.vizio .vnum { font-size: 20px; }
 </style>
 </head>
 <body>
@@ -179,7 +192,11 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
   <div id="remote" class="portrait" aria-label="TV remote">
     <div class="col" id="colA">
       <div class="head">
-        <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2" width="11" height="20" rx="5.5" fill="#2b303c" stroke="#ffb81c" stroke-width="1.6"/><circle cx="12" cy="9" r="2.6" fill="#ffb81c"/><circle cx="12" cy="15.5" r="1.1" fill="#9aa3b5"/><circle cx="12" cy="18.6" r="1.1" fill="#9aa3b5"/></svg>TV Remote</div>
+        <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2" width="11" height="20" rx="5.5" fill="#2b303c" stroke="#ffb81c" stroke-width="1.6"/><circle cx="12" cy="9" r="2.6" fill="#ffb81c"/><circle cx="12" cy="15.5" r="1.1" fill="#9aa3b5"/><circle cx="12" cy="18.6" r="1.1" fill="#9aa3b5"/></svg></div>
+        <div class="seg" role="radiogroup" aria-label="Which TV the volume buttons drive">
+          <button role="radio" data-tv="lg" aria-checked="true">LG</button>
+          <button role="radio" data-tv="vizio" aria-checked="false">Vizio</button>
+        </div>
         <div class="pill busy" id="conn" role="status"><span class="dot"></span><span id="connText">Connecting</span></div>
       </div>
       <div class="row">
@@ -219,6 +236,7 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
           <div class="vcard" id="vcard">
             <div class="vtop"><div class="vnum" id="vnum">&ndash;<small>vol</small></div><div class="via" id="via">LG TV</div></div>
             <div class="bar"><i id="vbar"></i></div>
+            <div class="vnote">Vol+ is one step per tap</div>
           </div>
           <div class="pair">
             <button class="key" data-vol="mute" aria-label="Mute" id="muteBtn"><span data-icon="mute"></span>Mute</button>
@@ -352,6 +370,44 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
     else if (r.via === "lg") via.textContent = "LG TV";
   }
 
+  // ---- LG | Vizio ----
+  var mode = "lg", lgCard = null;
+  var segBtns = document.querySelectorAll(".seg [data-tv]");
+  function applyMode(m) {
+    if (m !== "lg" && m !== "vizio") m = "lg";
+    if (m === mode && lgCard !== null) return;
+    segBtns.forEach(function (b) { b.setAttribute("aria-checked", String(b.getAttribute("data-tv") === m)); });
+    if (m === "vizio") {
+      lgCard = { num: vnum.innerHTML, via: via.textContent, muted: vcard.classList.contains("muted") };
+      vcard.classList.add("vizio"); vcard.classList.remove("muted"); muteBtn.classList.remove("on");
+      vnum.textContent = "Vizio";
+      via.textContent = "via HDMI-CEC";
+      vcard.setAttribute("aria-label", "Vizio (via HDMI-CEC)");
+    } else {
+      vcard.classList.remove("vizio"); vcard.removeAttribute("aria-label");
+      if (lgCard) { vnum.innerHTML = lgCard.num; via.textContent = lgCard.via; vcard.classList.toggle("muted", lgCard.muted); }
+    }
+    if (lgCard === null) lgCard = { num: vnum.innerHTML, via: via.textContent, muted: false };
+    mode = m;
+    document.documentElement.setAttribute("data-tv", m);
+  }
+  segBtns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var want = b.getAttribute("data-tv"), was = mode;
+      if (want === mode) return;
+      applyMode(want);
+      call("set_tv", want).then(function (r) {
+        if (r && r.ok) { show(r); return; }
+        applyMode(was);
+        show(r || { ok: false, status: "Could not switch the TV." });
+      });
+    });
+  });
+  // Vizio volume cannot be read back, so nothing caps it: Vol+ is one step per tap there, never held to repeat.
+  function repeats(el) {
+    return el.hasAttribute("data-hold") && !(mode === "vizio" && el.getAttribute("data-vol") === "up");
+  }
+
   // ---- the bridge ----
   function api() { return window.pywebview && window.pywebview.api; }
   function call(method, arg) {
@@ -361,7 +417,9 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
     return Promise.resolve(arg === undefined ? a[method]() : a[method](arg)).catch(function () { return { ok: false, status: "That did not work." }; });
   }
   function sendKey(code) { return call("key", code).then(show); }
-  function sendVolume(cmd) { return call("volume", cmd).then(function (r) { show(r); showVolume(r); }); }
+  function sendVolume(cmd) {
+    return call("volume", cmd).then(function (r) { show(r); if (r && r.via !== "vizio" && mode !== "vizio") showVolume(r); });
+  }
   function sendApp(pkg) { return call("app", pkg).then(show); }
 
   // ---- presses: pointer events so touch, pen and mouse all act at once; hold to repeat ----
@@ -385,7 +443,7 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
     held = el;
     el.classList.add(pressClass(el));
     fire(el);
-    if (el.hasAttribute("data-hold")) {
+    if (repeats(el)) {
       var every = el.hasAttribute("data-vol") ? 280 : 160;
       var again = function () { if (held === el) { fire(el); holdTimer = setTimeout(again, every); } };
       holdTimer = setTimeout(again, 450);
@@ -456,6 +514,7 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
       if (!r) return;
       if (r.apps && r.apps.length) drawApps(r.apps);
       via.textContent = r.lg ? "LG TV" : "Google TV";
+      applyMode(r.tv);
       show(r);
       setConn(r.ok ? "ready" : "offline");
     });
