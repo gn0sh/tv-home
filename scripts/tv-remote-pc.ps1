@@ -2,8 +2,9 @@
 .SYNOPSIS
   An on-screen remote for the Google TV, for the PC's touchscreen or mouse. Run it in your own PowerShell window.
 .DESCRIPTION
-  Big buttons: arrows and OK, Back, Home, the dashboard, play/pause, volume, mute, power, app shortcuts and a box to
-  type text into a search field on the TV. The window's keyboard works too: arrow keys, Enter (OK), Backspace (Back)
+  Big tap buttons, laid out like a Google TV remote: Power, Input, Settings, Assistant, Home, Back, arrows and OK,
+  rewind, play/pause, fast forward, volume, mute, channel and guide; hotkeys for the dashboard and the common streaming
+  apps (greyed out when the TV does not have them); and a box to type text into a search field on the TV. The window's keyboard works too: arrow keys, Enter (OK), Backspace (Back)
   and Escape (Home).
 
   It drives the TV with the adb that the tv-home install uses (%LOCALAPPDATA%\tv-home-tools), over one long-lived
@@ -62,9 +63,35 @@ public class TvRemoteForm : Form {
 
 # The only key codes and apps this remote sends.
 $Apps = [ordered]@{
-    'Dashboard' = 'com.gnosh.tvhome'
-    'YouTube'   = 'com.google.android.youtube.tv'
-    'Play Store'= 'com.android.vending'
+    'Dashboard'   = 'com.gnosh.tvhome'
+    'YouTube'     = 'com.google.android.youtube.tv'
+    'Netflix'     = 'com.netflix.ninja'
+    'Prime Video' = 'com.amazon.amazonvideo.livingroom'
+    'Disney+'     = 'com.disney.disneyplus'
+    'Max'         = 'com.wbd.stream'
+    'Hulu'        = 'com.hulu.livingroomplus'
+    'Peacock'     = 'com.peacocktv.peacockandroid'
+    'Paramount+'  = 'com.cbs.ott'
+    'Apple TV'    = 'com.apple.atve.androidtv.appletv'
+    'YouTube TV'  = 'com.google.android.youtube.tvunplugged'
+    'Spotify'     = 'com.spotify.tv.android'
+}
+
+# Which of those the TV has (one "pm list packages" at start-up); the rest are greyed out. Null: unknown, all stay on.
+function Get-TvPackages {
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Adb; $psi.Arguments = "-s $Serial shell pm list packages"
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $out = $p.StandardOutput.ReadToEndAsync()
+        if (-not $p.WaitForExit(5000)) { try { $p.Kill() } catch {}; return $null }
+        $set = @{}
+        foreach ($line in ($out.Result -split "`r?`n")) { if ($line -match '\Apackage:([A-Za-z0-9_.]+)\s*\z') { $set[$Matches[1]] = $true } }
+        if ($set.Count -eq 0) { return $null }
+        return $set
+    } catch { return $null }
 }
 
 $script:shell = $null
@@ -144,7 +171,10 @@ $form = New-Object TvRemoteForm
 $form.Text = 'TV remote'
 $form.BackColor = $bg
 $form.ForeColor = [System.Drawing.Color]::White
-$form.ClientSize = New-Object System.Drawing.Size(420, 760)
+$form.ClientSize = New-Object System.Drawing.Size(420, 960)
+# A shorter screen (a small laptop): fit it and scroll.
+$work = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+if ($work.Height -lt 1010) { $form.AutoScroll = $true; $form.ClientSize = New-Object System.Drawing.Size(440, ($work.Height - 50)) }
 $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
@@ -165,45 +195,55 @@ function New-Btn([string]$label, [int]$x, [int]$y, [int]$w, [int]$h, [scriptbloc
     $b
 }
 
-# Top row
-New-Btn 'Power' 20 20 120 60 { Send-Key 'POWER' } | Out-Null
-New-Btn 'Home' 150 20 120 60 { Send-Key 'HOME' } | Out-Null
-New-Btn 'Back' 280 20 120 60 { Send-Key 'BACK' } | Out-Null
+# The buttons of a Google TV remote, top to bottom.
+$small = New-Object System.Drawing.Font('Segoe UI', 11)
+function Row3([int]$y, [int]$h, $items) {
+    $x = 20
+    foreach ($it in $items) {
+        $code = $it[1]
+        $b = New-Btn $it[0] $x $y 120 $h { Send-Key $this.Tag }
+        $b.Tag = $code
+        if ($it[0].Length -gt 6) { $b.Font = $small }
+        $x += 130
+    }
+}
+Row3 20 56 @(@('Power', 'POWER'), @('Input', 'TV_INPUT'), @('Settings', 'SETTINGS'))
+Row3 84 56 @(@('Assistant', 'SEARCH'), @('Home', 'HOME'), @('Back', 'BACK'))
 
 # D-pad
-New-Btn ([char]0x25B2) 150 100 120 90 { Send-Key 'DPAD_UP' } | Out-Null
-New-Btn ([char]0x25C0) 20 200 120 120 { Send-Key 'DPAD_LEFT' } | Out-Null
-New-Btn 'OK' 150 200 120 120 { Send-Key 'DPAD_CENTER' } $okColor | Out-Null
-New-Btn ([char]0x25B6) 280 200 120 120 { Send-Key 'DPAD_RIGHT' } | Out-Null
-New-Btn ([char]0x25BC) 150 330 120 90 { Send-Key 'DPAD_DOWN' } | Out-Null
+New-Btn ([char]0x25B2) 150 150 120 76 { Send-Key 'DPAD_UP' } | Out-Null
+New-Btn ([char]0x25C0) 20 232 120 104 { Send-Key 'DPAD_LEFT' } | Out-Null
+New-Btn 'OK' 150 232 120 104 { Send-Key 'DPAD_CENTER' } $okColor | Out-Null
+New-Btn ([char]0x25B6) 280 232 120 104 { Send-Key 'DPAD_RIGHT' } | Out-Null
+New-Btn ([char]0x25BC) 150 342 120 76 { Send-Key 'DPAD_DOWN' } | Out-Null
 
-# Media and volume
-New-Btn 'Vol -' 20 440 120 60 { Send-Key 'VOLUME_DOWN' } | Out-Null
-New-Btn 'Play/Pause' 150 440 120 60 { Send-Key 'MEDIA_PLAY_PAUSE' } | Out-Null
-New-Btn 'Vol +' 280 440 120 60 { Send-Key 'VOLUME_UP' } | Out-Null
-New-Btn 'Mute' 150 510 120 50 { Send-Key 'VOLUME_MUTE' } | Out-Null
+# Media, volume, channels
+Row3 432 52 @(@('<< Rew', 'MEDIA_REWIND'), @('Play/Pause', 'MEDIA_PLAY_PAUSE'), @('Fwd >>', 'MEDIA_FAST_FORWARD'))
+Row3 490 52 @(@('Vol -', 'VOLUME_DOWN'), @('Mute', 'VOLUME_MUTE'), @('Vol +', 'VOLUME_UP'))
+Row3 548 46 @(@('Ch -', 'CHANNEL_DOWN'), @('Guide', 'GUIDE'), @('Ch +', 'CHANNEL_UP'))
 
-# Apps
-$x = 20
+# Streaming hotkeys: three columns.
+$appButtons = @()
+$i = 0
 foreach ($name in $Apps.Keys) {
-    $pkg = $Apps[$name]
-    $b = New-Btn $name $x 580 120 50 { Send-App $this.Tag }
-    $b.Tag = $pkg
-    $b.Font = New-Object System.Drawing.Font('Segoe UI', 11)
-    $x += 130
+    $b = New-Btn $name (20 + 130 * ($i % 3)) (608 + 52 * [math]::Floor($i / 3)) 120 44 { Send-App $this.Tag }
+    $b.Tag = $Apps[$name]
+    $b.Font = $small
+    $appButtons += $b
+    $i++
 }
 
 # Type text
 $box = New-Object System.Windows.Forms.TextBox
-$box.SetBounds(20, 650, 290, 40)
+$box.SetBounds(20, 828, 290, 40)
 $box.BackColor = $btnColor
 $box.ForeColor = [System.Drawing.Color]::White
 $box.MaxLength = 100
 $form.Controls.Add($box)
-New-Btn 'Send' 320 648 80 40 { Send-Text $box.Text; $box.Clear() } | Out-Null
+New-Btn 'Send' 320 826 80 40 { Send-Text $box.Text; $box.Clear() } | Out-Null
 
 $status = New-Object System.Windows.Forms.Label
-$status.SetBounds(20, 705, 380, 40)
+$status.SetBounds(20, 880, 380, 60)
 $status.ForeColor = [System.Drawing.Color]::FromArgb(160, 176, 204)
 $status.Font = New-Object System.Drawing.Font('Segoe UI', 10)
 $status.Text = 'Connecting...'
@@ -224,7 +264,16 @@ $box.Add_KeyDown({
 })
 $form.Add_Shown({
     $form.ActiveControl = $null
-    try { Start-TvShell; $status.Text = 'Ready: ' + $Serial }
+    try {
+        Start-TvShell; $status.Text = 'Ready: ' + $Serial
+        $have = Get-TvPackages
+        if ($null -ne $have) {
+            $status.Text = 'Ready: ' + $Serial + '. Greyed-out apps are not on the TV.'
+            foreach ($b in $appButtons) {
+                if (-not $have.ContainsKey($b.Tag)) { $b.Enabled = $false; $b.BackColor = $bg }
+            }
+        }
+    }
     catch { $script:failedAt = [DateTime]::Now; $status.Text = "Can't reach the TV at $Serial. Is it on and on the home Wi-Fi?" }
 })
 $form.Add_FormClosed({
