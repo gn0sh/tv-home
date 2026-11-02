@@ -586,7 +586,7 @@ Spec: M7 in `docs/specs/tv-home.md`. Panel: `docs/reviews/dashboard-info-panels.
 | `Display.getDeviceProductInfo()` (API 31) returns the sink's EDID PnP id (`GSM` = LG, `VIZ` = Vizio) on a Google TV dongle | Unverified | Platform API exists at our minSdk 31; whether Google TV fills it over HDMI is unknown. M7-F4 logs it on the emulator and Brian's TV; adb setting is the fallback |
 | HOME, SEARCH, ASSIST never reach the app | Verified (PR #15 CI, API 34) | `docs/status.md` blockers |
 | The Ask key is provisioned and spend-limited by Brian | Verified | `docs/status.md` 2026-11-01 |
-| Claude Opus 5.5 is $4 / $20 per MTok; Haiku 5.5 $0.10 / $0.50 | Verified (claude-api skill price table, cached 2026-10-06) | Used for the brief cap ceiling |
+| Claude Opus 5.5 is $4 / $20 per MTok; Haiku 5.5 $0.10 / $0.50 | Verified (claude-api skill price table, cached 2026-10-06) | Used for the brief cap ceiling; it holds only with the model pinned and no `fallbacks` (a fallback can re-serve a refused call on a pricier model) |
 | ZIP 37042 ≈ 36.53, -87.36 at two decimals | Unverified (A-M7-7) | Same value as ADR 0005's example; set over adb once |
 
 ### 11.2 Components (new or changed)
@@ -604,9 +604,9 @@ Spec: M7 in `docs/specs/tv-home.md`. Panel: `docs/reviews/dashboard-info-panels.
 | `core/ui/ContextCard.kt` | `contextCard(...)` | priority: severe alert > live game > game today > time of day |
 | `core/ui/HomeGlance.kt` | `homeGlance()`, `GlanceBudget`, `HeroZones` | the only text source for hero, top strip and brief line |
 | `core/ui/Oled.kt` | `TvProfile`, `Drift`, `IdleClock`, dim tokens | burn-in protection, pure |
-| `core/assistant/Brief.kt` | `briefFacts`, `briefRequestBody`, `BriefEngine`, `MonthlyCap`, `templateLine` | the daily line, capped, cached |
+| `core/assistant/Brief.kt` | `briefFacts`, `briefRequestBody`, `BriefEngine`, `BriefLedger`, `fillPlaceholders`, `templateLine` | the daily line: placeholders out, titles filled locally, one attempt per slot, fail-closed monthly cap |
 | `app/Hero.kt`, `HomeScreen.kt` | draw `HomeGlance` in zones; Watch and Quiet pills; idle layer | drawing only |
-| `app/FeedSettings.kt`, `ProvisionProvider.kt` | switches, `tv_profile`, travel rules, watch map, quiet | adb-set, DUMP/shell-guarded as today |
+| `app/FeedSettings.kt`, `ProvisionProvider.kt` | `panel.<id>` booleans (`PanelId` enum only), `tv_profile`, travel rules, watch map, quiet | adb-set, DUMP/shell-guarded as today; brief and Quiet not in the ADR 0003 MCP allowlist |
 
 ### 11.3 Contracts (signatures; all `:core`, pure unless noted)
 ```kotlin
@@ -630,9 +630,13 @@ data class HomeGlance(val clock: String, val date: String, val chip: String?, va
                       val card: ContextCard?, val brief: String?, val quiet: Boolean, val watch: WatchTarget?)
 fun homeGlance(inputs: GlanceInputs): HomeGlance   // GlanceBudget.fit applied inside
 
-data class BriefFacts(...)                         // exactly the fields in ADR 0008 section 5
-fun briefRequestBody(f: BriefFacts): String        // model AskConfig.MODEL, effort low, max_tokens 1024, schema {"line"}
-class BriefEngine(client, dailyCap, monthlyCap, store, clock, zone, enabled: () -> Boolean, hasKey: () -> Boolean)
+enum class PanelId { WEATHER, ALERTS, GAMES, BRIEF }  // provider key panel.<id>, boolean only
+data class BriefEvent(val id: String /* E1..E3 */, val whenText: String, val allDay: Boolean)  // no title field
+data class BriefFacts(...)                         // exactly the fields in ADR 0008 section 5; events: List<BriefEvent>
+fun briefRequestBody(f: BriefFacts, model: String): String  // pinned model, no fallbacks, effort low, max_tokens 1024, schema {line, uses}
+fun fillPlaceholders(line: String, titles: Map<String, String>, quiet: Boolean): String?  // null = unknown placeholder
+class BriefLedger(store, clock, zone)              // <yyyy-mm> <count> <last slot>; unreadable = exhausted; future date = no call
+class BriefEngine(client, ledger, cache, clock, zone, enabled: () -> Boolean, hasKey: () -> Boolean)
 ```
 "Leave by": within 60 min of a timed event whose title contains a rule keyword (case-insensitive), line 1 is
 "Leave by 5:40" (start minus rule minutes); no rule, no "Leave by". Rules are set over adb (none by default). The
@@ -645,17 +649,22 @@ ICS `LOCATION` field is not parsed in M7: adding a field to the bounded parser (
 2. **Alert.** Alerts loop fetches every 15 min (5 min while any alert is active). An OVERRIDE alert takes the context
    card ("Tornado Warning until 7:45 PM", 40 sp); SUFFIX alerts append to the chip ("72°F Rain · Flood Watch"). Past
    30 min without a good fetch the alerts are dropped and the chip says "alerts unknown".
-3. **Brief.** At the first minute tick on home after 07:00 or 16:00, if the brief is on, a key exists and both caps
-   allow, `BriefEngine` sends the facts once; success caches `{line, fingerprint, hadTitles, at}`. The line shows while
-   the fingerprint matches current facts; otherwise the template line.
+3. **Brief.** At the first minute tick on home after 07:00 or 16:00, if the brief is on, a key exists, the slot is
+   not yet attempted and the month has room, `BriefEngine` first writes the slot as attempted (no write, no call),
+   then sends the placeholder facts once. Success caches `{line, uses, fingerprint, at}`, with no titles. At draw
+   time `{E1}`..`{E3}` are filled locally (titles, or "Busy" in Quiet). The line shows while the facts it names are
+   unchanged; otherwise the template line.
 
 ### 11.5 Non-functional
 - **Requests.** NWS at most 12/h during an alert, 4/h otherwise, only while home is visible. Claude at most 2/day, 62/month.
 - **Disk.** Panel files cap 64 KiB each; brief file under 1 KiB. All in `noBackupFilesDir` (no backup, app-private).
-- **Privacy.** Location leaves the TV at two decimals (Open-Meteo, NWS). Event titles leave only in the brief (off by
-  default; never in Quiet). Nothing new is logged.
-- **Security review.** External input grows by one host (NWS) and one outbound personal-data flow (brief). Run
-  security-engineer on ADR 0008 sections 1 and 5 before tasks M7-B3 and M7-B10.
+- **Privacy.** Location leaves the TV at two decimals (Open-Meteo, NWS). Event titles never leave the TV: the brief
+  sends placeholders and times only. Quiet covers the hero, the Calendar tile and the full-screen agenda. Nothing new
+  is logged.
+- **Security review.** External input grows by one host (NWS). The design review (2026-11-02) asked for changes to
+  ADR 0008 sections 5 and 6 (`brief-titles-egress`, `brief-slot-attempt`, `brief-cap-fail-open`, `quiet-agenda-leak`,
+  `panel-switch-id-allowlist`, `brief-fingerprint-churn`, `brief-fallback-price`); applied in place. B2, B3 and B10
+  still get a code-level security review.
 
 ### 11.6 Risks
 | Risk | Likelihood | Mitigation |
@@ -664,5 +673,5 @@ ICS `LOCATION` field is not parsed in M7: adding a field to the bounded parser (
 | Unofficial sports APIs change or block | Medium | Adapter + cached season fallback; team goes dark, no crash |
 | EDID profile not exposed on Google TV | Medium | adb `tv_profile`; default LG (safer) |
 | Returning to home shows stale panels for a few seconds | High, low impact | Age lines; fetch-if-due on return |
-| Brief wording wrong or odd from a hostile invite title | Low | Display-only, capped, cleaned; Quiet; template fallback |
+| Brief wording odd (Claude never sees titles, so an invite title cannot steer it) | Low | Display-only, capped, cleaned; unknown placeholder -> template |
 | Near-black first key consumed (deviation from M7-5.2) | n/a | Flagged to PM/ux; one constant to flip |
