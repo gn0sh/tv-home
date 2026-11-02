@@ -25,6 +25,8 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any
 
+from .lgpipe import VOLUME_CAP
+
 DEFAULT_SERIAL = "192.168.68.71:5555"
 SERIAL_RE = re.compile(r"\A\d{1,3}(\.\d{1,3}){3}:\d{1,5}\Z")
 MUTEX_NAME = "Local\\gnosh-tv-remote"  # the same name as the classic remote, so only one of them runs at a time
@@ -330,9 +332,13 @@ class RemoteApi:
             if value in ("muted", "unmuted"):
                 return _reply(True, "Muted" if value == "muted" else "Sound on", via="lg", muted=value == "muted")
             if value.isdigit():
-                return _reply(True, f"Volume {value}", via="lg", level=int(value))
+                limit = " (the most this remote allows)" if int(value) >= VOLUME_CAP else ""
+                return _reply(True, f"Volume {value}{limit}", via="lg", level=int(value))
             return _reply(True, "Volume changed", via="lg")
         reason = reply[6:] if reply.startswith("error ") else ""
+        if reason == "the LG did not report its volume":
+            # lgpipe refused to raise an unknown level (volume-step-cap); the adb key must not get round that.
+            return _reply(False, "The LG did not report its volume, so it was not raised.", via="lg")
         reason = reason if LG_REASON_RE.match(reason) else "did not work"
         lg_said = "The LG" + reason[6:] if reason.startswith("the LG") else "The LG: " + reason
         ok, status = self._tv.send(volume_key_line(cmd))

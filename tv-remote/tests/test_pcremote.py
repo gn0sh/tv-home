@@ -277,7 +277,7 @@ def test_volume_cap_60_still_applies():
     api, fake, vol = lg_api(lg)
     try:
         assert api.volume("up")["level"] == 60
-        assert lg.calls == ["up", ("set", 60)]
+        assert lg.calls == []  # lgpipe checks the cap before stepping
     finally:
         vol.close()
 
@@ -377,6 +377,17 @@ def test_unexpected_exceptions_never_reach_the_page():
 
     r = RemoteApi(sh, boom).volume("up")
     assert r == {"ok": False, "status": "Something went wrong (RuntimeError). Try again."}
+
+
+def test_unknown_lg_level_is_not_raised_through_adb_either():
+    lg = FakeLg(None)
+    api, fake, vol = lg_api(lg)
+    try:
+        r = api.volume("up")
+    finally:
+        vol.close()
+    assert r["ok"] is False and "not raised" in r["status"]
+    assert fake.lines == [] and lg.calls == []
 
 
 def test_busy_lg_drops_the_press():

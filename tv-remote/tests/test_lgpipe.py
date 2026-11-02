@@ -15,7 +15,7 @@ class FakeLg:
         if self.fail:
             raise self.fail
         self.calls.append(direction)
-        self.volume += 1 if direction == "up" else -1
+        self.volume += getattr(self, "step", 1) if direction == "up" else -1
         return self.volume
 
     async def set_volume(self, level):
@@ -41,7 +41,48 @@ def test_up_and_down():
 def test_cap_at_60():
     lg = FakeLg(60)
     assert run(handle(lg, "up")) == "ok 60"
+    assert lg.calls == []  # checked before stepping: no step up at the cap
+
+
+def test_above_cap_is_brought_down_without_a_step():
+    lg = FakeLg(75)
+    assert run(handle(lg, "up")) == "ok 60"
+    assert lg.calls == [("set", 60)]
+
+
+def test_step_that_lands_above_cap_is_set_back():
+    lg = FakeLg(59)
+    lg.step = 3  # a TV that steps by more than one
+    assert run(handle(lg, "up")) == "ok 60"
     assert lg.calls == ["up", ("set", 60)]
+
+
+def test_unknown_level_is_never_raised():
+    lg = FakeLg(None)
+    assert run(handle(lg, "up")) == "error the LG did not report its volume"
+    assert lg.calls == []
+
+
+def test_unknown_level_can_still_go_down():
+    lg = FakeLg(None)
+    lg.volume_step = lambda d: _ret(lg.calls.append(d))
+    assert run(handle(lg, "down")) == "ok -"
+    assert lg.calls == ["down"]
+
+
+async def _ret(_):
+    return None
+
+
+def test_failed_set_at_the_cap_is_an_error_not_a_step():
+    lg = FakeLg(80)
+
+    async def boom(level):
+        raise DeviceUnreachable("lg", "192.168.68.80")
+
+    lg.set_volume = boom
+    assert run(handle(lg, "up")) == "error the LG did not answer"
+    assert lg.calls == []
 
 
 def test_mute_toggles():

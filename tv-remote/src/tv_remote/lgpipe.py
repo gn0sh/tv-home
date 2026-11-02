@@ -27,7 +27,17 @@ async def handle(lg: LgBackend, line: str) -> str:
             st = await lg.status()
             await lg.set_mute(not bool(st.muted))
             return "ok " + ("muted" if not st.muted else "unmuted")
-        level = await lg.volume_step("up" if cmd == "up" else "down")
+        if cmd == "up":
+            # The cap is checked before stepping, as lg_volume does (server.py, finding volume-step-cap): never step
+            # up from an unknown level, and never step past 60.
+            current = (await lg.status()).volume
+            if current is None:
+                return "error the LG did not report its volume"
+            if current >= VOLUME_CAP:
+                if current > VOLUME_CAP:
+                    current = await lg.set_volume(VOLUME_CAP)
+                return "ok " + str(current)
+        level = await lg.volume_step(cmd)
         if level is not None and level > VOLUME_CAP:
             level = await lg.set_volume(VOLUME_CAP)
         return "ok " + ("-" if level is None else str(level))
