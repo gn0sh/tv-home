@@ -33,7 +33,7 @@ jobs:
           get() { # name url [nws]
             local name=$1 url=$2 ua="tvhome-hero/1" accept="*/*"
             if [[ "${3:-}" == nws ]]; then ua=$NWS_UA; accept="application/geo+json"; fi
-            code=$(curl -sS --max-time 20 --max-filesize 2000000 -A "$ua" -H "Accept: $accept" \
+            code=$(curl -sSL --max-redirs 3 --max-time 20 --max-filesize 2000000 -A "$ua" -H "Accept: $accept" \
               -o "feeds/$name.json" -w '%{http_code}' "$url" || echo 000)
             keys=$(jq -r 'if type=="object" then (keys|join(",")) else type end' "feeds/$name.json" 2>/dev/null || echo unparsed)
             echo "$name: HTTP $code, top-level: $keys"
@@ -45,11 +45,11 @@ jobs:
           get espn-team-194 "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/194/schedule"
           get espn-cfb-scoreboard "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
       - name: Print trimmed bodies (temp)
-        shell: bash
+        shell: bash {0}
         run: |
           for f in feeds/*.json; do
             echo "=====BEGIN $f"
-            jq -c 'if type=="object" then with_entries(if (.value|type)=="array" then .value |= .[0:3] else . end) else . end' "$f" | head -c 60000
+            jq -c 'if type=="object" then with_entries(if (.value|type)=="array" then .value |= .[0:2] else . end) else . end' "$f" || echo "unparsed"
             echo
             echo "=====END $f"
           done
