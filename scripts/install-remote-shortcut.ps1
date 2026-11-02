@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
   Puts a "TV Remote" icon on the desktop and in the Start menu that opens the on-screen remote with no console
-  window. -Remove takes both icons away.
+  window, and an "Update TV Remote" icon next to it that runs update-tv-remote.ps1 (pull, reinstall if needed,
+  restart). -Remove takes all four icons away.
 .DESCRIPTION
   By default the icon opens the remote app (tv-remote\, ADR 0006): it first runs "uv sync --locked" for the tv-remote
   folder, which installs the app and its locked dependencies (not the test tools) into tv-remote\.venv, then points the icon at
@@ -23,9 +24,13 @@ $places = @(
     (Join-Path ([Environment]::GetFolderPath('Desktop')) 'TV Remote.lnk'),
     (Join-Path ([Environment]::GetFolderPath('Programs')) 'TV Remote.lnk')
 )
+$updatePlaces = @(
+    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Update TV Remote.lnk'),
+    (Join-Path ([Environment]::GetFolderPath('Programs')) 'Update TV Remote.lnk')
+)
 
 if ($Remove) {
-    foreach ($p in $places) { if (Test-Path $p) { Remove-Item $p; Write-Host "Removed $p" } }
+    foreach ($p in $places + $updatePlaces) { if (Test-Path $p) { Remove-Item $p; Write-Host "Removed $p" } }
     exit 0
 }
 
@@ -69,4 +74,19 @@ foreach ($p in $places) {
     $s.Save()
     Write-Host "Made $p"
 }
-Write-Host 'Done. Tap "TV Remote" on the desktop or in the Start menu. To pin it to the taskbar: right-click it in the Start menu > Pin to taskbar.'
+
+$updater = Join-Path $PSScriptRoot 'update-tv-remote.ps1'
+if (Test-Path $updater) {
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    foreach ($p in $updatePlaces) {
+        $s = $shell.CreateShortcut($p)
+        $s.TargetPath = $ps
+        $s.Arguments = "-NoProfile -WindowStyle Hidden -File `"$updater`""
+        $s.WorkingDirectory = $repo
+        $s.IconLocation = (Join-Path $env:SystemRoot 'System32\shell32.dll') + ',238'
+        $s.Description = 'Get the latest TV Remote and restart it'
+        $s.Save()
+        Write-Host "Made $p"
+    }
+}
+Write-Host 'Done. Tap "TV Remote" on the desktop or in the Start menu. After the team merges a change, double-click "Update TV Remote". To pin it to the taskbar: right-click it in the Start menu > Pin to taskbar.'
