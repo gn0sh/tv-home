@@ -25,6 +25,25 @@ class AgendaTest {
 
     private fun titles(d: AgendaDay) = d.items.map { it.title }
 
+    /** Title and label only, for comparisons that predate the M7 instants. */
+    private fun List<AgendaItem>.bare() = map { it.copy(startsAt = null, endsAt = null) }
+
+    @Test fun timedItemsCarryStartAndEndInstantsAllDayCarryNone() {
+        val s = Instant.parse("2026-03-10T15:00:00Z")
+        val e = Instant.parse("2026-03-10T16:30:00Z")
+        val now = Instant.parse("2026-03-10T14:00:00Z")
+        val (t, _) = buildAgenda(listOf(
+            EventInstance("a", "Dentist", EventTime.At(s), EventTime.At(e)),
+            EventInstance("b", "Point", EventTime.At(s.plusSeconds(60)), null),
+            EventInstance("c", "Holiday", EventTime.AllDay(LocalDate.of(2026, 3, 10)), null),
+        ), now, ny)
+        val by = t.items.associateBy { it.title }
+        assertEquals(s, by.getValue("Dentist").startsAt); assertEquals(e, by.getValue("Dentist").endsAt)
+        assertEquals(null, by.getValue("Point").endsAt)
+        assertEquals(null, by.getValue("Holiday").startsAt); assertEquals(null, by.getValue("Holiday").endsAt)
+        assertEquals("AgendaItem(title=7 chars, ${by.getValue("Dentist").label})", by.getValue("Dentist").toString())
+    }
+
     @Test
     fun daysAreTodayAndTomorrowInZone() {
         val (t, tm) = agendaOf("empty-day.ics")
@@ -43,7 +62,7 @@ class AgendaTest {
     @Test
     fun weeklyShowsTodayWithLocalStart() {
         val (t, tm) = agendaOf("weekly-rrule.ics")
-        assertEquals(listOf(AgendaItem("Weekly standup", TimeLabel.Starts(LocalTime.of(11, 0)))), t.items)
+        assertEquals(listOf(AgendaItem("Weekly standup", TimeLabel.Starts(LocalTime.of(11, 0)))), t.items.bare())
         assertEquals(emptyList<AgendaItem>(), tm.items)
     }
 
@@ -51,14 +70,14 @@ class AgendaTest {
     fun exdateSkipsTodayKeepsTomorrow() {
         val (t, tm) = agendaOf("exdate.ics")
         assertEquals(emptyList<AgendaItem>(), t.items)
-        assertEquals(listOf(AgendaItem("Daily sync", TimeLabel.Starts(LocalTime.of(10, 0)))), tm.items)
+        assertEquals(listOf(AgendaItem("Daily sync", TimeLabel.Starts(LocalTime.of(10, 0)))), tm.items.bare())
     }
 
     @Test
     fun movedInstanceShowsOnceOnNewDay() {
         val (t, tm) = agendaOf("moved-instance.ics")
         assertEquals(emptyList<AgendaItem>(), t.items)
-        assertEquals(listOf(AgendaItem("Planning (moved)", TimeLabel.Starts(LocalTime.of(14, 0)))), tm.items)
+        assertEquals(listOf(AgendaItem("Planning (moved)", TimeLabel.Starts(LocalTime.of(14, 0)))), tm.items.bare())
     }
 
     @Test
@@ -83,7 +102,7 @@ class AgendaTest {
                 AgendaItem("No end", TimeLabel.AllDay),
                 AgendaItem("Timed same day", TimeLabel.Starts(LocalTime.of(9, 0))),
             ),
-            t.items,
+            t.items.bare(),
         )
         assertEquals(emptyList<AgendaItem>(), tm.items)
     }
@@ -91,8 +110,8 @@ class AgendaTest {
     @Test
     fun multiDayAllDayAppearsOnEachDate() {
         val (t, tm) = agendaOf("allday-multiday.ics")
-        assertEquals(listOf(AgendaItem("Conference", TimeLabel.AllDay)), t.items)
-        assertEquals(listOf(AgendaItem("Conference", TimeLabel.AllDay)), tm.items)
+        assertEquals(listOf(AgendaItem("Conference", TimeLabel.AllDay)), t.items.bare())
+        assertEquals(listOf(AgendaItem("Conference", TimeLabel.AllDay)), tm.items.bare())
         // Exclusive end: not on Mar 12.
         val later = Clock.fixed(Instant.parse("2026-03-11T14:00:00Z"), ZoneOffset.UTC)
         val (t2, tm2) = agendaOf("allday-multiday.ics", c = later)
@@ -105,16 +124,16 @@ class AgendaTest {
         val sat = Clock.fixed(Instant.parse("2026-03-07T14:00:00Z"), ZoneOffset.UTC)
         val (t, tm) = agendaOf("dst-change-week.ics", c = sat)
         assertEquals(LocalDate.of(2026, 3, 7), t.date)
-        assertEquals(listOf(AgendaItem("Morning run", TimeLabel.Starts(LocalTime.of(9, 0)))), t.items)
+        assertEquals(listOf(AgendaItem("Morning run", TimeLabel.Starts(LocalTime.of(9, 0)))), t.items.bare())
         assertEquals(LocalDate.of(2026, 3, 8), tm.date)
-        assertEquals(listOf(AgendaItem("Morning run", TimeLabel.Starts(LocalTime.of(9, 0)))), tm.items)
+        assertEquals(listOf(AgendaItem("Morning run", TimeLabel.Starts(LocalTime.of(9, 0)))), tm.items.bare())
     }
 
     @Test
     fun eventAcrossMidnightStartsTodayContinuesTomorrow() {
         val (t, tm) = agendaOf("across-midnight.ics")
-        assertEquals(listOf(AgendaItem("Late movie", TimeLabel.Starts(LocalTime.of(22, 0)))), t.items)
-        assertEquals(listOf(AgendaItem("Late movie", TimeLabel.Continues)), tm.items)
+        assertEquals(listOf(AgendaItem("Late movie", TimeLabel.Starts(LocalTime.of(22, 0)))), t.items.bare())
+        assertEquals(listOf(AgendaItem("Late movie", TimeLabel.Continues)), tm.items.bare())
     }
 
     @Test
@@ -143,7 +162,7 @@ class AgendaTest {
         val ev = EventInstance("u", "Point", EventTime.At(Instant.parse("2026-03-11T15:00:00Z")), null)
         val (t, tm) = buildAgenda(listOf(ev), clock.instant(), ny)
         assertEquals(0, t.items.size)
-        assertEquals(listOf(AgendaItem("Point", TimeLabel.Starts(LocalTime.of(11, 0)))), tm.items)
+        assertEquals(listOf(AgendaItem("Point", TimeLabel.Starts(LocalTime.of(11, 0)))), tm.items.bare())
     }
 
     @Test
