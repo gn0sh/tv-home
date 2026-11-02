@@ -137,7 +137,7 @@ final_scan() {
   [[ $rc -eq 0 ]] && pass "no secret pattern and no dummy value in captured logs, dropbox or dumpsys"
   return $rc
 }
-on_exit() { local rc=$?; final_scan || rc=1; exit $rc; }
+on_exit() { local rc=$?; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
 trap on_exit EXIT
 
 step "device"
@@ -587,6 +587,84 @@ else
   pass "hero: one Back leaves the app"
   no_app_crash_yet "hero"
 fi
+
+step "M3 Home: off as installed; turning on the Home watch makes Home open the dashboard; rollback restores"
+# The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV. Google TV's launcher holds HOME at priority 2
+# (home-role-priority) and the system takes Home before an accessibility key filter, so the app watches for the TV's
+# home coming up and brings itself to the front.
+other_app() { sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true; sleep 3; }
+a11y_before=$(sh_ settings get secure enabled_accessibility_services | tr -d '\r')
+on_before=$(sh_ settings get secure accessibility_enabled | tr -d '\r')
+[[ $on_before == 1 ]] || on_before=0   # a missing setting reads back as "null"
+svc="$PKG/$PKG.HomeWatchService"
+m3_restore() {
+  if [[ -z $a11y_before || $a11y_before == null ]]; then sh_ settings delete secure enabled_accessibility_services >/dev/null 2>&1 || true
+  else sh_ settings put secure enabled_accessibility_services "$a11y_before" >/dev/null 2>&1 || true; fi
+  sh_ settings put secure accessibility_enabled "$on_before" >/dev/null 2>&1 || true
+}
+# If a check below fails mid-step, put the emulator back (m3-dirty-on-fail), in case it is reused.
+m3_dirty=1
+m3_cleanup() { [[ -n ${m3_dirty:-} ]] && m3_restore; return 0; }
+other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front && fail "m3: as installed, Home opened the dashboard (the Home watch must be off until turned on)"
+stock_pkg=$(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1); stock_pkg=${stock_pkg%%/*}
+[[ -n $stock_pkg ]] || fail "m3: could not read the TV's own home package (test setup)"
+pass "m3: as installed, Home is still the TV's own ($stock_pkg)"
+if [[ -z $a11y_before || $a11y_before == null ]]; then list="$svc"; else list="$a11y_before:$svc"; fi
+sh_ settings put secure enabled_accessibility_services "$list"
+sh_ settings put secure accessibility_enabled 1
+sleep 3
+# The service must be bound before Home is pressed.
+for _ in $(seq 1 10); do sh_ dumpsys accessibility | tr -d '\r' | grep -q "HomeWatchService" && break; sleep 1; done
+a11y_state() { sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services|Enabled services|HomeWatchService' | head -12; }
+sh_ dumpsys accessibility | tr -d '\r' | grep -q "HomeWatchService" || { a11y_state; fail "m3: the Home watch was not bound after turning it on"; }
+other_app
+in_front && fail "m3: Settings did not come to the front (test setup)"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+if ! in_front; then
+  a11y_state
+  fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
+fi
+pass "m3: Home from another app opens the dashboard"
+# The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
+# Settings, until another app comes up (HomeRedirect in :core has the timing cases).
+# A fresh redirect, then Home again about a second later (inside the 2.5 s window).
+sh_ input keyevent KEYCODE_HOME; sleep 1
+in_front || fail "m3: the first Home of the double press did not redirect (m3-qa-double-vacuous; $(resumed | head -1))"
+sh_ input keyevent KEYCODE_HOME; sleep 4
+in_front && fail "m3: a quick second Home did not leave the TV's own home showing"
+resumed | head -1 | grep -qF "$stock_pkg/" || fail "m3: a quick second Home did not show the TV's own home ($(resumed | head -1))"
+pass "m3: Home twice quickly leaves the TV's own home (and its Settings) showing"
+sh_ input keyevent KEYCODE_HOME; sleep 4
+in_front && fail "m3: Home on the TV's own home during a stay brought the dashboard back"
+pass "m3: further Home presses keep the TV's own home until an app is opened"
+other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3: after leaving the TV's own home, Home did not open the dashboard again ($(resumed | head -1))"
+pass "m3: once another app has been opened, Home opens the dashboard again"
+if (( napps >= 2 )); then
+  start=$(focus_after m3); start_name=${start%%|*}
+  key DPAD_RIGHT; key DPAD_RIGHT
+  moved=$(focus_after m3)
+  [[ -n ${moved%%|*} && ${moved%%|*} != "$start_name" ]] || fail "m3: Right x2 did not move focus off '$start_name' (test setup; m3-home-focus-vacuous)"
+  sh_ input keyevent KEYCODE_HOME; sleep 3
+  cur=$(focus_after m3)
+  [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"
+  pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
+fi
+sh_ input keyevent KEYCODE_HOME; sleep 3   # focus back on the first tile, as before Down in M2b
+key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
+expect_text "m3-full" "Calendar full screen"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3: Home from a full screen left the app"
+ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
+pass "m3: Home from the full-screen calendar returns to the home row"
+m3_restore
+m3_dirty=""
+sleep 2
+other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front && fail "m3: after rollback, Home still opens the dashboard"
+pass "m3: rollback (Home watch off, settings restored) gives Home back to the TV"
+no_app_crash_yet "m3"
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"
 network on

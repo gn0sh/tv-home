@@ -44,19 +44,61 @@ class AppManifestTest {
         assertEquals(setOf("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"), perms)
     }
 
-    /** M2: package visibility is only "apps with a TV launcher entry"; no <package> or <provider> entries. */
-    @Test fun queriesOnlyLeanbackLauncherIntent() {
+    /**
+     * M2: package visibility is "apps with a TV launcher entry", plus (M3) the TV's home activities for
+     * HomeWatchService; no <package> or <provider> entries.
+     */
+    @Test fun queriesOnlyLeanbackLauncherAndHomeIntents() {
         val q = manifest.kids("queries").single()
         assertTrue(q.kids("package").isEmpty() && q.kids("provider").isEmpty())
-        val intent = q.kids("intent").single()
-        assertEquals(listOf("android.intent.action.MAIN"), intent.kids("action").map { it.attr("name") })
-        assertEquals(listOf("android.intent.category.LEANBACK_LAUNCHER"), intent.kids("category").map { it.attr("name") })
-        assertTrue(intent.kids("data").isEmpty())
+        val intents = q.kids("intent")
+        intents.forEach {
+            assertEquals(listOf("android.intent.action.MAIN"), it.kids("action").map { a -> a.attr("name") })
+            assertTrue(it.kids("data").isEmpty())
+        }
+        assertEquals(
+            listOf("android.intent.category.LEANBACK_LAUNCHER", "android.intent.category.HOME"),
+            intents.map { it.kids("category").single().attr("name") },
+        )
     }
 
-    /** Becoming the default home is M3 (a hard stop): no HOME category anywhere yet. */
+    /** No HOME intent filter on any component (home-role-priority): HOME appears only in <queries>. */
     @Test fun noHomeCategory() {
-        assertFalse(File(app, "src/main/AndroidManifest.xml").readText().contains("android.intent.category.HOME"))
+        assertEquals(1, Regex("android\\.intent\\.category\\.HOME").findAll(File(app, "src/main/AndroidManifest.xml").readText()).count())
+        (application.kids("activity") + application.kids("activity-alias")).forEach { c ->
+            c.kids("intent-filter").forEach { f ->
+                assertFalse(f.kids("category").any { it.attr("name") == "android.intent.category.HOME" })
+            }
+        }
+    }
+
+    /** M3 Home watch: window-state events only, bound by the system only, no window content, no key filtering. */
+    @Test fun homeWatchOnlySeesWindowChanges() {
+        val svc = application.kids("service").single()
+        assertEquals(".HomeWatchService", svc.attr("name"))
+        assertEquals("android.permission.BIND_ACCESSIBILITY_SERVICE", svc.attr("permission"))
+        assertEquals(
+            listOf("android.accessibilityservice.AccessibilityService"),
+            svc.kids("intent-filter").single().kids("action").map { it.attr("name") },
+        )
+        assertEquals("@xml/home_watch", svc.kids("meta-data").single().attr("resource"))
+        val cfg = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(File(app, "src/main/res/xml/home_watch.xml")).documentElement
+        assertEquals("false", cfg.attr("canRetrieveWindowContent"))
+        assertNull(cfg.attr("canRequestFilterKeyEvents"))
+        assertNull(cfg.attr("accessibilityFlags"))
+        assertNull(cfg.attr("canPerformGestures"))
+        assertEquals("typeWindowStateChanged", cfg.attr("accessibilityEventTypes"))
+        assertEquals(":mic", svc.attr("process"))
+        assertNull(cfg.attr("canRequestTouchExplorationMode"))
+    }
+
+    /** a11y-event-breadth: the Home watch reads only an event's type, package and class, never its text or source. */
+    @Test fun homeWatchReadsNoEventContent() {
+        val src = File(app, "src/main/kotlin/com/gnosh/tvhome/HomeWatchService.kt").readText()
+        for (bad in listOf(".text", "getText", ".source", "getSource", "contentDescription", "rootInActiveWindow", "windows", "Log.")) {
+            assertFalse(src.contains(bad), "HomeWatchService must not use $bad")
+        }
     }
 
     @Test fun agendaIsAOnlyLeanbackLauncherEntry() {
@@ -92,7 +134,9 @@ class AppManifestTest {
             application.kids("activity").map { it.attr("name") }.toSet(),
         )
         assertEquals(listOf(".ProvisionProvider"), application.kids("provider").map { it.attr("name") })
-        assertTrue(application.kids("service").isEmpty() && application.kids("receiver").isEmpty())
+        assertEquals(listOf(".HomeWatchService"), application.kids("service").map { it.attr("name") })
+        assertTrue(application.kids("receiver").isEmpty())
+        assertTrue(application.kids("activity-alias").isEmpty())
     }
 
     @Test fun referencedResourcesExist() {

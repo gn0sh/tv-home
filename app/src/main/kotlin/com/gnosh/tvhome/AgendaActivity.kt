@@ -48,6 +48,10 @@ class AgendaActivity : ComponentActivity() {
     private val installed = InstalledApps()
     private var layout by mutableStateOf(SavedLayout())
     private val layoutStore by lazy { AppLayoutStore(applicationContext) }
+    private var entry by mutableStateOf(HomeEntry(0, null))
+
+    /** M3: [ACTION_ASK] opens Ask Claude; anything else (Home, the launcher entry) shows the row. */
+    private fun targetOf(intent: Intent?): String? = if (intent?.action == ACTION_ASK) HomeEntry.ASK else null
 
     /**
      * Speech for Ask Claude: the system recognizer dialog (RecognizerIntent), so the app needs no RECORD_AUDIO
@@ -87,6 +91,8 @@ class AgendaActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A recreated activity (savedInstanceState) keeps its own screen; only a fresh start honours the intent.
+        if (savedInstanceState == null) targetOf(intent)?.let { entry = HomeEntry(1, it) }
         val session = (application as TvHomeApp).graph.session
 
         lifecycleScope.launch {
@@ -134,6 +140,7 @@ class AgendaActivity : ComponentActivity() {
                 agenda = model,
                 ask = askHost,
                 layout = layout,
+                entry = entry,
                 onLayoutChange = { next ->
                     // Unknown packages stay in the stored order and hidden set (layout-prune-transient): only display
                     // filters them. apply() updates the in-memory prefs at once and writes in call order, so saves
@@ -143,5 +150,20 @@ class AgendaActivity : ComponentActivity() {
                 },
             )
         }
+    }
+
+    /** singleTask: Home and the launcher entry arrive here while the activity exists. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        entry = HomeEntry(entry.seq + 1, targetOf(intent))
+    }
+
+    companion object {
+        /** Opens Ask Claude, listening (the PC remote or adb; the mic key cannot be caught, PR #15). Any app could send it; it only shows the Ask view. */
+        const val ACTION_ASK = "com.gnosh.tvhome.action.ASK"
+
+        /** Shows the home row, focus on the first tile (sent by [HomeWatchService] when the TV's own home comes up). */
+        const val ACTION_HOME = "com.gnosh.tvhome.action.HOME"
     }
 }

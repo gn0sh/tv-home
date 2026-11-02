@@ -33,6 +33,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +59,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -119,17 +122,29 @@ fun HomeScreen(
     ask: AskHost,
     layout: SavedLayout,
     onLayoutChange: (SavedLayout) -> Unit,
+    entry: HomeEntry = HomeEntry(0, null),
 ) {
     // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     var returningTo by rememberSaveable { mutableStateOf<String?>(null) }
+    // M3: the remote's Home button (HomeWatchService, ACTION_HOME) shows the home row from anywhere, with focus on the
+    // first tile; ACTION_ASK opens Ask Claude, listening, as a fresh session even if Ask was open.
+    var pendingHome by remember { mutableStateOf(false) }
+    var askSession by remember { mutableIntStateOf(0) }
+    LaunchedEffect(entry.seq) {
+        if (entry.seq == 0) return@LaunchedEffect
+        returningTo = null
+        if (entry.target == DOCK_ASK) askSession++
+        open = entry.target
+        if (entry.target == null) pendingHome = true
+    }
     // Kept while a full screen is showing (declared before the switch), so Up after Back still restores.
     val rowState = rememberLazyListState()
     val appFocus = remember { AppFocus() }
     fun close() { returningTo = open; open = null }
     when (open) {
         DOCK_CALENDAR -> { CalendarFullScreen(agenda, theme, onClose = ::close); return }
-        DOCK_ASK -> { AskFullScreen(ask, theme, onClose = ::close); return }
+        DOCK_ASK -> { key(askSession) { AskFullScreen(ask, theme, onClose = ::close) }; return }
     }
     // Everything installed (default order), then the user's order and hidden set applied (M2g, AppLayout in :core).
     val allApps = (apps as? AppsState.Loaded)?.apps.orEmpty()
@@ -212,6 +227,20 @@ fun HomeScreen(
         if (settled) return@LaunchedEffect
         // Re-check after the frame: a key press in that frame settles focus, and must not be overridden (dock-preview-steal).
         if (firstApp != null) { if (focusSoon(firstApp) { !settled }) settled = true } else focusSoon(calendar) { !settled }
+    }
+    LaunchedEffect(pendingHome, firstApp, apps is AppsState.Loading) {
+        if (!pendingHome) return@LaunchedEffect
+        menuFor = null; hiddenOpen = false
+        val first = firstApp
+        if (first == null) {
+            if (apps is AppsState.Loading) return@LaunchedEffect // the initial-focus effect places focus once they load
+            focusSoon(calendar) // no app tiles (pending-home-stuck): the dock is the home focus
+        } else {
+            runCatching { rowState.scrollToItem(0) }
+            focusSoon(first)
+        }
+        settled = true
+        pendingHome = false
     }
     // What the hero shows: the focused tile's label. Written from the tiles' onFocused; read only inside the hero's title.
     val heroLabel = remember { mutableStateOf(HERO_IDLE_TITLE) }
@@ -465,8 +494,15 @@ private fun TileFrame(
                 .onFocusChanged {
                     focused = it.isFocused
                     if (it.isFocused) onFocused()
+                    // A press whose release went elsewhere (the menu opened) does not carry over (tile-down-reset).
+                    else { downAt.longValue = -1L; longFired.value = false }
                 }
-                .semantics { contentDescription = description }
+                .semantics {
+                    contentDescription = description
+                    // The menu is reachable without the held key too (tile-a11y-longclick).
+                    val menu = onLongClick
+                    if (menu != null) this.onLongClick(label = null) { menu(); true }
+                }
                 .then(
                     if (onLongClick == null) Modifier else Modifier.onPreviewKeyEvent { e ->
                         if (e.key != Key.DirectionCenter && e.key != Key.Enter && e.key != Key.NumPadEnter) {
@@ -588,6 +624,11 @@ private const val ASK_BUTTON_W_DP = 250
 private const val ASK_BUTTON_H_DP = 56
 
 private const val DOCK_CALENDAR = "calendar"
+
+/** A request from outside the screen (M3): [seq] counts them; [target] null shows the home row, [ASK] opens Ask Claude. */
+data class HomeEntry(val seq: Int, val target: String?) {
+    companion object { const val ASK = DOCK_ASK }
+}
 private const val DOCK_ASK = "ask"
 
 /** Focus-requester key of the "Hidden apps (N)" tile; cannot clash with a package name. */

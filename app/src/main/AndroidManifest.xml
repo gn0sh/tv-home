@@ -12,6 +12,11 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
         </intent>
+        <!-- M3: lets HomeWatchService find the TV's own home activities. Visibility only; the app declares no HOME. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
     </queries>
 
     <uses-feature android:name="android.software.leanback" android:required="true" />
@@ -40,6 +45,25 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- M3 Home: an accessibility service that watches only for the TV's own home screen coming up and then
+             brings the dashboard to the front (HomeWatchService; res/xml/home_watch.xml). No window content, no key
+             filtering. It does nothing until enabled in the TV's accessibility settings, which
+             scripts/tv-home-takeover.ps1 -TurnOn (run by Brian) does and -Rollback undoes. Its own process (:mic,
+             kept from the first version) so it never waits on the dashboard's UI thread. -->
+        <service
+            android:name=".HomeWatchService"
+            android:process=":mic"
+            android:exported="true"
+            android:label="@string/mic_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/home_watch" />
+        </service>
 
         <!-- Put a secret on the device over adb (architecture section 5). No intent-filter. Only holders of DUMP
              (the adb shell user; third-party apps cannot get it) may start it. -->

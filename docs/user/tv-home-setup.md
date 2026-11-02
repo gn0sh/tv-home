@@ -86,3 +86,26 @@ git pull
 ```
 It uses the adb in `%LOCALAPPDATA%\tv-home-tools`, opens no port and sends only the fixed commands its buttons name.
 Typed text may use letters, numbers, spaces and `. , - _ @`. For another TV address: `-Serial 192.168.68.71:5555`.
+
+## Home button (optional; you choose)
+As installed, the dashboard changes nothing about Home. To switch it on, in PowerShell from the tv-home folder (it
+shows what it will change and asks you to type YES):
+```
+.\scripts\tv-home-takeover.ps1 -TurnOn
+```
+The remote's Home button then opens the dashboard, with focus on the first tile. You will see the TV's own home for a
+moment first; that is expected. (Right after the TV starts up you may still land on the TV's own home; press Home.)
+Back on the dashboard's row also comes back to the dashboard, after the same flash.
+
+**To reach the TV's own home** (its Settings gear, apps and inputs): press Home twice quickly. It stays until you open
+an app; after that, Home opens the dashboard again.
+
+How it works: "Dashboard Home button" in the TV's accessibility settings notices when the TV's own home comes up and
+opens the dashboard. It is told which app comes to the front, never what is on screen, and keeps nothing. (Google TV does not let
+another app be the real home, and the system handles the Home and mic keys before any app could catch them, so the
+mic button stays Google Assistant; Ask Claude is on the dashboard and on the PC remote.) If you ever "Force stop" the
+dashboard in the TV's app settings, Android switches it off; run `-TurnOn` again.
+
+To undo: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
+By hand, with the remote: press Home twice quickly, open Settings from the TV's own home, then System >
+Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.

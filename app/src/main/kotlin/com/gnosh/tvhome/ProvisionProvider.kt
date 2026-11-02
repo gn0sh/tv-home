@@ -22,7 +22,8 @@ import java.io.FileNotFoundException
  *
  * - write: reads at most 1 KiB, strict UTF-8, trims, re-checks the regex, stores. The caller gets no text back.
  * - query: one row, column `configured` (0/1) and `last` (a fixed outcome name such as SAVED_CALENDAR). Never the value.
- * - delete: clears that secret. insert/update: refused (their values would travel as command-line arguments).
+ * - delete: clears that secret. insert/update of a secret: refused (their values would travel as command-line arguments).
+ * - Not a secret: `/location` (insert sets, delete clears the weather location).
  */
 class ProvisionProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
