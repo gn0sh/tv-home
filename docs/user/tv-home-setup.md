@@ -93,8 +93,9 @@ folder (it shows what it will change and asks you to type YES):
 ```
 .\scripts\tv-home-takeover.ps1 -TurnOn
 ```
-- **Home:** the remote's Home button opens the dashboard, from any app, with focus on the first tile. Holding Home no
-  longer opens the TV's quick panel; use the gear on the TV's own home (open it from Settings) or `-Rollback`.
+- **Home:** the remote's Home button opens the dashboard, from any app, with focus on the first tile. **Holding Home
+  for about a second opens the TV's Settings** (in place of the TV's own quick panel), so you can always reach
+  Settings > System > Accessibility with the remote alone.
 - **Mic:** the remote's mic button opens Ask Claude, listening. Google Assistant stays installed (Ask Claude uses its
   speech recognition), but the mic button no longer opens it.
 
@@ -104,5 +105,5 @@ filter is the only way.) If you ever "Force stop" the dashboard in the TV's app 
 run `-TurnOn` again.
 
 To undo: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
-By hand: open the TV's Settings > System > Accessibility and turn off "Dashboard Home and mic buttons", or uninstall
-the dashboard.
+By hand, with the remote: hold Home to open Settings, then System > Accessibility, and turn off "Dashboard Home and
+mic buttons". Or uninstall the dashboard.

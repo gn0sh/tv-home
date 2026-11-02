@@ -33,14 +33,16 @@ $Tools = Join-Path $env:LOCALAPPDATA 'tv-home-tools'
 $adbItem = Get-ChildItem $Tools -Recurse -Filter adb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $adbItem) { throw "adb.exe not found under $Tools (the tv-home install puts it there)." }
 $Adb = $adbItem.FullName
-$RollbackFile = Join-Path $Tools 'takeover-rollback.json'
+# One rollback file per TV (rollback-file-not-per-serial).
+$RollbackFile = Join-Path $Tools ('takeover-rollback-' + ($Serial -replace '[.:]', '-') + '.json')
 
 $Pkg = 'com.gnosh.tvhome'
 $Service = "$Pkg/$Pkg.MicKeyService"
 $ServiceShort = "$Pkg/.MicKeyService"
-# What the accessibility list may contain; anything else read from the TV is refused. No $, quotes, spaces or ; so a
-# value read back and written again cannot be expanded by the TV's shell.
-$A11yListRe = '\A([A-Za-z0-9_.]+/[A-Za-z0-9_.]+)(:[A-Za-z0-9_.]+/[A-Za-z0-9_.]+)*\z'
+# What the accessibility list may contain; anything else read from the TV is refused. $ is allowed (inner-class
+# services, a11y-list-regex-too-strict), so the list is always written inside single quotes, which the TV's shell
+# leaves alone; no quote, space or ; can get in.
+$A11yListRe = '\A([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)(:[A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)*\z'
 
 function Adb([string[]]$argv) {
     Write-Host ('  adb ' + ($argv -join ' ')) -ForegroundColor DarkGray
@@ -61,7 +63,9 @@ function Adb([string[]]$argv) {
 function Get-TvA11yList {
     $v = Adb @('shell', 'settings', 'get', 'secure', 'enabled_accessibility_services')
     if ($v -eq 'null' -or $v -eq '') { return '' }
-    if ($v -notmatch $A11yListRe) { throw "The TV's accessibility list has an unexpected form; stopping without changes." }
+    if ($v -notmatch $A11yListRe) {
+        throw "The TV's accessibility list has an unexpected form; stopping without changes. To turn the dashboard's service off with the remote: hold Home, then System > Accessibility > Dashboard Home and mic buttons."
+    }
     return $v
 }
 
@@ -94,7 +98,7 @@ if ($Rollback) {
     $rest = @($items | Where-Object { $_ -ne $Service -and $_ -ne $ServiceShort })
     if ($rest.Count -ne $items.Count) {
         if ($rest.Count -eq 0) { Adb @('shell', 'settings', 'delete', 'secure', 'enabled_accessibility_services') | Out-Null }
-        else { Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', ($rest -join ':')) | Out-Null }
+        else { Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', ("'" + ($rest -join ':') + "'")) | Out-Null }
     }
     # The master switch goes back to its old value only if the list is back to exactly what -TurnOn found.
     if ($null -ne $saved.a11y -and ($rest -join ':') -eq $saved.a11y) {
@@ -116,7 +120,7 @@ if ($null -eq $saved.a11y) {
 }
 $items = @($list -split ':' | Where-Object { $_ })
 if ($items -notcontains $Service -and $items -notcontains $ServiceShort) {
-    Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', ((@($items) + $Service) -join ':')) | Out-Null
+    Adb @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', ("'" + ((@($items) + $Service) -join ':') + "'")) | Out-Null
 }
 Adb @('shell', 'settings', 'put', 'secure', 'accessibility_enabled', '1') | Out-Null
 Write-Host 'Done. Press Home, then the mic button, on the remote to check.'

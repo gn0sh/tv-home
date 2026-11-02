@@ -635,6 +635,10 @@ sh_ input keyevent KEYCODE_HOME; sleep 3
 in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
 pass "m3: Home from the full-screen calendar returns to the home row"
+# Holding Home opens the TV's Settings (home-recovery-unreachable): the remote-only way to turn the service off.
+sh_ input keyevent --longpress KEYCODE_HOME; sleep 3
+resumed | head -1 | grep -q 'com.android.tv.settings\|com.android.settings' || fail "m3: holding Home did not open Settings ($(resumed | head -1))"
+pass "m3: holding Home opens the TV's Settings"
 mic_ok=""
 for k in ASSIST VOICE_ASSIST SEARCH; do
   other_app
