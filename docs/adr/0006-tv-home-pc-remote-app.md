@@ -27,8 +27,14 @@ Google TV, so `KEYCODE_VOLUME_*` over adb does nothing to the sound.
   once. A test drives the real `js_bridge_call` with private, dunder and dotted names.
 - The page must not be replaced by another page, which would get the same bridge: it refuses drops itself
   (`dragenter`/`dragover`/`drop` cancelled). On Windows, once the page has loaded, the app also sets WebView2's
-  `AllowExternalDrop = false` and cancels every later `NavigationStarting`. pywebview already turns off WebView2's
-  context menu, dev tools and browser accelerator keys when not in debug mode.
+  `AllowExternalDrop = false`, cancels every later `NavigationStarting` and marks `NewWindowRequested` handled. If
+  that fails, the type of failure is logged to `%LOCALAPPDATA%\tv-remote\remote-app.log` (lockdown-silent-fail).
+  `OPEN_EXTERNAL_LINKS_IN_BROWSER` is set to False before start, so a link asking for a new window never reaches
+  `webbrowser.open`, which on Windows ends in `os.startfile` (newwindow-startfile). pywebview already turns off
+  WebView2's context menu, dev tools and browser accelerator keys when not in debug mode.
+- The five functions take `*args` and check the count themselves, so a call with the wrong number of arguments gets
+  a short "wrong call" reply instead of pywebview's error reply, which carries a Python traceback
+  (bridge-arity-traceback).
 - Every argument is checked in Python against fixed allowlists: the 17 key codes of the classic remote, its 12 app
   packages, text matching the classic remote's rule, and `up|down|mute`.
 - Google TV: the same mechanism as the classic remote, unchanged: adb from `%LOCALAPPDATA%\tv-home-tools`, `adb
@@ -39,9 +45,12 @@ Google TV, so `KEYCODE_VOLUME_*` over adb does nothing to the sound.
   and new remotes never run at once. adb runs with `CREATE_NO_WINDOW`.
 - Volume and Mute: `lgpipe.handle` in-process, on one private asyncio loop thread, with `LgRemote` built from
   `%APPDATA%\tv-remote` as `lgpipe.main` does (wss 3001 only, pinned certificate, 8 permissions, cap 60 per ADR 0003).
-  If the LG is not configured, or `handle` returns an error, the adb VOLUME key is sent instead and the status says
-  which, except when the LG did not report its volume: lgpipe then refuses to step up (as `lg_volume` does,
-  finding volume-step-cap), and the adb key is not sent either. After the LG fails to answer, it is skipped for 10 s; at most 2 volume presses wait on the LG and more are
+  **Volume up goes to the LG or nowhere**: adb volume has no cap (adb-volume-uncapped), so if the LG is not
+  configured, does not answer, or did not report its volume (lgpipe then refuses to step up, as `lg_volume` does,
+  finding volume-step-cap), volume up is not sent and the status says why. Volume down and Mute fall back to the adb
+  VOLUME key, and the status says so. In lgpipe, reading the level, stepping and clamping run as one unit under a
+  per-TV asyncio lock and `asyncio.shield`, so two quick presses at 59 cannot both step, and a timeout or the window
+  closing cannot cut in between a step up and its clamp (volume-cap-race). After the LG fails to answer, it is skipped for 10 s; at most 2 volume presses wait on the LG and more are
   dropped, so a TV that is off never replays a burst of volume changes later.
 - Status text shows only the Google TV's adb address (as the classic remote did) and lgpipe's fixed reasons. Anything
   else from the LG path (unexpected text) shows as "did not work". The LG address, client key, certificate and DPAPI

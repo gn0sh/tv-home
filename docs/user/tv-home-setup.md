@@ -85,7 +85,12 @@ short on a small one, and you can resize it.
 
 **Volume and Mute go to the LG directly**, because the LG ignores volume from the Google TV. The card between the
 volume and channel rockers shows the LG's volume (it stops at 60, like Claude's `lg_volume`). If the LG is not set up
-or does not answer, the remote sends volume to the Google TV instead and says so under the buttons.
+or does not answer, volume down and Mute go to the Google TV instead, and volume up is not sent (only the LG can keep
+it under 60); the line under the buttons says which.
+
+**Optional check, once**: drag a link (for example from your browser's address bar) onto the remote window. Nothing
+should happen and the remote should stay as it is. If the window changes to a web page, close it, reopen TV Remote, and
+tell the team; the file `%LOCALAPPDATA%\tv-remote\remote-app.log` says why.
 
 **To update, or to set it up the first time**, in PowerShell from the tv-home folder:
 ```
