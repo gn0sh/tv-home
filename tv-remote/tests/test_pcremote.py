@@ -369,6 +369,16 @@ def test_lg_reasons_read_well(reply, said):
     assert RemoteApi(sh, lambda cmd: reply).volume("down")["status"] == said + " Sent to the Google TV instead."
 
 
+def test_unexpected_exceptions_never_reach_the_page():
+    sh, fake = shell()
+
+    def boom(cmd):
+        raise RuntimeError(f"{LG_HOST} secret")
+
+    r = RemoteApi(sh, boom).volume("up")
+    assert r == {"ok": False, "status": "Something went wrong (RuntimeError). Try again."}
+
+
 def test_busy_lg_drops_the_press():
     sh, fake = shell()
     r = RemoteApi(sh, lambda cmd: "busy").volume("up")

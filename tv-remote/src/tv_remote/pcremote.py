@@ -13,6 +13,7 @@ never carry the LG's address, client key, certificate or any exception text.
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import re
 import subprocess
@@ -259,12 +260,26 @@ def _reply(ok: bool, status: str, **extra: Any) -> dict[str, Any]:
     return {"ok": ok, "status": status, **extra}
 
 
+def _safe(method):
+    """No exception text (which could name a host or a file) ever reaches the page: pywebview would send it."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args):
+        try:
+            return method(self, *args)
+        except Exception as exc:  # noqa: BLE001
+            return _reply(False, "Something went wrong (" + type(exc).__name__ + "). Try again.")
+
+    return wrapper
+
+
 class RemoteApi:
     """Public methods are exposed to JavaScript; everything else is private (pywebview skips names starting with _)."""
 
     def __init__(self, tv: AdbShell, lg: Callable[[str], str] | None):
         self._tv, self._lg = tv, lg
 
+    @_safe
     def start(self) -> dict[str, Any]:
         apps = [{"name": n, "pkg": p, "installed": None} for n, p in APPS]
         if not self._tv.connect():
@@ -277,18 +292,21 @@ class RemoteApi:
             status += " Dimmed apps are not on the TV."
         return _reply(True, status, apps=apps, lg=self._lg is not None, serial=self._tv.serial)
 
+    @_safe
     def key(self, code: object) -> dict[str, Any]:
         line = key_line(code)
         if line is None:
             return _reply(False, "That button is not on this remote.")
         return _reply(*self._tv.send(line))
 
+    @_safe
     def app(self, pkg: object) -> dict[str, Any]:
         line = app_line(pkg)
         if line is None:
             return _reply(False, "That app is not on this remote.")
         return _reply(*self._tv.send(line))
 
+    @_safe
     def text(self, text: object) -> dict[str, Any]:
         if isinstance(text, str) and not text.strip():
             return _reply(False, "Type something first.")
@@ -297,6 +315,7 @@ class RemoteApi:
             return _reply(False, TEXT_HELP)
         return _reply(*self._tv.send(line))
 
+    @_safe
     def volume(self, cmd: object) -> dict[str, Any]:
         if not isinstance(cmd, str) or cmd not in VOLUME_KEYS:
             return _reply(False, "That button is not on this remote.")

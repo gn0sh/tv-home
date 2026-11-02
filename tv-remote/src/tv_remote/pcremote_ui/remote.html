@@ -357,7 +357,8 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
   function call(method, arg) {
     var a = api();
     if (!a || !a[method]) { show({ ok: false, status: "Still starting..." }); return Promise.resolve(null); }
-    return Promise.resolve(a[method](arg)).catch(function () { return { ok: false, status: "That did not work." }; });
+    // No argument for start(): pywebview would pass a JS undefined on as an extra None argument.
+    return Promise.resolve(arg === undefined ? a[method]() : a[method](arg)).catch(function () { return { ok: false, status: "That did not work." }; });
   }
   function sendKey(code) { return call("key", code).then(show); }
   function sendVolume(cmd) { return call("volume", cmd).then(function (r) { show(r); showVolume(r); }); }
