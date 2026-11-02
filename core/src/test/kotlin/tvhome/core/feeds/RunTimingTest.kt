@@ -14,7 +14,7 @@ class RunTimingTest {
     private var now = t0
     private val hits = mutableListOf<Pair<String, Instant>>()
     private val fetcher = FeedFetcher { url: HttpUrl ->
-        hits += url.host to now
+        hits += (if ("club-schedule-season" in url.encodedPath) url.host + "/season" else url.host) to now
         when (url.host) {
             "api-web.nhle.com" -> """{"games":[{"startTimeUTC":"2026-11-02T01:00:00Z","gameState":"FUT",
               "homeTeam":{"abbrev":"NSH","commonName":{"default":"Predators"}},"awayTeam":{"abbrev":"STL","commonName":{"default":"Blues"}}}]}"""
@@ -37,6 +37,7 @@ class RunTimingTest {
     @Test fun pollingSwitchesToSixtySecondsWithinAMinuteOfTheAboutToStartWindow() {
         // Puck drop 01:00Z = 3 h after t0. Hourly fetches until 00:50Z, then every minute.
         runFor(190) { null }
+        assertEquals(1, hits.count { it.first == "api-web.nhle.com/season" }, "the season fallback is fetched once a day, not with every poll")
         val sched = hits.filter { it.first == "api-web.nhle.com" }.map { it.second }
         val before = sched.filter { it < Instant.parse("2026-11-02T00:45:00Z") }
         assertTrue(before.size <= 3, "hourly before the window: $before")

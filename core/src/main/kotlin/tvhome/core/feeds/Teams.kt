@@ -33,8 +33,26 @@ data class TeamConfig(
      */
     fun scheduleUrl(now: Instant): HttpUrl = when (league) {
         League.NHL -> "https://api-web.nhle.com/v1/club-schedule/$feedId/week/${now.atZone(zone).toLocalDate()}"
-        League.ESPN_FOOTBALL -> "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/$feedId/schedule"
+        League.ESPN_FOOTBALL -> espnScheduleUrl()
     }.toHttpUrl()
+
+    /**
+     * The whole-season schedule, the fallback when the live document changes shape (spec M7-4.4). NHL: the dated season
+     * form `club-schedule-season/NSH/20262027` (its `now` form answers 307 like the week one). ESPN: the team schedule
+     * is already the season document, so it is the same URL.
+     */
+    fun seasonUrl(now: Instant): HttpUrl = when (league) {
+        League.NHL -> "https://api-web.nhle.com/v1/club-schedule-season/$feedId/${nhlSeason(now.atZone(zone).toLocalDate())}"
+        League.ESPN_FOOTBALL -> espnScheduleUrl()
+    }.toHttpUrl()
+
+    private fun espnScheduleUrl() = "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/$feedId/schedule"
+}
+
+/** NHL season id for a local date: July starts the next season (2026-27 is 20262027). */
+internal fun nhlSeason(date: java.time.LocalDate): String {
+    val start = if (date.monthValue >= 7) date.year else date.year - 1
+    return "$start${start + 1}"
 }
 
 object Teams {
@@ -71,7 +89,11 @@ data class GameInfo(
     val ownScore: Int?,
     val oppScore: Int?,
     val period: String?,
-)
+    /** Broadcast network names the feed lists for this game (cleaned, at most [MAX_NETWORKS]); empty when it lists none. */
+    val networks: List<String> = emptyList(),
+) {
+    companion object { const val MAX_NETWORKS = 8 }
+}
 
 /** A game together with the team it belongs to. */
 data class TeamGame(val team: TeamConfig, val game: GameInfo)

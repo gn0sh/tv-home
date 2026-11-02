@@ -16,6 +16,13 @@ import java.time.OffsetDateTime
 object Schedules {
     private val json = Json { ignoreUnknownKeys = true }
     private const val MAX_GAMES = 64
+
+    /** A season document lists 80+ games; a window filter runs before the [MAX_GAMES] cap, over at most this many raw rows. */
+    private const val MAX_SEASON_ROWS = 256
+
+    /** The part of a season the cache and the hero care about: a couple of days back to three weeks ahead. */
+    val SEASON_BEFORE: java.time.Duration = java.time.Duration.ofDays(2)
+    val SEASON_AFTER: java.time.Duration = java.time.Duration.ofDays(21)
     private val MAX_SKEW = java.time.Duration.ofDays(366)
 
     private fun plausible(start: Instant, now: Instant): Boolean =
@@ -25,17 +32,43 @@ object Schedules {
     fun parse(team: TeamConfig, raw: String, now: Instant = Instant.now()): List<GameInfo>? = runCatching {
         val root = json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching null
         when (team.league) {
-            League.NHL -> nhl(team, root, now)
-            League.ESPN_FOOTBALL -> espn(team, root, now)
+            League.NHL -> nhl(team, root, now, null)
+            League.ESPN_FOOTBALL -> espn(team, root, now, null)
         }
     }.getOrNull()
 
+    /**
+     * A whole-season document (NHL `club-schedule-season`, ESPN team schedule): only the games starting within
+     * [SEASON_BEFORE] before and [SEASON_AFTER] after [now] are kept, chosen before the [MAX_GAMES] cap so a full 82-game
+     * season is not cut off at its start. Same null rules as [parse].
+     */
+    fun parseSeason(team: TeamConfig, raw: String, now: Instant): List<GameInfo>? = runCatching {
+        val root = json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching null
+        val window: (GameInfo) -> Boolean = { it.start >= now.minus(SEASON_BEFORE) && it.start <= now.plus(SEASON_AFTER) }
+        when (team.league) {
+            League.NHL -> nhl(team, root, now, window)
+            League.ESPN_FOOTBALL -> espn(team, root, now, window)
+        }
+    }.getOrNull()
+
+    private fun rows(arr: JsonArray, window: ((GameInfo) -> Boolean)?, one: (JsonObject?) -> GameInfo?): List<GameInfo> =
+        if (window == null) arr.take(MAX_GAMES).mapNotNull { runCatching { one(it as? JsonObject) }.getOrNull() }
+        else arr.take(MAX_SEASON_ROWS).mapNotNull { runCatching { one(it as? JsonObject) }.getOrNull() }.filter(window).take(MAX_GAMES)
+
     // --- NHL: api-web.nhle.com/v1/club-schedule/{abbrev}/week/{YYYY-MM-DD} -> {"games":[{...}]} -----------------------------
 
-    private fun nhl(team: TeamConfig, root: JsonObject, now: Instant): List<GameInfo>? {
+    private fun nhl(team: TeamConfig, root: JsonObject, now: Instant, window: ((GameInfo) -> Boolean)?): List<GameInfo>? {
         val games = root["games"] as? JsonArray ?: return null
-        return games.take(MAX_GAMES).mapNotNull { runCatching { nhlGame(team, it as? JsonObject, now) }.getOrNull() }
+        return rows(games, window) { nhlGame(team, it, now) }
     }
+
+    /** US broadcasters only (the feed also lists Canadian ones): `tvBroadcasts[].network` where `countryCode` is US. */
+    private fun nhlNetworks(g: JsonObject): List<String> =
+        (g["tvBroadcasts"] as? JsonArray).orEmpty().asSequence()
+            .mapNotNull { it as? JsonObject }
+            .filter { it["countryCode"].str() == "US" }
+            .mapNotNull { Feeds.clean(it["network"].str()) }
+            .distinct().take(GameInfo.MAX_NETWORKS).toList()
 
     private fun nhlGame(team: TeamConfig, g: JsonObject?, now: Instant): GameInfo? {
         g ?: return null
@@ -69,7 +102,7 @@ object Schedules {
             GamePhase.FINAL -> when (type) { "OT" -> "OT"; "SO" -> "SO"; else -> null }
         }
         val scored = phase != GamePhase.UPCOMING
-        return GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period)
+        return GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period, nhlNetworks(g))
     }
 
     private fun name(e: JsonElement?): String? = (e as? JsonObject)?.get("default").str()
@@ -78,10 +111,24 @@ object Schedules {
 
     // --- ESPN: .../college-football/teams/{id}/schedule (or the scoreboard) -> {"events":[{...}]} ------------------
 
-    private fun espn(team: TeamConfig, root: JsonObject, now: Instant): List<GameInfo>? {
+    private fun espn(team: TeamConfig, root: JsonObject, now: Instant, window: ((GameInfo) -> Boolean)?): List<GameInfo>? {
         val events = root["events"] as? JsonArray ?: return null
-        return events.take(MAX_GAMES).mapNotNull { runCatching { espnGame(team, it as? JsonObject, now) }.getOrNull() }
+        return rows(events, window) { espnGame(team, it, now) }
     }
+
+    /**
+     * The team schedule gives `broadcasts[].media.shortName` ("BTN", "ABC"); the scoreboard gives `broadcasts[].names[]`
+     * ("CBSSN"). Both are read; anything else is skipped.
+     */
+    private fun espnNetworks(comp: JsonObject): List<String> =
+        (comp["broadcasts"] as? JsonArray).orEmpty().asSequence()
+            .mapNotNull { it as? JsonObject }
+            .flatMap { b ->
+                val names = (b["names"] as? JsonArray).orEmpty().map { n -> n.str() }
+                (listOf((b["media"] as? JsonObject)?.get("shortName").str()) + names).asSequence()
+            }
+            .mapNotNull { Feeds.clean(it) }
+            .distinct().take(GameInfo.MAX_NETWORKS).toList()
 
     private fun espnGame(team: TeamConfig, e: JsonObject?, now: Instant): GameInfo? {
         e ?: return null
@@ -110,7 +157,7 @@ object Schedules {
         }
         return GameInfo(
             start, opponent, own["homeAway"].str() == "home", phase,
-            if (scored) score(own["score"]) else null, if (scored) score(opp["score"]) else null, period,
+            if (scored) score(own["score"]) else null, if (scored) score(opp["score"]) else null, period, espnNetworks(comp),
         )
     }
 
