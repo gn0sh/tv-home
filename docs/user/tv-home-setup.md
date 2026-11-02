@@ -95,18 +95,26 @@ tell the team; the file `%LOCALAPPDATA%\tv-remote\remote-app.log` says why.
 **LG or Vizio.** When the Google TV is plugged into the Vizio, tap **Vizio** in the switch at the top of the remote
 (tap **LG** to go back). It only changes where Vol+, Vol- and Mute go; every other button works the same either way.
 The remote remembers the choice next time it opens. With Vizio picked:
-- Volume goes to the Google TV as ordinary volume key presses, and the Google TV passes them to the Vizio over
-  HDMI-CEC. The LG is never contacted, so it can be off or unplugged.
-- The remote cannot read the Vizio's volume, so the card says "Vizio (via HDMI-CEC)" instead of a number, and there is
-  no 60 limit. To keep it safe, **Vol+ moves one step per tap** (holding it does not repeat). Vol- and Mute repeat
-  as usual.
-- If the Vizio's volume does not respond: on the Google TV open Settings > Remotes & Accessories > Set up remote
-  buttons > Volume control (approximately; the names vary by model, see
-  [Google's help page](https://support.google.com/chromecast/answer/10094150)) and pick the option that controls the
-  TV over HDMI (CEC or Auto), not infrared. Also check that CEC is on in the Vizio's own settings (usually System >
-  CEC) and on the Google TV (Settings > Display & Sound > HDMI-CEC, approximately).
-- If CEC volume still does not work with the Vizio, the team can later pair the remote with the Vizio over the
-  network (SmartCast). That needs a pairing code shown on the Vizio and a stored key, so it waits for your go-ahead.
+- **Once paired** (steps below), Vol+, Vol- and Mute go straight to the Vizio over your home network (SmartCast).
+  The card shows the Vizio's volume, and **Vol+ stops at 60**, as with the LG. The LG is never contacted.
+- **Not paired yet**: the card says "Pair the Vizio" and Vol+ is not sent. Vol- and Mute go to the Google TV, which
+  passes them to the Vizio over HDMI-CEC (the Vizio may ignore them).
+- If the Vizio answers but does not report its volume, Vol+ moves one step per tap (holding it does not repeat).
+
+**Pair the Vizio (once, about 2 minutes, at the TV).** Turn the Vizio on. In PowerShell from the tv-home folder:
+1. Type `git pull` and press Enter.
+2. Type `.\scripts\install-remote-shortcut.ps1` and press Enter. It adds the pairing command.
+3. Type `.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe` and press Enter. It looks for the Vizio and asks
+   "Found ... at 192.168.x.x. Use it? [Y/n]": press Enter. If it finds none, type the Vizio's IP address (on the TV:
+   Settings > Network > Network Information) and press Enter. To skip the search, add `--host 192.168.x.x`.
+4. A 4-digit PIN appears on the Vizio. Type it in PowerShell and press Enter. You should see `Vizio paired.`
+5. Close TV Remote if it is open, reopen it, tap **Vizio** at the top, and press Vol- once. The card should show
+   a number.
+
+If it says the PIN was not accepted, run step 3 again for a new PIN. To unpair, run
+`.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe --forget`. The key the Vizio hands over is sealed with Windows
+(DPAPI) in `%APPDATA%\tv-remote\vizio-auth.sealed` and never shown. The remote also remembers the Vizio's
+certificate; if a different device answers at that address later, the remote refuses it and says to pair again.
 
 **To update, or to set it up the first time**, in PowerShell from the tv-home folder:
 ```
