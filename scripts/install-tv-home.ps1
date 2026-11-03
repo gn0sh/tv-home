@@ -236,9 +236,36 @@ function Invoke-Tool([string]$Exe, [string[]]$Argv) {
     [pscustomobject]@{ Code = $code; Text = (($out | Where-Object { $_ }) -join "`n").Trim() }
 }
 
+# What to tell Brian when the TV does not answer. $StateText is adb get-state's output, $ConnectText is adb connect's.
+function Get-TvProblem([string]$StateText, [string]$ConnectText, [string]$Serial, [string]$ConfigPath) {
+    $conn = if ($ConnectText) { " (adb connect said: $ConnectText)" } else { '' }
+    if ($StateText -match 'unauthorized') {
+        return "The TV has not allowed this PC yet. On the TV, choose Allow on the 'Allow debugging' box (tick Always allow), then double-click Install TV Home again.$conn"
+    }
+    if ($StateText -match 'offline') {
+        return "The TV at $Serial is listed but offline. Restart the TV (unplug its power for 10 seconds), wait for it to start, then double-click Install TV Home again.$conn"
+    }
+    return "The TV at $Serial did not answer. Turn the TV on, check its address (Settings > System > About > Status; update $ConfigPath), and make sure USB/network debugging is on.$conn"
+}
+
+# Reads the TV address from the config file; never throws. Returns Serial (or $null) and Error (or $null).
+function Read-TvSerial([string]$Path) {
+    try {
+        $obj = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    } catch {
+        return [pscustomobject]@{ Serial = $null; Error = "Fix $Path : it is not valid JSON. It should look like {""serial"": ""192.168.68.71:5555""}. (Or delete the file; it is made again.)" }
+    }
+    $prop = if ($null -ne $obj) { $obj.PSObject.Properties['serial'] } else { $null }
+    $serial = if ($prop) { [string]$prop.Value } else { '' }
+    if ($serial -notmatch '\A\d{1,3}(\.\d{1,3}){3}:\d{1,5}\z') {
+        return [pscustomobject]@{ Serial = $null; Error = "Fix $Path : the 'serial' (the TV address) must look like 192.168.68.71:5555. (Or delete the file; it is made again.)" }
+    }
+    [pscustomobject]@{ Serial = $serial; Error = $null }
+}
+
 function Get-IncomingApks {
     # Links (ReparsePoint, 0x400) are not APKs: they could point anywhere.
-    @(Get-ChildItem $Incoming -File -ErrorAction SilentlyContinue |
+    @(Get-ChildItem -LiteralPath $Incoming -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -ieq '.apk' -and (([int]$_.Attributes -band 0x400) -eq 0) })
 }
 
@@ -263,7 +290,7 @@ function Get-LatestMainApk {
     if ($run.headBranch -cne 'main' -or $run.event -cne 'push' -or $run.conclusion -cne 'success') { Fail 'The newest run is not a successful push to main.' }
     $id = [string]$run.databaseId
     if ($id -notmatch '^\d+$') { Fail 'Odd run id from gh.' }
-    $last = if (Test-Path $LastRun) { (Get-Content $LastRun -TotalCount 1) } else { '' }
+    $last = if (Test-Path -LiteralPath $LastRun) { (Get-Content -LiteralPath $LastRun -TotalCount 1) } else { '' }
     if ($last -eq $id -and -not $Force) {
         Write-Host "Build $id (main $($run.headSha.Substring(0, 7))) is already installed. Nothing to do. (Use -Force to install it again.)" -ForegroundColor Green
         Write-Host 'DONE. TV Home on the TV is already the newest build from main.'
@@ -285,6 +312,8 @@ if ($LibraryOnly) { return }
 
 # ================================ main ========================================================================
 $fetchedRun = $null
+$installStarted = $false   # adb install was run: the TV may have changed
+$installed = $false      # adb said Success
 try {
     New-Item -ItemType Directory -Force -Path $Incoming | Out-Null
     $apks = @(Get-IncomingApks)   # @() keeps an empty or single result an array (strict mode rejects .Count on $null)
@@ -293,6 +322,9 @@ try {
     if ($apks.Count -gt 1) { Fail "$($apks.Count) APK files are in $Incoming ; there must be exactly one. Nothing was installed. Tell the team which is the right one." }
     $orig = $apks[0].FullName
     Write-Host "APK: $orig"
+    if (-not $fetchedRun) {
+        Write-Host "Using the APK already in incoming ($($apks[0].Name), saved $($apks[0].LastWriteTime.ToString('yyyy-MM-dd HH:mm'))). Delete it to get the newest build." -ForegroundColor Yellow
+    }
     # Check and install one private copy, so the file in incoming\ cannot be swapped between the checks and adb.
     $Work = Join-Path ([IO.Path]::GetTempPath()) ('tvi-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $Work | Out-Null
@@ -325,20 +357,28 @@ try {
     # --- adb and the TV ---
     $adbItem = Find-ToolFile @('adb.exe') | Select-Object -First 1
     if (-not $adbItem) { Fail "adb.exe not found under $Tools (the tv-home install puts it there)." }
-    if (-not (Test-Path $Config)) {
-        (@{ serial = $DefaultSerial } | ConvertTo-Json) | Set-Content -Path $Config -Encoding ASCII
+    if (-not (Test-Path -LiteralPath $Config)) {
+        (@{ serial = $DefaultSerial } | ConvertTo-Json) | Set-Content -LiteralPath $Config -Encoding ASCII
         Write-Host "Made $Config with the TV address $DefaultSerial ; edit it if the TV's address changes."
     }
-    $serial = [string](Get-Content $Config -Raw | ConvertFrom-Json).serial
-    if ($serial -notmatch '\A\d{1,3}(\.\d{1,3}){3}:\d{1,5}\z') { Fail "The TV address in $Config must look like 192.168.68.71:5555." }
-    [void](Invoke-Tool $adbItem.FullName @('connect', $serial))
+    $cfg = Read-TvSerial $Config
+    if ($cfg.Error) { Fail $cfg.Error }
+    $serial = $cfg.Serial
+    $conn = Invoke-Tool $adbItem.FullName @('connect', $serial)
     $state = Invoke-Tool $adbItem.FullName @('-s', $serial, 'get-state')
-    if ($state.Code -ne 0 -or $state.Text -cne 'device') {
-        Fail "The TV at $serial did not answer. Turn the TV on, check its address (Settings > System > About > Status; update $Config), and make sure USB/network debugging is on."
+    if ($state.Text -match 'unauthorized') {
+        # First run: the TV is showing "Allow debugging?". Wait about 20 seconds for the click, in this same run.
+        Write-Host "On the TV, choose Allow on the 'Allow debugging' box (tick Always allow). Waiting up to 20 seconds..." -ForegroundColor Yellow
+        for ($i = 0; $i -lt 10 -and $state.Text -match 'unauthorized'; $i++) {
+            Start-Sleep -Seconds 2
+            $state = Invoke-Tool $adbItem.FullName @('-s', $serial, 'get-state')
+        }
     }
+    if ($state.Code -ne 0 -or $state.Text -cne 'device') { Fail (Get-TvProblem $state.Text $conn.Text $serial $Config) }
 
     # --- install ---
     Write-Host "Installing on $serial ..."
+    $installStarted = $true
     $r = Invoke-Tool $adbItem.FullName @('-s', $serial, 'install', '-r', $apk)
     if ($r.Code -ne 0 -or $r.Text -notmatch '(?m)^Success') {
         $why = ($r.Text -split "`n" | Select-Object -Last 1)
@@ -346,15 +386,32 @@ try {
         elseif ($why -match 'UPDATE_INCOMPATIBLE|SIGNATURES_DO_NOT_MATCH') { $why = 'The TV has a copy signed with a different key; tell the team (it must not be uninstalled without asking).' }
         Fail "adb said: $why"
     }
-    New-Item -ItemType Directory -Force -Path $Done | Out-Null
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    Move-Item -LiteralPath $orig -Destination (Join-Path $Done ($stamp + '-' + (Split-Path $orig -Leaf)))
+    $installed = $true
+    # Bookkeeping after a good install: a failure here must not look like a failed install.
+    $tidyProblem = $null
+    $runId = if ((Split-Path $orig -Leaf) -match '^tv-home-(\d+)\.apk$') { $Matches[1] } else { $null }
+    try { if ($runId) { Set-Content -LiteralPath $LastRun -Value $runId -Encoding ASCII } } catch { $tidyProblem = $_.Exception.Message }
+    try {
+        New-Item -ItemType Directory -Force -Path $Done | Out-Null
+        Move-Item -LiteralPath $orig -Destination (Join-Path $Done ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + (Split-Path $orig -Leaf)))
+    } catch { $tidyProblem = $_.Exception.Message }
     Clear-Work
-    if ($fetchedRun) { Set-Content -Path $LastRun -Value $fetchedRun -Encoding ASCII }
     Write-Host ''
+    if ($tidyProblem) {
+        Write-Host "DONE. Installed, but could not tidy up $orig ($tidyProblem). Delete that file by hand, or the next run installs it again." -ForegroundColor Yellow
+        exit 0
+    }
     Write-Host 'DONE. TV Home is installed on the TV. On the TV, open TV Home (or press Home if you turned that on): it is the new version, and your calendar and settings are still there.' -ForegroundColor Green
     exit 0
 } catch {
     if ($DryRun) { Write-Host ('DRY RUN detail: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message + ' at line ' + $_.InvocationInfo.ScriptLineNumber) }
-    Fail 'Something unexpected stopped the install before anything was changed on the TV (the APK could not be read as an APK, or a file could not be used). Tell the team.'
+    if ($installed) {
+        Clear-Work
+        Write-Host 'DONE. TV Home was installed on the TV, but a step after it failed. Tell the team.' -ForegroundColor Yellow
+        exit 0
+    } elseif ($installStarted) {
+        Fail 'Something unexpected stopped the script while installing. The TV may or may not have the new version; open TV Home to see, and tell the team.'
+    } else {
+        Fail 'Something unexpected stopped the install before anything was changed on the TV (the APK could not be read as an APK, or a file could not be used). Tell the team.'
+    }
 }

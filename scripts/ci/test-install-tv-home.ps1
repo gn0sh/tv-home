@@ -58,6 +58,28 @@ $found = @(Find-ToolFile @('adb.exe'))
 Check '4 tool lookup skips incoming and fetch-*' ($found.Count -eq 1 -and $found[0].FullName -like '*sdk\platform-tools\adb.exe') (($found | ForEach-Object { $_.FullName }) -join ',')
 Remove-Item $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 
+# TV state messages and config validation (pure functions)
+$msg = Get-TvProblem 'error: device unauthorized.' '' '1.2.3.4:5555' 'C:\cfg.json'
+Check '6 unauthorized tells him to choose Allow' ($msg -match 'choose Allow' -and $msg -match 'Always allow') $msg
+$msg = Get-TvProblem 'error: device offline' '' '1.2.3.4:5555' 'C:\cfg.json'
+Check '6 offline says restart the TV' ($msg -match 'offline' -and $msg -match 'Restart') $msg
+$msg = Get-TvProblem 'error: no devices' 'failed to connect to 1.2.3.4:5555' '1.2.3.4:5555' 'C:\cfg.json'
+Check '6 no answer includes the connect output' ($msg -match 'failed to connect' -and $msg -match 'did not answer') $msg
+$cfgDir = Join-Path ([IO.Path]::GetTempPath()) ('tvc-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+$cf = Join-Path $cfgDir 'c.json'
+Set-Content -LiteralPath $cf -Value '{"serial":"192.168.68.71:5555"}'
+Check '6 good config is read' ((Read-TvSerial $cf).Serial -ceq '192.168.68.71:5555')
+Set-Content -LiteralPath $cf -Value '{"other":1}'
+$x = Read-TvSerial $cf
+Check '6 config without serial gives a Fix message' (-not $x.Serial -and $x.Error -match '^Fix ')
+Set-Content -LiteralPath $cf -Value 'not json {'
+$x = Read-TvSerial $cf
+Check '6 broken JSON gives a Fix message' (-not $x.Serial -and $x.Error -match '^Fix ')
+Set-Content -LiteralPath $cf -Value '{"serial":"nope"}'
+Check '6 bad address gives a Fix message' ((Read-TvSerial $cf).Error -match '^Fix ')
+Remove-Item $cfgDir -Recurse -Force -ErrorAction SilentlyContinue
+
 # 3, 4 and the real path's refusal: run the whole script as a child with a private LOCALAPPDATA
 $savedLocal = $env:LOCALAPPDATA
 function Invoke-Install([string[]]$Apks, [string]$Pin) {
