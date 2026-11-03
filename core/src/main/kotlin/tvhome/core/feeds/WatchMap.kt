@@ -33,19 +33,23 @@ class WatchMap private constructor(
     private fun candidates(game: TeamGame): List<WatchTarget> {
         val listed = game.game.networks
         val names = if (listed.isNotEmpty()) listed else listOfNotNull(teamDefaults[game.team.key])
-        return names.mapNotNull(::resolve).distinctBy { it.packageName }
+        return resolveAll(names).distinctBy { it.packageName }
     }
 
-    /** This map's own entry for [network], else the fallback's. */
-    private fun resolve(network: String): WatchTarget? =
-        packages[key(network)] ?: runCatching { fallback?.invoke(network) }.getOrNull()
+    /** watch-adb-precedence: every one of [names] against this map's own entries first, then the fallback for each. */
+    private fun resolveAll(names: List<String>): List<WatchTarget> {
+        val own = names.mapNotNull { packages[key(it)] }
+        val fb = fallback?.let { f -> names.mapNotNull { n -> runCatching { f(n) }.getOrNull() } }.orEmpty()
+        return own + fb
+    }
 
     /**
-     * This map first (an adb-provisioned entry or team default always wins), then [defaults] for every network it does
-     * not name.
+     * This map wins for the whole game (an adb-provisioned map is Brian's word): every network the game lists is tried
+     * against its entries first, in feed order, and only when none of them has an installed app do [defaults] get a
+     * turn, again in feed order. Its team defaults win too.
      */
     fun orElse(defaults: WatchMap): WatchMap = WatchMap(packages, teamDefaults + defaults.teamDefaults.filterKeys { it !in teamDefaults }) { n ->
-        defaults.resolve(n)
+        defaults.resolveAll(listOf(n)).firstOrNull()
     }
 
     /** True when nothing is mapped and there is no fallback (no Watch pill can show). */

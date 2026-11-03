@@ -207,11 +207,14 @@ $P = "content://com.gnosh.tvhome.provision"
   default network per team: `adb shell content insert --uri $P/watch --bind networks:s:'ESPN+=com.espn.gtv' --bind defaults:s:'predators=ESPN+'`.
   Up to 32 networks and 8 teams, names up to 40 characters; one bad entry refuses the whole line. Remove:
   `adb shell content delete --uri $P/watch`.
-  Without a mapping the built-in one applies (an adb mapping wins for the networks it names): broadcast and local
-  channels (ABC, CBS, NBC, FOX, The CW, ION, PBS, MyNetworkTV, Scripps, call signs like WTVF) open the CDE app, found by
-  a label containing "CDE" or "Lightband"; national cable (ESPN, TNT, TBS, truTV, FS1, FS2, NHL Network, Big Ten
+  Without a mapping the built-in one applies. An adb mapping wins for the whole game: every network the game lists is
+  tried against it first, and the built-in map only when none of those apps is installed. Broadcast and local
+  channels (ABC, CBS, NBC, FOX, The CW, ION, PBS, MyNetworkTV, Scripps, the Nashville and Columbus call signs like
+  WTVF) open the CDE app, found by a label containing "CDE" or "Lightband" (only when exactly one app matches); national cable (ESPN, TNT, TBS, truTV, FS1, FS2, NHL Network, Big Ten
   Network, CBS Sports Network, FanDuel Sports Network) opens its own app when installed (ESPN, Max, FOX Sports, FanDuel
   Sports Network), else the CDE app; streaming (ESPN+, Peacock, Prime Video, Max, Hulu, Paramount+, Apple TV, Disney+)
   opens its own app only when installed. Nothing that matches an installed app means no Watch pill.
+  The ESPN, Max and FOX Sports apps may still ask for a TV provider sign-in for cable channels; CDE is the fallback
+  only when the dedicated app is not installed.
 - **Quiet mode** (hides event titles; the Quiet pill at the end of the dock does the same):
   `adb shell content insert --uri $P/quiet --bind on:b:true` (or `false`).

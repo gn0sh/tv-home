@@ -11,7 +11,8 @@ import java.util.Locale
  *
  * Order, per network the feed lists:
  * 1. Broadcast and local ([Kind.BROADCAST]: ABC, CBS, NBC, FOX, The CW, ION, MyNetworkTV, PBS, Scripps / Scripps Sports,
- *    The Spot, "<network> <channel>" forms like "NBC 4", and US call signs like "WTVF" or "WBNS-TV"): the CDE app.
+ *    The Spot, "<network> <channel>" forms like "NBC 4", the Nashville and Columbus call signs like "WTVF", and other
+ *    US call signs with a suffix or channel like "WXYZ-TV"): the CDE app, when exactly one CDE app is installed.
  * 2. National cable ([Kind.CABLE]: ESPN, ESPN2, ESPNU, ESPNews, SEC Network, ACC Network, TNT, TBS, truTV, FS1, FS2, NHL
  *    Network, Big Ten Network, CBS Sports Network, FanDuel Sports Network): its own app when installed (ESPN; Max for
  *    TNT, TBS, truTV; FOX Sports; FanDuel Sports Network), else the CDE app (cable channels are on CDE live TV).
@@ -25,15 +26,32 @@ import java.util.Locale
 object WatchDefaults {
     enum class Kind { BROADCAST, CABLE, STREAMING }
 
-    /** One app: known packages, then labels that equal it (normalised), then labels that contain one of [labelWords]. */
-    private class AppRule(val packages: Set<String> = emptySet(), val labels: Set<String> = emptySet(), val labelWords: List<String> = emptyList()) {
-        fun find(apps: List<LauncherApp>): LauncherApp? =
-            apps.firstOrNull { it.packageName in packages }
-                ?: apps.firstOrNull { norm(it.label) in labels }
-                ?: apps.firstOrNull { a -> labelWords.any { w -> " ${norm(a.label)} ".contains(" $w ") } }
+    /**
+     * One app: known packages, then labels that equal it (normalised), then labels that contain one of [labelWords].
+     * [unique]: a label match counts only when exactly one launchable app matches; two or more is ambiguous, so none.
+     */
+    private class AppRule(
+        val packages: Set<String> = emptySet(),
+        val labels: Set<String> = emptySet(),
+        val labelWords: List<String> = emptyList(),
+        val unique: Boolean = false,
+    ) {
+        fun find(apps: List<LauncherApp>): LauncherApp? {
+            apps.firstOrNull { it.packageName in packages }?.let { return it }
+            val byLabel = apps.filter { a ->
+                norm(a.label) in labels || labelWords.any { w -> " ${norm(a.label)} ".contains(" $w ") }
+            }.distinctBy { it.packageName }
+            return if (unique && byLabel.size > 1) null else byLabel.firstOrNull { norm(it.label) in labels } ?: byLabel.firstOrNull()
+        }
     }
 
-    private val CDE = AppRule(labelWords = listOf("cde", "lightband"))
+    /**
+     * watch-cde-ambiguous: by label only while its package is unknown, and only when exactly one app matches (two
+     * "CDE" apps: no pill rather than the wrong one). Pin the real package in [CDE_PACKAGES] once it is confirmed on the
+     * TV (`adb shell pm list packages`); never a guessed one.
+     */
+    private val CDE_PACKAGES: Set<String> = emptySet()
+    private val CDE = AppRule(CDE_PACKAGES, labelWords = listOf("cde", "lightband"), unique = true)
     private val ESPN = AppRule(setOf("com.espn.gtv"), setOf("espn"))
     private val MAX = AppRule(setOf("com.wbd.stream", "com.hbo.hbonow"), setOf("max", "hbo max"))
     private val PEACOCK = AppRule(setOf("com.peacocktv.peacockandroid"), setOf("peacock", "peacock tv"))
@@ -64,9 +82,22 @@ object WatchDefaults {
         "disney+" to DISNEY,
     )
 
-    /** US TV call signs (W or K, 3-4 letters, optional -TV/-DT/-CD/-LD, optional channel): "WTVF", "WBNS-TV", "WSMV 4". */
-    private val CALL_SIGN = Regex("""[kw][a-z]{2,3}(-(tv|dt|cd|ld))?( \d{1,3})?""")
+    /**
+     * Local stations (watch-callsign-overmatch): the Nashville and Columbus over-the-air call signs by name, and any other
+     * US call sign only with a station suffix or a channel number ("WXYZ-TV", "WXYZ 4"), so names like "WWE" or "KAYO"
+     * are not taken for a local channel.
+     */
+    private val LOCAL_STATIONS = setOf(
+        // Nashville
+        "wkrn", "wsmv", "wtvf", "wztv", "wnpt", "wnab", "wuxp", "wpgd", "wnpx", "wjfb", "wllc",
+        // Columbus
+        "wbns", "wcmh", "wsyx", "wtte", "wosu", "wwho", "wsfj",
+    )
+    private val CALL_SIGN = Regex("""[kw][a-z]{2,3}(-(tv|dt|cd|ld)( \d{1,3})?| \d{1,3})""")
+    private val STATION_FORM = Regex("""([kw][a-z]{2,3})(-(tv|dt|cd|ld))?( \d{1,3})?""")
     private val CHANNEL_FORM = Regex("""(abc|cbs|nbc|fox|cw|pbs|ion) \d{1,3}""")
+
+    private fun isLocalStation(n: String) = STATION_FORM.matchEntire(n)?.groupValues?.get(1) in LOCAL_STATIONS
 
     /** "FanDuel Sports Network South", "FanDuel SN Ohio", "FDSN South". */
     private fun isFanDuel(n: String) = n.startsWith("fanduel") || n == "fdsn" || n.startsWith("fdsn ")
@@ -77,7 +108,7 @@ object WatchDefaults {
         return when {
             n in STREAMING -> Kind.STREAMING
             n in CABLE || isFanDuel(n) -> Kind.CABLE
-            n in BROADCAST || CHANNEL_FORM.matches(n) || CALL_SIGN.matches(n) -> Kind.BROADCAST
+            n in BROADCAST || CHANNEL_FORM.matches(n) || CALL_SIGN.matches(n) || isLocalStation(n) -> Kind.BROADCAST
             else -> null
         }
     }

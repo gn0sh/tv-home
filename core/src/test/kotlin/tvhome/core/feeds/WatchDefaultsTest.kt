@@ -81,8 +81,34 @@ class WatchDefaultsTest {
         assertEquals("com.google.android.youtube.tv", watch(listOf(cde, youtube), map = adb)!!.packageName)
     }
 
-    @Test fun resultDoesNotDependOnLauncherOrder() {
+    /** watch-cde-ambiguous: two launchable apps that look like CDE is no pill, in either order. */
+    @Test fun twoCdeAppsAreAmbiguous() {
         val a = app("a.cde", "CDE"); val b = app("b.cde", "CDE Lightband")
-        assertEquals(watch(listOf(a, b), "FOX"), watch(listOf(b, a), "FOX"))
+        assertNull(watch(listOf(a, b, espn), "FOX"))
+        assertNull(watch(listOf(b, a), "SCRIPPS"))
+        assertNull(watch(listOf(a, b), "TNT"), "cable falls back to CDE, which is ambiguous too")
+        assertEquals("com.espn.gtv", watch(listOf(a, b, espn), "ESPN")!!.packageName, "a dedicated app is unaffected")
+    }
+
+    @Test fun resultDoesNotDependOnLauncherOrder() {
+        val apps = listOf(cde, espn, app("com.hulu.livingroomplus", "Hulu"), app("z.max", "Max"))
+        for (n in listOf("FOX", "ESPN", "TNT", "HULU", "ESPN+")) assertEquals(watch(apps, n), watch(apps.reversed(), n), n)
+    }
+
+    /** watch-adb-precedence: the adb map is tried for every listed network before any default. */
+    @Test fun adbEntryWinsOverAnEarlierDefault() {
+        val adb = WatchMap.parse("ESPN+=com.espn.gtv")
+        val w = watch(listOf(cde, espn), "SCRIPPS", "ESPN+", map = adb)!!
+        assertEquals("ESPN+", w.network); assertEquals("com.espn.gtv", w.packageName)
+        // The adb app not installed: the defaults get their turn, in feed order.
+        val notInstalled = WatchMap.parse("ESPN+=com.missing.app").orElse(WatchDefaults.map(listOf(cde)))
+            .watch(game(Teams.PREDATORS, "SCRIPPS", "ESPN+")) { it != "com.missing.app" }!!
+        assertEquals("SCRIPPS", notInstalled.network)
+    }
+
+    /** watch-callsign-overmatch: names that look like call signs but are not local channels. */
+    @Test fun notEveryFourLetterNameIsAStation() {
+        for (n in listOf("WWE", "KAYO", "WWE Network", "Kayo Sports", "WNBA League Pass", "KICK")) assertNull(WatchDefaults.kindOf(n), n)
+        for (n in listOf("WKRN", "WZTV", "WSYX", "WOSU", "WXYZ-TV", "KABC 7", "WSMV-DT")) assertEquals(WatchDefaults.Kind.BROADCAST, WatchDefaults.kindOf(n), n)
     }
 }
