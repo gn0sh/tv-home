@@ -1,6 +1,7 @@
 package tvhome.core.assistant
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import tvhome.core.agenda.AgendaDay
@@ -335,5 +336,62 @@ class BriefTest {
         val c = Counting { reply("Rain", "rain") }
         runSuspend { engine(c).refreshIfDue(facts(quiet = true)) }
         assertEquals(1, c.bodies.size)
+    }
+
+    // --- M7-F6: the home screen's ticker and the default switch --------------------------------------------------------
+
+    @Test fun defaultSwitchCallsOnlyWithAKey() {
+        val on = PanelSwitches().brief
+        assertTrue(on, "approved: on by default")
+        val noKey = Counting { reply("Rain", "rain") }
+        val e = engine(noKey, on = on, key = false)
+        runSuspend { e.refreshIfDue(facts()) }
+        assertEquals(0, noKey.bodies.size, "no key: no request")
+        assertEquals(templateLine(facts(), false), e.line(facts(), false), "no key: the free template line")
+        val withKey = Counting { reply("Rain", "rain") }
+        runSuspend { engine(withKey, on = on, key = true).refreshIfDue(facts()) }
+        assertEquals(1, withKey.bodies.size)
+        val off = Counting { reply("Rain", "rain") }
+        runSuspend { engine(off, on = false, key = true).refreshIfDue(facts()) }
+        assertEquals(0, off.bodies.size, "provisioned off: no request")
+    }
+
+    @Test fun tickerWaitsUntilHomeHasBeenVisibleLongEnough() {
+        val c = Counting { reply("Rain later", "rain") }
+        val cache = Mem()
+        val t = BriefTicker(engine(c, cache = cache))
+        assertFalse(runSuspend { t.onTick(facts(), null) }, "not visible")
+        assertFalse(runSuspend { t.onTick(facts(), BriefTicker.SETTLE_MS - 1) }, "still settling")
+        assertEquals(0, c.bodies.size)
+        assertTrue(runSuspend { t.onTick(facts(), BriefTicker.SETTLE_MS) })
+        assertEquals(1, c.bodies.size)
+        assertEquals("Rain later", engine(c, cache = cache).line(facts(), false))
+        assertTrue(runSuspend { t.onTick(facts(), BriefTicker.SETTLE_MS * 10) }, "ticks again, the ledger refuses the slot")
+        assertEquals(1, c.bodies.size, "one attempt per slot")
+    }
+
+    @Test fun tickerRunsOneRefreshAtATime() = runSuspend {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val bodies = mutableListOf<String>()
+        val slow = BriefClient { body -> bodies += body; gate.await(); reply("Rain", "rain") }
+        val t = BriefTicker(engine(slow))
+        kotlinx.coroutines.coroutineScope {
+            val first = async { t.onTick(facts(), BriefTicker.SETTLE_MS) }
+            while (bodies.isEmpty()) kotlinx.coroutines.yield()
+            assertFalse(t.onTick(facts(), BriefTicker.SETTLE_MS), "a tick during a request is skipped")
+            gate.complete(Unit)
+            assertTrue(first.await())
+        }
+        assertEquals(1, bodies.size)
+    }
+
+    @Test fun tickerLeavesNoBusyFlagAfterAFailure() {
+        var n = 0
+        val c = BriefClient { n++; throw java.io.IOException() }
+        val t = BriefTicker(engine(c))
+        assertTrue(runSuspend { t.onTick(facts(), BriefTicker.SETTLE_MS) })
+        now = at(16, 1)
+        assertTrue(runSuspend { t.onTick(facts(), BriefTicker.SETTLE_MS) })
+        assertEquals(2, n, "the next slot still runs")
     }
 }

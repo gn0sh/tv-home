@@ -25,12 +25,16 @@ data class FeedsSnapshot(
     val alertsChecked: Boolean = false,
 )
 
-/** Per-panel off switches, set over adb. Off means no request and the panel's view is Off. The brief ships off. */
+/**
+ * Per-panel off switches, set over adb. Off means no request and the panel's view is Off. The brief is on by default
+ * (approved by Brian), but it only ever calls Claude when an API key is provisioned (`BriefEngine`'s hasKey); off, the
+ * free template line still fills its slot.
+ */
 data class PanelSwitches(
     val weather: Boolean = true,
     val alerts: Boolean = true,
     val games: Boolean = true,
-    val brief: Boolean = false,
+    val brief: Boolean = true,
 )
 
 /** Refresh timing: pure, so the back-off is testable. */
