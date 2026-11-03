@@ -28,7 +28,7 @@ mkdir -p "$SHOT_DIR"
 fail() { echo "::error::$*"; exit 1; }
 warn() { echo "::warning::$*"; }
 a() { timeout 90 adb "$@"; }
-sh_() { timeout 90 adb shell "$@"; }
+sh_() { timeout 90 adb shell "$@" </dev/null; }
 
 qemu_k=$(sh_ getprop ro.kernel.qemu | tr -d '\r'); qemu_b=$(sh_ getprop ro.boot.qemu | tr -d '\r')
 [[ $qemu_k == 1 || $qemu_b == 1 ]] || fail "screenshot-tour.sh runs only on an emulator"
