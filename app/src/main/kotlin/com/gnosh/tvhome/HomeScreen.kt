@@ -293,7 +293,7 @@ fun HomeScreen(
         // the second would reach the activity.
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
-        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it })
+        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, briefColor = shown.secondaryText)
         CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
@@ -306,11 +306,14 @@ fun HomeScreen(
             Dock(shown) {
                 CalendarTileView(tile, shown, calendar, down = askTile, onClick = { open = DOCK_CALENDAR })
             }
+            // M7-F6: the dock band's own full-width row for the brief line, always reserved (so nothing moves when the
+            // line comes and goes). The hero draws the line into it (filled with Quiet in the same frame, drifting).
+            Spacer(Modifier.height(BRIEF_ROW_DP.dp))
         }
         // Bottom centre, in the dock's band (beside the Calendar tile) so the hero gets the room: the pill is centred on
         // the tile's box, inside the safe-area margins.
         Box(
-            Modifier.fillMaxSize().padding(bottom = (Tokens.MARGIN_V_DP + dockPillInset(theme)).dp),
+            Modifier.fillMaxSize().padding(bottom = (Tokens.MARGIN_V_DP + BRIEF_ROW_DP + dockPillInset(theme)).dp),
             contentAlignment = Alignment.BottomCenter,
         ) {
             AskButton(shown, askTile, up = calendar, onFocused = {}, onClick = { open = DOCK_ASK })
@@ -318,7 +321,7 @@ fun HomeScreen(
         // R1 focus order in the dock band: Calendar > Ask > Watch (game day only) > Quiet (last). Right of the Ask pill,
         // right-aligned in the same band; Up from either returns to the Calendar tile, like Ask.
         Box(
-            Modifier.fillMaxSize().padding(end = Tokens.MARGIN_H_DP.dp, bottom = (Tokens.MARGIN_V_DP + dockPillInset(theme)).dp),
+            Modifier.fillMaxSize().padding(end = Tokens.MARGIN_H_DP.dp, bottom = (Tokens.MARGIN_V_DP + BRIEF_ROW_DP + dockPillInset(theme)).dp),
             contentAlignment = Alignment.BottomEnd,
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(PILL_GAP_DP.dp), verticalAlignment = Alignment.CenterVertically) {

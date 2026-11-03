@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,10 +33,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -55,9 +58,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -68,6 +75,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,6 +93,10 @@ import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.Precip
 import tvhome.core.ui.ContextCard
 import tvhome.core.ui.DriftOffset
+import tvhome.core.ui.Drift
+import tvhome.core.assistant.briefFacts
+import tvhome.core.assistant.briefLine
+import tvhome.core.assistant.BriefSource
 import tvhome.core.ui.GlanceInputs
 import tvhome.core.ui.GlanceTokens
 import tvhome.core.ui.HeroMotif
@@ -131,7 +144,10 @@ const val HERO_CARD_DESC_PREFIX = "Hero card: "
  * It owns the minute clock, so the countdown and the theme re-evaluate at each tick without recomposing the home
  * screen. [idle] dims the backdrop and text (DIM; NEAR_BLACK is drawn over everything by [NearBlackLayer]); [drift]
  * moves the top strip and the hero text, read in the layer phase only. [quiet] (M7-F6) hides event titles in every
- * string; [onWatch] reports the Watch pill's target (M7-F5) to the dock, which is outside the hero.
+ * string; [onWatch] reports the Watch pill's target (M7-F5) to the dock, which is outside the hero. The one-line brief
+ * (M7-F6) is drawn here, in the dock band's brief row ([BRIEF_ROW_DP], which the home screen reserves), so it is filled
+ * in the same composition as [quiet] (no title for even a frame after Quiet turns on) and drifts with the hero text.
+ * [briefColor] is the home theme's secondary text (the row sits on the theme background, below the backdrop).
  */
 @Composable
 fun HeroLayer(
@@ -139,6 +155,7 @@ fun HeroLayer(
     drift: State<DriftOffset>,
     quiet: Boolean,
     onWatch: (WatchTarget?) -> Unit,
+    briefColor: Int,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -168,13 +185,58 @@ fun HeroLayer(
     val is24h = DateFormat.is24HourFormat(context)
     val zone = ZoneId.systemDefault()
     val instant = Instant.now()
-    val glance = remember(now, snap, agenda, settings, is24h, quiet) {
+    val inputs = remember(now, snap, agenda, settings, is24h, quiet) {
         // isInstalled reads a set built on IO (HeroSettings.read): no package manager call on the main thread.
-        homeGlance(GlanceInputs(
+        GlanceInputs(
             instant, zone, is24h, snap, settings.switches, settings.hasLocation, agenda, settings.travel,
             quiet = quiet, watchMap = settings.watchMap, isInstalled = { it in settings.installed },
-        ))
+        )
     }
+    // M7-F6 brief. When home became visible (STARTED), else null: the ticker refreshes only while home is seen.
+    var visibleSince by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(owner) {
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            visibleSince = SystemClock.elapsedRealtime()
+            try { awaitCancellation() } finally { visibleSince = null }
+        }
+    }
+    // Bumped after each refresh, so the line is re-read from the cache.
+    var briefRefreshed by remember { mutableIntStateOf(0) }
+    val facts = remember(inputs) { briefFacts(inputs) }
+    // The switch and the cache file, read on IO (never on the main thread; the hero is composed after the first frame,
+    // AC8). The source holds no title (placeholders only), so holding it across a Quiet change is safe. Keyed on the
+    // switch too (settings are re-read each minute), so switching the brief off hides it within a minute (brief-off-lag).
+    val briefSource by produceState<BriefSource?>(null, facts, briefRefreshed, settings.switches.brief) {
+        value = withContext(Dispatchers.IO) { runCatching { graph.brief.load(facts) }.getOrNull() }
+    }
+    // On each minute tick: at most one request per slot (BriefLedger), off the main thread. Its own scope, so a feed
+    // update or the next tick never cancels a request that is in flight (a cancel would still spend the slot).
+    val briefScope = rememberCoroutineScope()
+    LaunchedEffect(now) {
+        val since = visibleSince ?: return@LaunchedEffect
+        val tickFacts = facts
+        briefScope.launch {
+            val ran = withContext(Dispatchers.IO) {
+                runCatching { graph.brief.onTick(tickFacts, SystemClock.elapsedRealtime() - since) }.getOrDefault(false)
+            }
+            if (ran) briefRefreshed++
+        }
+    }
+    // Fit by measurement (brief-line-truncation): the row's real width (screen minus the safe margins and the drift
+    // travel on both sides) at the row's font. A line that does not fit drops template parts, or the cached line falls
+    // back to the template, so the band never ellipsizes mid-part. Same at 1280x720 and 1920x1080 (dp and sp scale).
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val briefWidthPx = with(density) { (LocalConfiguration.current.screenWidthDp - 2 * BRIEF_SIDE_DP).dp.toPx() }
+    // Filled here, on main, in the same composition as quiet: pure and cheap (brief-quiet-flash).
+    val brief = remember(briefSource, facts, quiet, briefWidthPx) {
+        briefSource?.let { src ->
+            briefLine(src.raw, facts, quiet) { t ->
+                measurer.measure(t, BRIEF_STYLE, maxLines = 1, softWrap = false, density = density).size.width <= briefWidthPx
+            }
+        }
+    }
+    val glance = remember(inputs, brief) { homeGlance(inputs.copy(brief = brief)) }
     LaunchedEffect(glance.watch) { onWatch(glance.watch) }
     val weather = (view(snap.weather, PanelPolicies.WEATHER, settings.switches.weather, instant) as? PanelView.Shown)?.value
     val game = if (settings.switches.games) GameDay.select(snap.games?.value.orEmpty(), instant, zone) else null
@@ -200,8 +262,39 @@ fun HeroLayer(
         HeroTopStrip(glance, resolved, ink, dim, drifting)
         HeroNowNext(glance.nowNext, ink, drifting)
         HeroCard(glance.card, ink, drifting)
+        glance.brief?.let { line ->
+            Text(
+                line,
+                style = BRIEF_STYLE,
+                color = rgb(if (dim) OledTokens.DIM_TEXT else briefColor),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip, // measured to fit above; never an ellipsis
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = BRIEF_SIDE_DP.dp, end = BRIEF_SIDE_DP.dp, bottom = (Tokens.MARGIN_V_DP + Drift.MAX_Y_DP.toInt()).dp)
+                    .height(BRIEF_TEXT_DP.dp)
+                    .then(drifting)
+                    .testTag(DOCK_BRIEF_TAG),
+            )
+        }
     }
 }
+
+/** The brief row's text: the tile-label size (24 sp = 36 px at 1080p, over the 32 px minimum). */
+private val BRIEF_STYLE = TextStyle(fontSize = Tokens.SECONDARY_SP.sp)
+
+/** Left and right inset of the brief line: the 5% overscan safe margin plus the drift's travel, so it never leaves it. */
+private val BRIEF_SIDE_DP = Tokens.MARGIN_H_DP + Drift.MAX_X_DP.toInt()
+
+/** Height of the brief text in its row. */
+private const val BRIEF_TEXT_DP = 32
+
+/** The dock band's brief row (reserved by the home screen under the dock): the text plus the drift's vertical travel. */
+val BRIEF_ROW_DP: Int = BRIEF_TEXT_DP + 2 * Drift.MAX_Y_DP.toInt()
+
+/** Test tag of the brief line (uiautomator resource-id), read by the emulator QA check. */
+const val DOCK_BRIEF_TAG = "dock_brief"
 
 private const val FEEDS_START_DELAY_MS = 1500L
 

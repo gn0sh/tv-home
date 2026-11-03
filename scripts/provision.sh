@@ -13,7 +13,7 @@ Non-secret settings (not secrets, so plain adb arguments are fine; a refused val
   P=content://com.gnosh.tvhome.provision
   Weather location:  adb shell content insert --uri $P/location --bind lat:d:36.53 --bind lon:d:-87.36
   Panel off/on:      adb shell content insert --uri $P/panel --bind id:s:alerts --bind on:b:false
-                     (id: weather, alerts, games, brief; on: true or false. Brief ships off.)
+                     (id: weather, alerts, games, brief; on: true or false. Brief is on; it calls only with a key.)
   All panels reset:  adb shell content delete --uri $P/panel
   TV profile:        adb shell content insert --uri $P/tv_profile --bind value:s:lg      (lg or vizio)
   Profile auto:      adb shell content delete --uri $P/tv_profile

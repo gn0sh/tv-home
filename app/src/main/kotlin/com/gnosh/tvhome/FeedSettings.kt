@@ -63,7 +63,7 @@ object FeedSettings {
         prefs(context).edit().putBoolean(id.prefKey, on).apply()
     }
 
-    /** Every panel back to its default (the brief off). */
+    /** Every panel back to its default (all on; the brief calls Claude only when a key is provisioned). */
     fun clearPanels(context: Context) {
         val e = prefs(context).edit()
         for (id in PanelId.entries) e.remove(id.prefKey)

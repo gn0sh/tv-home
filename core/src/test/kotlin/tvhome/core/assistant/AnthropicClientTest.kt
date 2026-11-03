@@ -58,6 +58,19 @@ class AnthropicClientTest {
         assertFalse(body.toString().contains(FakeSecrets.API_KEY), "the key is never in the body")
     }
 
+    @Test fun postSendsTheGivenBodyWithTheSameKeyAndNoFallbackBeta() {
+        server.enqueue(MockResponse().setBody(fixture("envelope-ok.json")))
+        val body = """{"model":"claude-opus-5-5","max_tokens":5,"messages":[]}"""
+        val r = runSuspend { client().post(body) } as ClaudeResult.Text
+        assertTrue(r.text.isNotEmpty())
+        val req = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals(FakeSecrets.API_KEY, req.getHeader("x-api-key"))
+        assertEquals("2023-06-01", req.getHeader("anthropic-version"))
+        assertNull(req.getHeader("anthropic-beta"), "the brief never opts into the server-side fallback")
+        assertEquals(body, req.body.readUtf8())
+        assertEquals(ClaudeResult.Failed(ClaudeError.NO_KEY), runSuspend { client(key = null).post(body) })
+    }
+
     @Test fun afterAServerSideFallbackTheFinalTextIsUsed() {
         server.enqueue(MockResponse().setBody(fixture("envelope-fallback.json")))
         assertEquals("""{"answer":"From the fallback","open":null}""", (send(client()) as ClaudeResult.Text).text)
