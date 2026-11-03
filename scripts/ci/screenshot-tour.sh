@@ -363,8 +363,8 @@ pill_case() {
   v=""
   focus_pill
   [[ $FOCUSED == "Watch the game on $net"* ]] || v="focused node description '$FOCUSED'"
-  has 'content-desc="Ask Claude\. Talk or type a question\." clickable="true"[^>]* focusable="true"' || v="${v:+$v; }Ask description not on a clickable focusable node"
-  has 'content-desc="Quiet mode, off\. Turn on to hide event titles\." clickable="true"[^>]* focusable="true"' || v="${v:+$v; }Quiet description not on a clickable focusable node"
+  has 'content-desc="Ask Claude\. Talk or type a question\."[^>]* clickable="true"[^>]* focusable="true"' || v="${v:+$v; }Ask description not on a clickable focusable node"
+  has 'content-desc="Quiet mode, off\. Turn on to hide event titles\."[^>]* clickable="true"[^>]* focusable="true"' || v="${v:+$v; }Quiet description not on a clickable focusable node"
   shot "$((n + 1))" "$name-focused" "$v"
   v=""
   key DPAD_CENTER; sleep 3
