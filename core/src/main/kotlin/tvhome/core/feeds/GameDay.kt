@@ -102,7 +102,7 @@ object GameDay {
         val vs = if (g.home) "vs" else "at"
         return when (g.phase) {
             GamePhase.UPCOMING ->
-                "${team.name} $vs ${g.opponent} · ${TIME.format(g.start.atZone(zone))} · ${countdown(Duration.between(now, g.start))}"
+                "${team.name} $vs ${g.opponent} · ${keep(TIME.format(g.start.atZone(zone)))} · ${keep(countdown(Duration.between(now, g.start)))}"
             GamePhase.LIVE -> {
                 val score = scoreText(team, g)
                 (if (score != null) "$score · ${g.period ?: "live"}" else "${team.name} $vs ${g.opponent} · ${g.period ?: "live"}")
@@ -120,6 +120,12 @@ object GameDay {
         val b = g.oppScore ?: return null
         return "${team.name} $a, ${g.opponent} $b"
     }
+
+    /** A no-break space: "2:30 PM" and "in 3h 29m" each stay on one line when the card wraps (osu-card-wrap). */
+    const val NBSP = '\u00A0'
+
+    /** [s] with its spaces made no-break, so a line wraps only at the " · " separators. */
+    internal fun keep(s: String): String = s.replace(' ', NBSP)
 
     internal fun countdown(d: Duration): String {
         val minutes = d.toMinutes()

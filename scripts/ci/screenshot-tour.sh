@@ -350,8 +350,12 @@ osu_day() { # kickoff 14:30 local today (a Saturday), now 11:00
 replant() { # $1 = weather fields
   evening_agenda; plant_weather "$1"; plant_brief
 }
-back_capture() { # Back, then the screen ~200 ms later, captured on the device
-  sh_ "input keyevent KEYCODE_BACK; sleep 0.2; screencap -p /sdcard/tour-back.png" || true
+back_capture() { # Back, then the screen at ~100, 300 and 800 ms after it, captured on the device (each screencap
+  # takes time itself, so the sleeps are the gaps to the next target, not the targets)
+  local t t0 t1 t2 t3
+  t=$(sh_ "rm -f /sdcard/tour-back-*.png; input keyevent KEYCODE_BACK; a=\$(date +%s%N); sleep 0.1; b=\$(date +%s%N); screencap -p /sdcard/tour-back-100.png; sleep 0.1; c=\$(date +%s%N); screencap -p /sdcard/tour-back-300.png; sleep 0.4; d=\$(date +%s%N); screencap -p /sdcard/tour-back-800.png; echo \$a \$b \$c \$d" | tr -d '\r' || true)
+  read -r t0 t1 t2 t3 <<<"$t" || true
+  [[ ${t3:-} =~ ^[0-9]+$ ]] && echo "tour: captures started at $(( (t1 - t0) / 1000000 )), $(( (t2 - t0) / 1000000 )), $(( (t3 - t0) / 1000000 )) ms after the Back key returned" || true
 }
 quiet false >/dev/null 2>&1 || true
 rmc panels/alerts.json; no_games
@@ -371,14 +375,18 @@ key DPAD_DOWN; key DPAD_CENTER; sleep 3; look
 has 'content-desc="Calendar full screen"' || { key DPAD_DOWN; key DPAD_CENTER; sleep 3; look; }
 has 'content-desc="Calendar full screen"' || v="the calendar did not open"
 back_capture
-shot 2 back-from-calendar-200ms "$v" /sdcard/tour-back.png
+shot 2 back-from-calendar-100ms "$v" /sdcard/tour-back-100.png
+shot 2 back-from-calendar-300ms "$v" /sdcard/tour-back-300.png
+shot 2 back-from-calendar-800ms "$v" /sdcard/tour-back-800.png
 sleep 2
 v=""
 key DPAD_RIGHT; key DPAD_CENTER; sleep 3; look
 has 'content-desc="Board full screen"' || v="the Board did not open from the dock"
 back_capture
-shot 3 back-from-board-200ms "$v" /sdcard/tour-back.png
-sh_ rm -f /sdcard/tour-back.png || true
+shot 3 back-from-board-100ms "$v" /sdcard/tour-back-100.png
+shot 3 back-from-board-300ms "$v" /sdcard/tour-back-300.png
+shot 3 back-from-board-800ms "$v" /sdcard/tour-back-800.png
+sh_ "rm -f /sdcard/tour-back-*.png" || true
 
 # 4. Preds game day with snow falling: indoors, so no snow is drawn.
 v=""

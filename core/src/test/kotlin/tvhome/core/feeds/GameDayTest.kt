@@ -53,9 +53,9 @@ class GameDayTest {
 
     @Test fun lines() {
         val now = at(16, 45)
-        assertEquals("Predators vs Blues · 7:00 PM · in 2h 15m", GameDay.line(game(nsh, at(19)), now, zone))
-        assertEquals("Predators at Blues · 5:30 PM · in 45m", GameDay.line(game(nsh, at(17, 30), home = false), at(16, 45), zone))
-        assertEquals("Predators vs Blues · 7:00 PM · starting now", GameDay.line(game(nsh, at(19)), at(19, 0), zone))
+        assertEquals("Predators vs Blues · 7:00\u00A0PM · in\u00A02h\u00A015m", GameDay.line(game(nsh, at(19)), now, zone))
+        assertEquals("Predators at Blues · 5:30\u00A0PM · in\u00A045m", GameDay.line(game(nsh, at(17, 30), home = false), at(16, 45), zone))
+        assertEquals("Predators vs Blues · 7:00\u00A0PM · starting\u00A0now", GameDay.line(game(nsh, at(19)), at(19, 0), zone))
         assertEquals("Ohio State 21, Michigan 14 · Q3 8:12",
             GameDay.line(game(osu, at(12), GamePhase.LIVE, 21, 14, "Q3 8:12", opponent = "Michigan"), now, zone))
         assertEquals("Predators vs Blues · live", GameDay.line(game(nsh, at(16), GamePhase.LIVE), now, zone))
@@ -91,5 +91,14 @@ class GameDayTest {
         assertTrue(c.length <= Feeds.LABEL_CAP); assertFalse(c.endsWith("a") && c.contains("after"))
         assertEquals("55\u00B0F Thunderstorm, hail", c)
         assertEquals("55\u00B0F", WeatherNow(55, "x".repeat(60), null, null).chip)
+    }
+
+    @Test fun lineWrapsOnlyAtTheSeparators() {
+        // osu-card-wrap: "2:30 PM" and "in 3h 29m" never split across lines on the card (no-break spaces).
+        val line = GameDay.line(game(nsh, at(19)), at(16, 45), zone)
+        val chunks = line.split(" · ")
+        assertEquals("7:00\u00A0PM", chunks[1])
+        assertEquals("in\u00A02h\u00A015m", chunks[2])
+        assertTrue(chunks.drop(1).none { it.contains(' ') }, line)
     }
 }
