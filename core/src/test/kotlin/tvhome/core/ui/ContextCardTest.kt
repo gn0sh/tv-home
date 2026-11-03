@@ -73,9 +73,28 @@ class ContextCardTest {
         assertEquals("ESPN+", up.network)
         assertTrue(up.line.endsWith(" · ESPN+"), up.line)
         val unmapped = card(false, listOf(gameAt(GamePhase.UPCOMING, nets = listOf("SCRIPPS")))) as ContextCard.Game
-        assertNull(unmapped.network); assertFalse(unmapped.line.contains("SCRIPPS"), "an unmapped name is not drawn")
+        // Brian 2026-11-03: where it is on is the question, so the feed's name is drawn even with no app mapped for it
+        // (no Watch target: network stays null), and a game with none says so.
+        assertNull(unmapped.network); assertTrue(unmapped.line.endsWith(" · TV: SCRIPPS"), unmapped.line)
+        val none = card(false, listOf(gameAt(GamePhase.UPCOMING, nets = emptyList()))) as ContextCard.Game
+        assertNull(none.network); assertTrue(none.line.endsWith(" · " + GameDay.TV_NOT_ANNOUNCED), none.line)
         val final = card(false, listOf(gameAt(GamePhase.FINAL, local(10)))) as ContextCard.Game
         assertNull(final.network)
+    }
+
+    // --- next game (not today) -------------------------------------------------------------------------------------
+
+    @Test fun nextGameOnALaterDayBeatsTheTimeOfDayCardButNotAnAlertOrTodaysGame() {
+        val thu = gameAt(GamePhase.UPCOMING, local(19, 0, mon.plusDays(3)))
+        val next = GameDay.next(listOf(thu), null, now)
+        val c = contextCard(null, null, now, zone, false, tod, map, null, next) as ContextCard.Game
+        assertEquals(ContextCard.Game.NEXT_GAME, c.heading)
+        assertEquals("Predators vs Blues · Thu 7:00 PM · TV: ESPN+", c.line)
+        assertTrue(contextCard(alerts, null, now, zone, false, tod, map, null, next) is ContextCard.Alert)
+        val today = gameAt(GamePhase.UPCOMING)
+        val t = contextCard(null, GameDay.select(listOf(today), now, zone), now, zone, false, tod, map, null, next) as ContextCard.Game
+        assertNull(t.heading)
+        assertEquals(tod, contextCard(null, null, now, zone, false, tod, map, null, null))
     }
 
     // --- time of day -----------------------------------------------------------------------------------------------

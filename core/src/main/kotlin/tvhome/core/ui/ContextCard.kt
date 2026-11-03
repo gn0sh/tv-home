@@ -28,7 +28,13 @@ sealed interface ContextCard {
      * Today's game for a followed team. [line] is the whole sentence the card draws (opponent, start or score, and the
      * carrying [network] when one is mapped and the game is not over). [phase] lets the card tell live from upcoming.
      */
-    data class Game(val line: String, val teamKey: String, val phase: GamePhase = GamePhase.UPCOMING, val network: String? = null) : ContextCard
+    data class Game(
+        val line: String, val teamKey: String, val phase: GamePhase = GamePhase.UPCOMING, val network: String? = null,
+        /** Set for a game that is not today ([NEXT_GAME]); null lets the card name the phase (Live, Today, Final). */
+        val heading: String? = null,
+    ) : ContextCard {
+        companion object { const val NEXT_GAME = "Next game" }
+    }
 
     /**
      * The quiet-hours card (spec M7-4.5): in the morning today's weather arc, in the evening tomorrow's first event and
@@ -43,7 +49,8 @@ sealed interface ContextCard {
 
 /**
  * The context card, by priority (spec M7-4.5, tested as a table): a severe alert, then a live game, then an upcoming game
- * today, then (an ended game's final, until local midnight, the M2f rule), then the [timeOfDay] card. [alerts] must
+ * today, then (an ended game's final, until local midnight, the M2f rule), then the [next] game of either team on a
+ * later day (Brian 2026-11-03: the home screen always carries it), then the [timeOfDay] card. [alerts] must
  * already be the set that applies now (see [activeAlerts]); [game] is [GameDay.select]'s pick, which already ranks live
  * over upcoming over final. The game line names [watch]'s network when a Watch target exists, else [watchMap]'s.
  */
@@ -56,13 +63,24 @@ fun contextCard(
     timeOfDay: ContextCard.TimeOfDay? = null,
     watchMap: WatchMap = WatchMap.EMPTY,
     watch: WatchTarget? = null,
+    /** The next game of either team when none is today ([GameDay.next]); shown above the time-of-day card. */
+    next: TeamGame? = null,
 ): ContextCard? {
     alerts?.override?.let { a -> return ContextCard.Alert(a.event, a.until?.let { untilText(it, now, zone, is24h) }) }
     if (game != null) {
-        // The pill's network when there is a pill, so the card and the pill always name the same one.
+        // The pill's network when there is a pill, so the card and the pill always name the same one; else what the
+        // feed lists ("TV: not announced yet" when it lists none: where it is on is the question).
         val network = if (game.game.phase == GamePhase.FINAL) null else watch?.network ?: watchMap.network(game)
-        val line = GameDay.line(game, now, zone).let { if (network != null) "$it · $network" else it }
+        val tv = when {
+            game.game.phase == GamePhase.FINAL -> null
+            network != null -> network
+            else -> GameDay.tvText(game.game)
+        }
+        val line = GameDay.line(game, now, zone).let { if (tv != null) "$it · $tv" else it }
         return ContextCard.Game(line, game.team.key, game.game.phase, network)
+    }
+    if (next != null) {
+        return ContextCard.Game(GameDay.nextLine(next, now, zone), next.team.key, next.game.phase, null, ContextCard.Game.NEXT_GAME)
     }
     return timeOfDay
 }

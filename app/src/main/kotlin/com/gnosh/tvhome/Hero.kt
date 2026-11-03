@@ -365,7 +365,7 @@ private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier, zone:
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    when (card.phase) { GamePhase.LIVE -> GAME_LIVE; GamePhase.FINAL -> GAME_FINAL; GamePhase.UPCOMING -> GAME_TODAY },
+                    card.heading ?: when (card.phase) { GamePhase.LIVE -> GAME_LIVE; GamePhase.FINAL -> GAME_FINAL; GamePhase.UPCOMING -> GAME_TODAY },
                     color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                 )
                 Text(

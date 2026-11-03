@@ -51,10 +51,23 @@ class LeagueSchedule(
             // ESPN: the live document is the season, so keep it. NHL: top the season up once a day.
             if (sameDocument) keep(withContext(io) { Schedules.parseSeason(team, raw, now) }, now, onlyIfChangedOrDue = true)
             else refreshSeasonIfDue(seasonUrl, now)
-            return ScheduleResult(live)
+            return ScheduleResult(if (sameDocument) live else withLaterSeasonGames(live, now))
         }
         if (!sameDocument) refreshSeasonIfDue(seasonUrl, now)
         return fallback(now)?.let { ScheduleResult(it.value, fromFallback = true, at = it.at) }
+    }
+
+    /**
+     * NHL: the live week plus the season's games that start after now and are not already in it (no live game within
+     * 12 h of the same start), so the next game is known when the week has none (Board, spec "always shown"). Only a
+     * season cache fresh enough to be a fallback is used; live rows always win. At most [MAX_TEAM_GAMES] in all.
+     */
+    private suspend fun withLaterSeasonGames(live: List<GameInfo>, now: Instant): List<GameInfo> {
+        val season = fallback(now)?.value.orEmpty()
+        val extra = season.filter { s ->
+            s.start.isAfter(now) && live.none { Duration.between(it.start, s.start).abs() < SAME_GAME }
+        }
+        return (live + extra.sortedBy { it.start }).take(MAX_TEAM_GAMES)
     }
 
     private suspend fun refreshSeasonIfDue(url: okhttp3.HttpUrl, now: Instant) {
@@ -108,6 +121,12 @@ class LeagueSchedule(
 
         /** A cached season older than this is not used as a fallback (a missed week of games is better hidden). */
         val SEASON_MAX_AGE: Duration = Duration.ofDays(7)
+
+        /** A season row this close to a live row is the same game. */
+        private val SAME_GAME: Duration = Duration.ofHours(12)
+
+        /** The games cache holds at most 64 per team (PanelCaches). */
+        private const val MAX_TEAM_GAMES = 64
     }
 }
 

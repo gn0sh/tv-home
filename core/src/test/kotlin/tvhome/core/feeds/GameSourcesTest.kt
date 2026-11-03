@@ -61,7 +61,8 @@ class GameSourcesTest {
         val s = source(f, cache)
         val r = runSuspend { s.games(now) }!!
         assertFalse(r.fromFallback)
-        assertEquals(1, r.games.size)
+        // The live week's game, then the season's later game the week does not list (Board: next game always known).
+        assertEquals(listOf(Instant.parse("2026-11-04T01:00:00Z"), Instant.parse("2026-11-06T02:30:00Z")), r.games.map { it.start })
         assertEquals(listOf("ESPN+"), r.games[0].networks, "US broadcasters only")
         assertEquals(1, f.seasonCalls()); assertEquals(1, cache.writes)
         now = now.plus(Duration.ofHours(23)); runSuspend { s.games(now) }
@@ -69,6 +70,16 @@ class GameSourcesTest {
         now = now.plus(Duration.ofHours(2)); runSuspend { s.games(now) }
         assertEquals(2, f.seasonCalls(), "refreshed after 24 h")
         assertEquals(3, f.weekCalls())
+    }
+
+    /** A season row within 12 h of a live row is the same game: the live row (fresher state and score) wins, once. */
+    @Test fun seasonGamesAddOnlyLaterGamesTheWeekLacks() {
+        val f = Scripted().apply {
+            week = nhlDoc("2026-11-04T01:00:00Z")
+            season = nhlDoc("2026-11-01T01:00:00Z", "2026-11-04T01:30:00Z", "2026-11-12T01:00:00Z")
+        }
+        val r = runSuspend { source(f, Mem()).games(now) }!!
+        assertEquals(listOf(Instant.parse("2026-11-04T01:00:00Z"), Instant.parse("2026-11-12T01:00:00Z")), r.games.map { it.start })
     }
 
     @Test fun shapeChangeInTheLiveDocumentGivesGamesFromTheFallbackNotAThrow() {

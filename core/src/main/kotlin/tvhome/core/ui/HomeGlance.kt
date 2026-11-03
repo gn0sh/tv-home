@@ -138,7 +138,8 @@ fun homeGlance(i: GlanceInputs): HomeGlance {
     val game = if (i.switches.games) GameDay.select(i.feeds.games?.value.orEmpty(), i.now, i.zone) else null
     val timeOfDay = timeOfDayCard(weather, i.agenda, i.now, i.zone, i.quiet, i.is24h)
     val watch = game?.takeIf { it.game.phase != GamePhase.FINAL }?.let { i.watchMap.watch(it, i.isInstalled) }
-    val card = contextCard(alerts, game, i.now, i.zone, i.is24h, timeOfDay, i.watchMap, watch)
+    val next = if (i.switches.games && game == null) GameDay.next(i.feeds.games?.value.orEmpty(), null, i.now) else null
+    val card = contextCard(alerts, game, i.now, i.zone, i.is24h, timeOfDay, i.watchMap, watch, next)
     val nn = nowNext(i.agenda, i.now, i.zone, i.travel, i.quiet, i.is24h)
     val brief = i.brief?.trim()?.ifEmpty { null }
 
