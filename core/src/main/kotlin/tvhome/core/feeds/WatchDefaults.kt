@@ -124,7 +124,7 @@ object WatchDefaults {
             null -> null
         } ?: return null
         if (!WatchMap.validPackage(app.packageName)) return null
-        return WatchTarget(network.trim(), app.packageName)
+        return WatchTarget(network.trim(), app.packageName, app.label.trim().ifEmpty { null })
     }
 
     /** The built-in map over [apps]; every target it gives is one of them, so it is installed by construction. */

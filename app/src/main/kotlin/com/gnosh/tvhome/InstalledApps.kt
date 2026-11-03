@@ -84,7 +84,8 @@ class InstalledApps {
          * The launchable TV apps with their labels, no images (watch-defaults: the built-in Watch map looks for the CDE
          * app and the streaming apps among these). watch-apps-per-minute: this is the tile row's own list, refreshed by
          * [load] each time the home screen starts (installs and removals happen away from it, so they are picked up on
-         * the way back). Only before the first [load] does it query the package manager itself: off the main thread.
+         * the way back; one done remotely, e.g. from the Play Store on a phone or over adb, while home is in front is
+         * picked up on the next return to home). Only before the first [load] does it query the package manager itself: off the main thread.
          */
         fun launcherApps(context: Context): List<LauncherApp> = known ?: runCatching {
             val pm = context.packageManager

@@ -260,7 +260,10 @@ fun HeroLayer(
         }
     }
     val glance = remember(inputs, brief) { homeGlance(inputs.copy(brief = brief)) }
-    LaunchedEffect(glance.watch) { onWatch(glance.watch) }
+    // The pill names the app it opens (watch-pill-truncated): an adb-mapped target gets its launcher label here.
+    LaunchedEffect(glance.watch, settings.labels) {
+        onWatch(glance.watch?.let { w -> if (w.appLabel != null) w else w.copy(appLabel = settings.labels[w.packageName]) })
+    }
     val weather = (view(snap.weather, PanelPolicies.WEATHER, settings.switches.weather, instant) as? PanelView.Shown)?.value
     val game = if (settings.switches.games) GameDay.select(snap.games?.value.orEmpty(), instant, zone) else null
     // The real sky at the weather location, on the minute tick only (a few dozen trig calls). Null without a location:
@@ -378,6 +381,8 @@ private data class HeroSettings(
     val watchMap: WatchMap = WatchMap.EMPTY,
     /** The watch map's packages that have a TV launch intent, checked once a minute on IO. */
     val installed: Set<String> = emptySet(),
+    /** Launcher labels by package, for the Watch pill's "Watch on <app>". */
+    val labels: Map<String, String> = emptyMap(),
     /** False until the settings have been read once: whether a location is set is not known yet. */
     val loaded: Boolean = true,
 ) {
@@ -402,6 +407,7 @@ private data class HeroSettings(
                 FeedSettings.switches(context), FeedSettings.location(context), FeedSettings.travelRules(context),
                 FeedSettings.watchMap(context).orElse(WatchDefaults.map(apps)),
                 installed,
+                apps.associate { it.packageName to it.label },
             ).also { last = it }
         }
     }
