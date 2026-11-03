@@ -29,8 +29,9 @@ data class HeroTheme(
     val secondaryText: Int = 0xD5DCE8,
     /** The scrim's colour (R3: the art shows at [GlanceTokens.BACKDROP_BRIGHTNESS] over it). Black but on game days. */
     val scrim: Int = 0x000000,
-    /** The screen background behind the tiles and dock, or null for the home theme's. */
+    /** The screen background behind the tiles and dock, and the tile fill on it, or null for the home theme's. */
     val screen: Int? = null,
+    val tile: Int? = null,
     /** A full-strength accent line along the hero's bottom edge, below every text zone, or null. */
     val edge: Int? = null,
 ) {
@@ -57,7 +58,7 @@ data class HeroTheme(
             }
             return HeroTheme(
                 t.backdropTop, t.backdropBottom, t.accent, motif, GameDay.badge(game),
-                scrim = t.scrim, screen = t.screen, edge = t.edge,
+                scrim = t.scrim, screen = t.screen, tile = t.tile, edge = t.edge,
             )
         }
 

@@ -83,12 +83,18 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   **Game-day scrims (2026-11-03, preds-arena):** the art stays at 25% for every theme, but on a game day the scrim is
   the team colour instead of black (`HeroTheme.scrim`: Predators navy `#041E42`, Ohio State `#2A0707`), so the
   whole hero reads navy or scarlet. A team-coloured scrim breaks the white-pixel guarantee (white at 25% over navy is
-  5.4:1), so 7:1 is checked over the composited art instead: `GlanceTokensTest` composites each team's brightest art
-  colour (gold, scarlet) over its scrim, and `render_backdrops.py` fails the render if the art's 99.9th-percentile
-  pixel, composited the same way, drops below 7:1 (arena 8.8 / 7.2, stadium 10.4 / 8.5); the game art has no white.
-  Full-strength team colour goes only where no text sits: a 3 dp accent line in the gap under the hero text
-  (`HeroTheme.edge`, gold or scarlet), and on Predators game days the screen background behind the tiles is navy
-  `#06204A` (tile labels 7:1 or more, tested). DIM keeps the black scrim. No brightness exception.
+  5.4:1), so 7:1 is checked against each image's brightest pixel inside the hero text zones (the top strip, the left
+  zone and the right card, at 1.5 image px per dp), never a percentile: `render_backdrops.py` measures it from the
+  shipped WebP files into the generated `BackdropPeaks`, fails a render that composites below 7:1, and
+  `GlanceTokensTest` composites every theme's peak over that theme's scrim and asserts 7:1 for both hero text colours.
+  The arena's ribbon board, rail and ice lights were dimmed until they pass (peak `#FEBB27`: 8.6:1 and 7.1:1); the
+  stadium's floodlights and windows likewise (9.5:1 and 7.7:1).
+  Full-strength team colour goes only where no text sits: a 2 dp accent line just under the hero text
+  (`HeroTheme.edge`, gold or scarlet) that drifts with the text and is hidden in DIM and Quiet. On Predators game
+  days the screen is navy `#041A3A` with navy tiles `#15305E` (`HomeTheme.forGameDay`): applied only if the active
+  home theme's text and secondary text keep 7:1 on both and the tile and focused fill stand out from the screen by at
+  least 1.3:1 luminance contrast, never in DIM. DIM keeps the black scrim. No brightness exception.
+  Image budget: `hero_arena.webp` is 32 KB; the eight backdrops total about 135 KB (each under 120 KB).
 
 ### 4. OLED profile (LG vs Vizio, drift, idle dim)
 - **Profile.** `TvProfile.LG_OLED` (drift on, dim at 10 min, near-black at 30 min) and `TvProfile.VIZIO_LED` (drift

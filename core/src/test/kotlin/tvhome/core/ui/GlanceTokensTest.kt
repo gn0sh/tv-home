@@ -89,23 +89,34 @@ class GlanceTokensTest {
         }
     }
 
-    @Test fun gameDayScrimsKeepSevenToOneOverTheirArtsBrightest() {
-        // Team-coloured scrims (navy, scarlet) at the usual 25%: the hero text over the art's brightest element, the
-        // team colour at full strength (gold ribbon and rail; scarlet haze), composited as the app draws it.
-        for (team in tvhome.core.feeds.Teams.ALL) {
-            val px = GlanceTokens.composite(team.primary, team.scrim)
-            assertSeven(GlanceTokens.HERO_TEXT, px, "${team.key} text over its ${team.primary.toString(16)} art")
-            assertSeven(GlanceTokens.HERO_SECONDARY, px, "${team.key} secondary over its ${team.primary.toString(16)} art")
-            assertSeven(GlanceTokens.HERO_SECONDARY, GlanceTokens.composite(0, team.scrim), "${team.key} over a black pixel")
+    @Test fun everyThemeKeepsSevenToOneOverItsArtsBrightestTextZonePixel() {
+        // BackdropPeaks is measured from the shipped images (render_backdrops.py): the brightest pixel inside the top
+        // strip, left zone and right card. Composited over each theme's scrim (team colour on game days) as drawn.
+        val themes = HeroTheme.ALL + tvhome.core.feeds.Teams.ALL.map { team ->
+            HeroTheme.forGame(tvhome.core.feeds.TeamGame(team, tvhome.core.feeds.GameInfo(
+                java.time.Instant.EPOCH, "X", true, tvhome.core.feeds.GamePhase.UPCOMING, null, null, null)))
+        }
+        for (t in themes) {
+            val px = GlanceTokens.composite(BackdropPeaks.of(t.motif), t.scrim)
+            assertSeven(GlanceTokens.HERO_TEXT, px, "${t.badge ?: t.motif} text over its art")
+            assertSeven(GlanceTokens.HERO_SECONDARY, px, "${t.badge ?: t.motif} secondary over its art")
         }
         assertEquals(0x404040, GlanceTokens.composite(0xFFFFFF, 0)) // black scrim: the usual white-pixel case
     }
 
-    @Test fun gameDayScreenBackgroundKeepsTheHomeTextReadable() {
-        for (team in tvhome.core.feeds.Teams.ALL) {
-            val bg = team.screen ?: continue
-            assertSeven(Tokens.TEXT, bg, "${team.key} tile labels on the screen background")
-            assertSeven(Tokens.SECONDARY, bg, "${team.key} brief line on the screen background")
-        }
+    @Test fun gameDayScreenAppliesOnlyWhenItReads() {
+        val preds = tvhome.core.feeds.Teams.PREDATORS
+        val on = HomeTheme.DEFAULT.forGameDay(preds.screen, preds.tile)
+        assertEquals(preds.screen, on.background)
+        assertEquals(preds.tile, on.tile)
+        assertSeven(on.text, on.background, "tile labels on the navy screen")
+        assertSeven(on.secondaryText, on.background, "brief line on the navy screen")
+        assertSeven(on.secondaryText, on.tile, "dock tile secondary text on the navy tile")
+        assertTrue(Tokens.contrast(on.tile, on.background) >= HomeTheme.GAME_SEPARATION, "tile stands out")
+        assertTrue(Tokens.contrast(on.focusFill, on.background) >= HomeTheme.GAME_SEPARATION, "focused fill stands out")
+        // A custom theme whose text would not read on navy keeps its own screen.
+        val dark = HomeTheme.DEFAULT.copy(secondaryText = 0x5A6270)
+        assertEquals(dark, dark.forGameDay(preds.screen, preds.tile))
+        assertEquals(HomeTheme.DEFAULT, HomeTheme.DEFAULT.forGameDay(null, null))
     }
 }

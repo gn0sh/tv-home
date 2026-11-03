@@ -32,8 +32,12 @@ data class TeamConfig(
     val venue: Venue = Venue.STADIUM,
     /** The colour the hero's scrim is (instead of black), so the whole hero reads in the team colour through it. */
     val scrim: Int = 0x000000,
-    /** The screen background behind the tiles and dock on this team's game day, or null for the usual one. */
+    /**
+     * The screen background behind the tiles and dock on this team's game day, and the tile fill on it, or null for
+     * the home theme's (HomeTheme.forGameDay checks both against the active theme before using them).
+     */
     val screen: Int? = null,
+    val tile: Int? = null,
     /** A thin full-strength accent line along the hero's bottom edge (under no text), or null for none. */
     val edge: Int? = null,
 ) {
@@ -72,7 +76,7 @@ object Teams {
         primary = 0xFFB81C, secondary = 0x041E42,
         backdropTop = 0x041E42, backdropBottom = 0x0B3169, accent = 0xFFB81C,
         zone = ZoneId.of("America/Chicago"), venue = Venue.ARENA,
-        scrim = 0x041E42, screen = 0x06204A, edge = 0xFFB81C,
+        scrim = 0x041E42, screen = 0x041A3A, tile = 0x15305E, edge = 0xFFB81C,
     )
 
     /** Scarlet #BB0000 and gray #666666. Gray is too dark for text on the dark backdrop, so the accent is a lighter gray. */
