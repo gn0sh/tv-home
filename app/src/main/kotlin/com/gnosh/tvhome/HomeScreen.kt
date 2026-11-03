@@ -369,7 +369,7 @@ fun HomeScreen(
                             }
                         }
                         DockPill(
-                            shown, label = label, description = WATCH_DESC_PREFIX + w.network,
+                            shown, label = label, description = WatchPill.description(WATCH_DESC_PREFIX, w.network, label),
                             requester = watchPill, up = calendar, maxWidthDp = WATCH_PILL_MAX_DP, active = false,
                             // The focus loss that comes with the pill's removal (watch already null) must not clear the flag.
                             onFocus = { f -> if (f) watchFocused = true else if (watch != null) watchFocused = false },
