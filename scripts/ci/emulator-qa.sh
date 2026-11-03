@@ -1127,11 +1127,13 @@ fi
     # watch-pill-a11y: each dock pill's description must be on the node that takes focus and clicks (TalkBack reads the
     # focused node; a description on a separate, non-focusable node is never spoken when the pill is focused).
     ui=$(ui_text)
-    for d in "Watch the game on YouTube" "Quiet mode, off" "Ask Claude"; do
-      node=$(grep -oE '<node [^>]*>' <<<"$ui" | grep -F "content-desc=\"$d" | head -1 || true)
-      [[ -n $node ]] || fail "q2: no node describes '$d'"
-      grep -qF 'focusable="true"' <<<"$node" && grep -qF 'clickable="true"' <<<"$node" \
-        || fail "q2: the '$d' description is not on a focusable, clickable node (watch-pill-a11y): $node"
+    # Full descriptions (closing quote included), and ' clickable=' / ' focusable=' with the leading space so
+    # long-clickable="true" never counts (qa-grep-prefix, qa-grep-longclick).
+    for d in 'Watch the game on YouTube(, opens [^"]*)?' 'Quiet mode, off\. Turn on to hide event titles\.' 'Ask Claude\. Talk or type a question\.'; do
+      node=$(grep -oE '<node [^>]*>' <<<"$ui" | grep -E "content-desc=\"$d\"" | head -1 || true)
+      [[ -n $node ]] || fail "q2: no node has the description /$d/"
+      grep -qF ' focusable="true"' <<<"$node" && grep -qF ' clickable="true"' <<<"$node" \
+        || fail "q2: the /$d/ description is not on a focusable, clickable node (watch-pill-a11y): $node"
     done
     pass "q2: the Watch, Quiet and Ask pills carry their descriptions on their focusable nodes"
     # Focus order (R1): apps row > Calendar > Ask > Watch > Quiet.
