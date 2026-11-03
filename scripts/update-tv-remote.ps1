@@ -75,6 +75,31 @@ function Close-TvRemote {
     return $true
 }
 
+# Closes this repo's own tv-remote processes (matched by executable path under tv-remote\.venv\Scripts, never by name
+# alone): politely first, then after about 3 seconds Stop-Process on any that remain. A background helper can hold
+# tv-remote.exe after the window is closed, and then uv sync cannot replace it (os error 32). Returns the names closed.
+function Stop-OwnTvRemote([string]$RepoRoot) {
+    $scripts = (Join-Path $RepoRoot 'tv-remote\.venv\Scripts').TrimEnd('\') + '\'
+    $mine = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($scripts, [StringComparison]::OrdinalIgnoreCase) -and
+        ($_.Name -like 'tv-remote*.exe' -or $_.Name -ieq 'python.exe' -or $_.Name -ieq 'pythonw.exe')
+    })
+    $closed = @()
+    $procs = @()
+    foreach ($m in $mine) {
+        $p = Get-Process -Id $m.ProcessId -ErrorAction SilentlyContinue
+        if ($p) { $procs += $p; [void]$p.CloseMainWindow() }
+    }
+    if ($procs.Count -eq 0) { return $closed }
+    $deadline = (Get-Date).AddSeconds(3)
+    while ((Get-Date) -lt $deadline -and @($procs | Where-Object { -not $_.HasExited }).Count -gt 0) { Start-Sleep -Milliseconds 200 }
+    foreach ($p in $procs) {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        $closed += $p.ProcessName
+    }
+    return $closed
+}
+
 try {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'git was not found on this PC.' }
 
@@ -104,6 +129,9 @@ try {
         throw 'TV Remote did not close. Close it yourself, then run Update TV Remote again. (The update was pulled; nothing else was changed.)'
     }
 
+    # A background helper can outlive the window and hold tv-remote.exe; close our own leftovers (by path) first.
+    $stopped = @(Stop-OwnTvRemote $repo)
+
     if ($reinstall) { & $installer *> $null }
 
     if (Test-Path $icon) { Start-Process -FilePath $icon }
@@ -118,6 +146,7 @@ try {
         $what += "`n`nNew changes:`n" + ($shown -join "`n") + "`n"
     }
     if ($reinstall) { $what += ' The remote app was reinstalled.' }
+    if ($stopped.Count -gt 0) { $what += " Also closed leftover TV Remote processes: $($stopped -join ', ')." }
     Show-Result "$what`nTV Remote is open again." $true
     exit 0
 } catch {
