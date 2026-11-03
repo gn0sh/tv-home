@@ -183,7 +183,8 @@ fun HeroLayer(
     // then starts after a short settle, only while the activity is STARTED (ADR 0008 section 1: nothing polls while
     // Brian watches another app); returning restarts it, and LiveFeeds fetches only what is due. It stops when the hero
     // leaves the composition. Until it exists the hero draws an empty snapshot.
-    var feeds by remember { mutableStateOf<LiveFeeds?>(null) }
+    // Already built in this process (coming back to home): its snapshot at once; else null until after the first frame.
+    var feeds by remember { mutableStateOf(graph.feedsIfBuilt) }
     val owner = LocalLifecycleOwner.current
     LaunchedEffect(graph, owner) {
         withFrameNanos { }
