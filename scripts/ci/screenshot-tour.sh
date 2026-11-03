@@ -328,17 +328,13 @@ preds_on() { # $1 = networks JSON list: Preds at 19:00 today (now 17:00)
 }
 replant() { evening_agenda; plant_weather "$1"; plant_brief; }
 pill_desc() { { grep -oE 'content-desc="Watch the game on [^"]*"' <<<"$UI" | head -1 | sed 's/^content-desc="Watch the game on //; s/"$//'; } || true; }
-# Focus the pill: Down to the dock, then Right until the focused node is the pill (at most 6 steps).
+# Focus the pill: Down from the app row lands on the Calendar tile; Right goes Board, Ask Claude, then the pill (seen
+# in the last run, where a focused="true" search on the pill's node never matched and Right went on to Quiet).
 focus_pill() {
-  local _
-  key DPAD_DOWN
-  for _ in 1 2 3 4 5 6; do
-    look
-    grep -qE 'content-desc="Watch the game on [^"]*"[^>]* focused="true"' <<<"$UI" && return 0
-    grep -qE 'focused="true"[^>]* content-desc="Watch the game on ' <<<"$UI" && return 0
-    key DPAD_RIGHT
-  done
-  return 1
+  key DPAD_DOWN; key DPAD_RIGHT; key DPAD_RIGHT; key DPAD_RIGHT
+  look
+  echo "tour: pill node: $(grep -oE '<node[^>]*Watch the game on [^>]*>' <<<"$UI" | head -1 | grep -oE '(focusable|focused|clickable)="[a-z]+"' | tr '\n' ' ' || true)"
+  echo "tour: focused node: $(grep -oE '<node[^>]*focused="true"[^>]*>' <<<"$UI" | head -1 | grep -oE '(content-desc|text|class)="[^"]*"' | tr '\n' ' ' || true)"
 }
 top_pkg() { { resumed | head -1 | grep -oE '[a-z][a-z0-9_.]+/' | head -1 | tr -d /; } || true; }
 # One pill case: $1 n, $2 name, $3 expected pill network ("" = no pill), $4 expected package
@@ -355,15 +351,13 @@ pill_case() {
   [[ $got == "$want" ]] || v="pill is '${got:-none}', expected Watch on $want"
   shot "$n" "$name" "$v"
   v=""
-  if focus_pill; then
-    key DPAD_CENTER; sleep 3
-    top=$(top_pkg)
-    echo "tour: OK on the pill opened ${top:-nothing} (expected $pkg)"
-    [[ $top == "$pkg" ]] || v="OK opened '${top:-nothing}', expected $pkg"
-  else
-    v="could not focus the Watch pill with the remote"
-  fi
-  shot "$((n + 1))" "$name-launched" "$v"
+  focus_pill
+  shot "$((n + 1))" "$name-focused" ""
+  key DPAD_CENTER; sleep 3
+  top=$(top_pkg)
+  echo "tour: OK on the pill opened ${top:-nothing} (expected $pkg)"
+  [[ $top == "$pkg" ]] || v="OK opened '${top:-nothing}', expected $pkg"
+  shot "$((n + 2))" "$name-launched" "$v"
 }
 
 v=""
@@ -378,16 +372,16 @@ pill_case 1 watch-scripps-cde SCRIPPS "$CDE_A"
 # (b) streaming only (ESPN+), the ESPN app installed: Watch opens ESPN.
 fake_install espn || true
 replant "$W_EVENING"; preds_on '["ESPN+"]'
-pill_case 3 watch-espnplus-espn ESPN+ "$ESPN_F"
+pill_case 4 watch-espnplus-espn ESPN+ "$ESPN_F"
 
 # (c) a network the defaults do not know: no pill.
 replant "$W_EVENING"; preds_on '["Gnosh Sports Net"]'
-pill_case 5 watch-unknown-network "" ""
+pill_case 7 watch-unknown-network "" ""
 
 # (d) two apps labelled CDE: ambiguous, no pill.
 fake_install cde-b || true
 replant "$W_EVENING"; preds_on '["SCRIPPS"]'
-pill_case 6 watch-two-cde "" ""
+pill_case 8 watch-two-cde "" ""
 
 for p_ in "$CDE_A" "$CDE_B" "$ESPN_F"; do a uninstall "$p_" >/dev/null 2>&1 || true; done
 
