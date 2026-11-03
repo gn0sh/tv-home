@@ -88,4 +88,20 @@ class GlanceTokensTest {
             assertTrue(sp * 1.5 in 56.0..72.0, "$sp sp = ${sp * 1.5} px")
         }
     }
+
+    @Test fun arenaExceptionStillKeepsSevenToOneOverTeamGold() {
+        // The arena art's brightest pixels are the gold ribbon board and rail (render_backdrops.py checks the art).
+        fun scaled(rgb: Int, f: Float): Int {
+            fun ch(shift: Int) = kotlin.math.ceil(((rgb shr shift) and 0xFF) * f.toDouble() - 1e-9).toInt().coerceIn(0, 255)
+            return (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+        }
+        val gold = scaled(0xFFB81C, GlanceTokens.ARENA_BRIGHTNESS)
+        assertSeven(GlanceTokens.HERO_TEXT, gold, "hero text over gold at the arena scrim")
+        assertSeven(GlanceTokens.HERO_SECONDARY, gold, "hero secondary over gold at the arena scrim")
+        assertEquals(GlanceTokens.SCRIM_ALPHA, GlanceTokens.scrimAlpha(HeroMotif.GAME), 1e-6f)
+        assertEquals(0.67f, GlanceTokens.scrimAlpha(HeroMotif.ARENA), 1e-6f)
+        for (m in HeroMotif.values()) if (m != HeroMotif.ARENA) {
+            assertEquals(GlanceTokens.BACKDROP_BRIGHTNESS, GlanceTokens.backdropBrightness(m), "$m keeps the 25% cap")
+        }
+    }
 }

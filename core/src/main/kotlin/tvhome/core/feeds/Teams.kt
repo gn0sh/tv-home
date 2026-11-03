@@ -5,6 +5,9 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.time.Instant
 import java.time.ZoneId
 
+/** Where a team plays, which picks its game-day backdrop: an indoor hockey arena or an outdoor stadium. */
+enum class Venue { ARENA, STADIUM }
+
 /** Which public schedule feed a team is read from. */
 enum class League { NHL, ESPN_FOOTBALL }
 
@@ -26,6 +29,7 @@ data class TeamConfig(
     val accent: Int,
     /** The club's home time zone: the NHL dated URL uses the club's local date. */
     val zone: ZoneId,
+    val venue: Venue = Venue.STADIUM,
 ) {
     /**
      * NHL: `week/YYYY-MM-DD` for today in [zone]. The `week/now` form answers HTTP 307 to the dated URL, and
@@ -61,7 +65,7 @@ object Teams {
         key = "predators", league = League.NHL, feedId = "NSH", name = "Predators",
         primary = 0xFFB81C, secondary = 0x041E42,
         backdropTop = 0x041E42, backdropBottom = 0x0B3169, accent = 0xFFB81C,
-        zone = ZoneId.of("America/Chicago"),
+        zone = ZoneId.of("America/Chicago"), venue = Venue.ARENA,
     )
 
     /** Scarlet #BB0000 and gray #666666. Gray is too dark for text on the dark backdrop, so the accent is a lighter gray. */
@@ -69,7 +73,7 @@ object Teams {
         key = "ohio-state", league = League.ESPN_FOOTBALL, feedId = "194", name = "Ohio State",
         primary = 0xBB0000, secondary = 0x666666,
         backdropTop = 0x2A0707, backdropBottom = 0x8A0000, accent = 0xC4C4C4,
-        zone = ZoneId.of("America/New_York"),
+        zone = ZoneId.of("America/New_York"), venue = Venue.STADIUM,
     )
 
     val ALL: List<TeamConfig> = listOf(PREDATORS, OHIO_STATE)

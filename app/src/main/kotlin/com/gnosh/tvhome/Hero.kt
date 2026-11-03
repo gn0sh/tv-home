@@ -280,7 +280,7 @@ fun HeroLayer(
             resolved, weather?.precipNow,
             settled = settings.loaded,
             sun = { sun.value },
-            scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
+            scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.scrimAlpha(resolved.motif) },
             modifier = Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION),
         )
         val drifting = Modifier.graphicsLayer {
@@ -547,7 +547,7 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  *   motif, the image decode and the animation start after that (cold-start budget, AC8). The decode runs on IO and the
  *   image crossfades in over the Canvas motif (no crossfade when animations are off).
  * - The image is drawn with the theme's own gradient over it at [TINT_ALPHA] when the theme is not the one the image was
- *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, every team shares GAME).
+ *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, Ohio State's stadium is GAME, the Predators' arena ARENA).
  * - The sun scenes' images (DAWN, DAY, SUNSET) have no sun: [sun] places it where the real sun is (core SunArc, moved on
  *   the minute tick only), clipped to the sky above the art's hills (BackdropSkyline), only over the decoded image and
  *   fading in with it. Null [sun]: no sun.
@@ -631,6 +631,7 @@ private fun HeroBackdrop(
                             HeroMotif.DAY -> drawClouds(0.22f)
                             HeroMotif.STARS -> drawStars(theme, moon)
                             HeroMotif.GAME -> if (sun() != null) drawSun(theme, 0.80f, 0.36f, 0.08f, 0.22f)
+                            HeroMotif.ARENA -> Unit // indoors: the navy gradient until the image is in
                         }
                     }
                     if (image != null && alpha > 0f) {
@@ -680,9 +681,10 @@ private fun backdropRes(motif: HeroMotif): Int = when (motif) {
     HeroMotif.MOON_BATS -> R.drawable.hero_moon_bats
     HeroMotif.SNOW -> R.drawable.hero_snow
     HeroMotif.GAME -> R.drawable.hero_game
+    HeroMotif.ARENA -> R.drawable.hero_arena
 }
 
-/** The backdropTop of the theme each image was rendered for (MOTIFS in tools/art/render_backdrops.py); GAME has none. */
+/** The backdropTop of the theme each image was rendered for (MOTIFS in tools/art/render_backdrops.py): no tint over it for that theme. */
 private fun renderedTop(motif: HeroMotif): Int? = when (motif) {
     HeroMotif.DAWN -> 0x1F3B66
     HeroMotif.DAY -> 0x1B4A86
@@ -690,7 +692,8 @@ private fun renderedTop(motif: HeroMotif): Int? = when (motif) {
     HeroMotif.STARS -> 0x04060B
     HeroMotif.MOON_BATS -> 0x120A1E
     HeroMotif.SNOW -> 0x0A2418
-    HeroMotif.GAME -> null
+    HeroMotif.GAME -> 0x2A0707 // Ohio State
+    HeroMotif.ARENA -> 0x041E42 // Predators
 }
 
 /**

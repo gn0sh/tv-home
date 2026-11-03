@@ -2,6 +2,7 @@ package tvhome.core.ui
 
 import tvhome.core.feeds.GameDay
 import tvhome.core.feeds.TeamGame
+import tvhome.core.feeds.Venue
 import tvhome.core.sky.SunPosition
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -10,7 +11,8 @@ import java.time.Month
 import java.time.temporal.TemporalAdjusters
 
 /** What the hero backdrop draws on top of its gradient. The app has one Canvas drawing per motif. */
-enum class HeroMotif { MOON_BATS, SNOW, DAWN, DAY, SUNSET, STARS, GAME }
+/** GAME is the outdoor stadium (Ohio State), ARENA the indoor hockey arena (Predators); see [TeamConfig.venue]. */
+enum class HeroMotif { MOON_BATS, SNOW, DAWN, DAY, SUNSET, STARS, GAME, ARENA }
 
 /**
  * The hero area's look for one moment (M2e). Colours are 0xRRGGBB. [text] and [secondaryText] are for the title,
@@ -43,7 +45,11 @@ data class HeroTheme(
 
         fun forGame(game: TeamGame): HeroTheme {
             val t = game.team
-            return HeroTheme(t.backdropTop, t.backdropBottom, t.accent, HeroMotif.GAME, GameDay.badge(game))
+            val motif = when (t.venue) {
+                Venue.ARENA -> HeroMotif.ARENA
+                Venue.STADIUM -> HeroMotif.GAME
+            }
+            return HeroTheme(t.backdropTop, t.backdropBottom, t.accent, motif, GameDay.badge(game))
         }
 
         /**

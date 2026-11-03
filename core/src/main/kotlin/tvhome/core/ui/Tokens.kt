@@ -77,6 +77,19 @@ object GlanceTokens {
     const val BACKDROP_BRIGHTNESS = 0.25f
     val SCRIM_ALPHA: Float get() = 1f - BACKDROP_BRIGHTNESS
 
+    /**
+     * R3 exception for the indoor arena (Predators game day): its art has no near-white pixel (its brightest is the
+     * gold ribbon board, about the team gold), so it is scrimmed to 33% instead of 25% and its navy and gold read
+     * through. 7:1 still holds: the test checks the hero text over pure team gold at this brightness, and
+     * tools/art/render_backdrops.py fails the render if the art's 99.9th-percentile pixel at 33% breaks 7:1.
+     */
+    const val ARENA_BRIGHTNESS = 0.33f
+
+    /** The backdrop brightness after the scrim for one motif: [BACKDROP_BRIGHTNESS], or [ARENA_BRIGHTNESS]. */
+    fun backdropBrightness(motif: HeroMotif): Float = if (motif == HeroMotif.ARENA) ARENA_BRIGHTNESS else BACKDROP_BRIGHTNESS
+
+    fun scrimAlpha(motif: HeroMotif): Float = 1f - backdropBrightness(motif)
+
     /** Hero text colours: the [HeroTheme] defaults, here so the test names them. */
     const val HERO_TEXT = 0xF4F1EA
     const val HERO_SECONDARY = 0xD5DCE8
