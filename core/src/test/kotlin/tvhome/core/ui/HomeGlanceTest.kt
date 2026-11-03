@@ -92,7 +92,7 @@ class HomeGlanceTest {
         assertEquals("Then Film at 8:00 PM", g.nowNext!!.line2)
         val card = g.card as ContextCard.Game
         assertEquals("predators", card.teamKey)
-        assertTrue(card.line.startsWith("Predators vs Blues · 7:00 PM"), card.line)
+        assertTrue(card.line.startsWith("Predators vs Blues · 7:00\u00A0PM"), card.line)
         assertEquals("Mon 2 Nov", g.date)
     }
 
