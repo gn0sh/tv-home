@@ -4,7 +4,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
-import tvhome.core.agenda.agendaWindow
+import tvhome.core.agenda.fetchWindow
 import tvhome.core.calendar.CalendarSource
 import tvhome.core.calendar.FetchResult
 import java.time.Instant
@@ -33,7 +33,7 @@ class AgendaRefresher(
         if (!running.tryLock()) return null
         try {
             val z = zone()
-            val result = source.fetch(agendaWindow(clock(), z)) // throws CancellationException on cancel
+            val result = source.fetch(fetchWindow(clock(), z)) // throws CancellationException on cancel
             if (result is FetchResult.Ok) {
                 // withContext checks for cancellation on entry, so a cancel between fetch and save saves nothing.
                 // The write is atomic; a failed save keeps the old file and the result is still returned.

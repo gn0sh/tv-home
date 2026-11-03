@@ -22,7 +22,9 @@ internal object PanelCaches {
     @Serializable class WeatherDto(
         val tempF: Int, val condition: String, val precipNow: String? = null, val nextPrecip: String? = null,
         val highF: Int? = null, val lowF: Int? = null, val highHour: Int? = null, val overnightLowF: Int? = null,
+        val days: List<DayDto> = emptyList(),
     )
+    @Serializable class DayDto(val date: String, val highF: Int, val lowF: Int, val condition: String, val precipChance: Int? = null)
     @Serializable class GameDto(
         val team: String, val start: String, val opponent: String, val home: Boolean, val phase: String,
         val ownScore: Int? = null, val oppScore: Int? = null, val period: String? = null,
@@ -30,14 +32,22 @@ internal object PanelCaches {
     )
 
     val weather: KSerializer<WeatherNow> = mapped(WeatherDto.serializer(),
-        { WeatherDto(it.tempF, it.condition, it.precipNow?.name, it.nextPrecip, it.highF, it.lowF, it.highHour, it.overnightLowF) },
+        { WeatherDto(it.tempF, it.condition, it.precipNow?.name, it.nextPrecip, it.highF, it.lowF, it.highHour, it.overnightLowF,
+            it.days.map { d -> DayDto(d.date.toString(), d.highF, d.lowF, d.condition, d.precipChance) }) },
         { d ->
             require(d.tempF in -100..150)
             for (t in listOf(d.highF, d.lowF, d.overnightLowF)) require(t == null || t in -100..150)
             require(d.highHour == null || d.highHour in 0..23)
             val precip = d.precipNow?.let { p -> Precip.entries.first { it.name == p } }
             val cond = if (d.condition.isEmpty()) "" else requireNotNull(Feeds.clean(d.condition))
-            WeatherNow(d.tempF, cond, precip, d.nextPrecip?.let { requireNotNull(Feeds.clean(it)) }, d.highF, d.lowF, d.highHour, d.overnightLowF)
+            require(d.days.size <= WeatherFeed.FORECAST_DAYS)
+            val days = d.days.map { x ->
+                require(x.highF in -100..150 && x.lowF in -100..150)
+                require(x.precipChance == null || x.precipChance in 0..100)
+                DayForecast(java.time.LocalDate.parse(x.date), x.highF, x.lowF,
+                    if (x.condition.isEmpty()) "" else requireNotNull(Feeds.clean(x.condition)), x.precipChance)
+            }
+            WeatherNow(d.tempF, cond, precip, d.nextPrecip?.let { requireNotNull(Feeds.clean(it)) }, d.highF, d.lowF, d.highHour, d.overnightLowF, days)
         })
 
     val alerts: KSerializer<AlertSet> = mapped(NwsAlerts.AlertSetDto.serializer(), NwsAlerts::toDto) {

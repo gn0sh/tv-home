@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
@@ -59,9 +60,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -101,7 +102,9 @@ import tvhome.core.ui.GlanceInputs
 import tvhome.core.ui.GlanceTokens
 import tvhome.core.ui.HeroMotif
 import tvhome.core.ui.HeroTheme
+import tvhome.core.ui.DesignCanvas
 import tvhome.core.ui.HeroZones
+import tvhome.core.ui.HomeLayout
 import tvhome.core.ui.HomeGlance
 import tvhome.core.ui.IdleState
 import tvhome.core.ui.NowNext
@@ -157,6 +160,8 @@ fun HeroLayer(
     onWatch: (WatchTarget?) -> Unit,
     briefColor: Int,
     modifier: Modifier = Modifier,
+    /** Top of the apps row in design dp (null until measured): the hero text ends above it ([HeroZones.layout]). */
+    appsTop: State<Int?> = remember { mutableStateOf(null) },
 ) {
     val context = LocalContext.current
     val now by rememberMinuteClock()
@@ -227,7 +232,9 @@ fun HeroLayer(
     // back to the template, so the band never ellipsizes mid-part. Same at 1280x720 and 1920x1080 (dp and sp scale).
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    val briefWidthPx = with(density) { (LocalConfiguration.current.screenWidthDp - 2 * BRIEF_SIDE_DP).dp.toPx() }
+    // The row's real width: the home screen is laid out on the design canvas (DesignCanvasBox), whose width is
+    // DesignCanvas.WIDTH_DP whatever the device's own dp width (960 on a 2.0-density 1080p screen).
+    val briefWidthPx = with(density) { (DesignCanvas.WIDTH_DP - 2 * BRIEF_SIDE_DP).dp.toPx() }
     // Filled here, on main, in the same composition as quiet: pure and cheap (brief-quiet-flash).
     val brief = remember(briefSource, facts, quiet, briefWidthPx) {
         briefSource?.let { src ->
@@ -259,9 +266,12 @@ fun HeroLayer(
             translationX = o.dx.dp.toPx()
             translationY = o.dy.dp.toPx()
         }
-        HeroTopStrip(glance, resolved, ink, dim, drifting)
-        HeroNowNext(glance.nowNext, ink, drifting)
-        HeroCard(glance.card, ink, drifting)
+        val zones = HeroZones.layout(appsTop.value)
+        HeroTopStrip(glance, resolved, ink, dim, drifting, zones.top)
+        HeroNowNext(glance.nowNext, ink, drifting, zones.left)
+        HeroCard(glance.card, ink, drifting, zones.right)
+        // In the home screen's reserved brief row (HomeLayout.BRIEF_ROW_DP, the zone map's bottom band): the text box sits
+        // inside it with the drift's travel above and below, so it never leaves the row or the safe area.
         glance.brief?.let { line ->
             Text(
                 line,
@@ -287,11 +297,11 @@ private val BRIEF_STYLE = TextStyle(fontSize = Tokens.SECONDARY_SP.sp)
 /** Left and right inset of the brief line: the 5% overscan safe margin plus the drift's travel, so it never leaves it. */
 private val BRIEF_SIDE_DP = Tokens.MARGIN_H_DP + Drift.MAX_X_DP.toInt()
 
-/** Height of the brief text in its row. */
-private const val BRIEF_TEXT_DP = 32
+/** The dock band's brief row (reserved by the home screen under the dock; the zone map's [HomeLayout.BRIEF_ROW_DP]). */
+val BRIEF_ROW_DP: Int = HomeLayout.BRIEF_ROW_DP
 
-/** The dock band's brief row (reserved by the home screen under the dock): the text plus the drift's vertical travel. */
-val BRIEF_ROW_DP: Int = BRIEF_TEXT_DP + 2 * Drift.MAX_Y_DP.toInt()
+/** Height of the brief text in its row: the row less the drift's vertical travel above and below (32 dp). */
+private val BRIEF_TEXT_DP: Int = BRIEF_ROW_DP - 2 * Drift.MAX_Y_DP.toInt()
 
 /** Test tag of the brief line (uiautomator resource-id), read by the emulator QA check. */
 const val DOCK_BRIEF_TAG = "dock_brief"
@@ -323,7 +333,7 @@ private data class HeroSettings(
 }
 
 /** Places a composable on one of the fixed [HeroZones] (dp at 1280x720). */
-private fun Modifier.zone(z: HeroZones.Zone): Modifier = offset(z.x.dp, z.y.dp).size(z.w.dp, z.h.dp)
+private fun Modifier.zone(z: HeroZones.Zone): Modifier = offset(z.x.dp, z.y.dp).size(z.w.dp, z.h.dp).clipToBounds()
 
 /**
  * The current local time. Driven by the system's minute tick and by time and time-zone changes (no `delay`), so it stays
@@ -353,13 +363,14 @@ internal fun rememberMinuteClock(): State<LocalDateTime> {
 
 /** Top strip: clock (40 sp) and date left, holiday badge after them; weather chip with any alert suffix right. */
 @Composable
-private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boolean, drifting: Modifier) {
+private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boolean, drifting: Modifier, zone: HeroZones.Zone) {
+    // The clock, date, Quiet and badge are measured first at their full width (never clipped: "LIV" in the emulator
+    // tour); the chip takes what is left, right-aligned, and ellipsizes inside the safe area.
     Row(
-        Modifier.zone(HeroZones.TOP_STRIP).then(drifting),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        drifting.zone(zone),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             Text(g.clock, color = rgb(ink.text), fontSize = GlanceTokens.CLOCK_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(g.date, color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, maxLines = 1)
             if (g.quiet) {
@@ -392,7 +403,7 @@ private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boo
         if (chip != null) {
             Text(
                 chip, color = rgb(ink.secondary), fontSize = GlanceTokens.CHIP_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 24.dp),
+                textAlign = TextAlign.End, modifier = Modifier.weight(1f).padding(start = 24.dp),
             )
         }
     }
@@ -400,9 +411,10 @@ private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boo
 
 /** Hero left 60%: Now/Next line 1 (44 sp), line 2 (28 sp), the data-age line (22 sp). Nothing when hidden. */
 @Composable
-private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier) {
+private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier, zone: HeroZones.Zone) {
     nn ?: return
-    Column(Modifier.zone(HeroZones.HERO_LEFT).then(drifting), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (zone.h <= 0) return
+    Column(drifting.zone(zone), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             nn.line1,
             color = rgb(ink.text),
@@ -410,7 +422,8 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier) {
             lineHeight = (GlanceTokens.HERO_SP + 6).sp,
             fontFamily = FontFamily.SansSerif,
             fontWeight = FontWeight.Bold,
-            maxLines = 2,
+            // One line when a large font scale leaves no room for two (board-fontscale).
+            maxLines = HeroZones.nowNextLine1Max(zone.h, LocalDensity.current.fontScale),
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.semantics { contentDescription = HERO_NOW_DESC_PREFIX + nn.line1 },
         )
@@ -425,9 +438,10 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier) {
 
 /** Hero right 40%: a severe alert on an opaque red card (40 sp), or today's game line. Nothing when there is neither. */
 @Composable
-private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier) {
+private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier, zone: HeroZones.Zone) {
     card ?: return
-    Box(Modifier.zone(HeroZones.HERO_RIGHT).then(drifting), contentAlignment = Alignment.TopStart) {
+    if (zone.h <= 0) return
+    Box(drifting.zone(zone), contentAlignment = Alignment.TopStart) {
         when (card) {
             is ContextCard.Alert -> Column(
                 Modifier
@@ -450,7 +464,7 @@ private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    when (card.phase) { GamePhase.LIVE -> GAME_LIVE; GamePhase.FINAL -> GAME_FINAL; GamePhase.UPCOMING -> GAME_TODAY },
+                    card.heading ?: when (card.phase) { GamePhase.LIVE -> GAME_LIVE; GamePhase.FINAL -> GAME_FINAL; GamePhase.UPCOMING -> GAME_TODAY },
                     color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                 )
                 Text(

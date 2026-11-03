@@ -33,12 +33,30 @@ sealed interface TimeLabel {
     object Continues : TimeLabel
 }
 
-/** [start of today - 1 day, start of today + 3 days) in [zone]: the range events are expanded over and cached for. */
+/** Days the Board page lists: today and the six after it. */
+const val WEEK_DAYS = 7
+
+/** [start of today - 1 day, start of today + 3 days) in [zone]: the today/tomorrow range the agenda's freshness rules use. */
 fun agendaWindow(now: Instant, zone: ZoneId): InstantRange {
     val today = now.atZone(zone).toLocalDate()
     return InstantRange(
         today.minusDays(1).atStartOfDay(zone).toInstant(),
         today.plusDays(3).atStartOfDay(zone).toInstant(),
+    )
+}
+
+/**
+ * [start of today - 1 day, start of today + 8 days) in [zone]: the range events are fetched, expanded over and cached
+ * for. It is [agendaWindow] widened to cover the Board's seven days ([WEEK_DAYS]) with a day of slack. The parser's cap
+ * ([tvhome.core.calendar.IcsParser.MAX_INSTANCES]) still keeps today and tomorrow first ([agendaFocus]), and whether a
+ * cache is still usable is decided on the narrow [agendaWindow] of its fetch time, so the wider range changes no
+ * freshness rule.
+ */
+fun fetchWindow(now: Instant, zone: ZoneId): InstantRange {
+    val today = now.atZone(zone).toLocalDate()
+    return InstantRange(
+        today.minusDays(1).atStartOfDay(zone).toInstant(),
+        today.plusDays(WEEK_DAYS + 1L).atStartOfDay(zone).toInstant(),
     )
 }
 
@@ -61,6 +79,17 @@ fun agendaFocus(window: InstantRange, zone: ZoneId): InstantRange {
 fun buildAgenda(events: List<EventInstance>, now: Instant, zone: ZoneId): Pair<AgendaDay, AgendaDay> {
     val today = now.atZone(zone).toLocalDate()
     return dayOf(events, today, zone) to dayOf(events, today.plusDays(1), zone)
+}
+
+/**
+ * Up to [count] days from today in [zone], same rules as [buildAgenda], stopping at the first day that does not end by
+ * [coveredUntil] (the cached window's end): a day the cache does not cover is left out, never shown as empty.
+ */
+fun buildDays(events: List<EventInstance>, now: Instant, zone: ZoneId, count: Int, coveredUntil: Instant): List<AgendaDay> {
+    val today = now.atZone(zone).toLocalDate()
+    return (0 until count).map { today.plusDays(it.toLong()) }
+        .takeWhile { !it.plusDays(1).atStartOfDay(zone).toInstant().isAfter(coveredUntil) }
+        .map { dayOf(events, it, zone) }
 }
 
 private class Entry(

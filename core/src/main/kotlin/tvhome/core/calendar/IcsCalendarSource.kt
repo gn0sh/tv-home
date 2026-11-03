@@ -52,7 +52,7 @@ class IcsCalendarSource internal constructor(
                 is IcsFetchResult.Error -> FetchResult.Failed(r.error)
                 is IcsFetchResult.Body -> try {
                     when (val o = runInterruptible(cpu) { parser.parse(r.bytes, window) }) {
-                        is ParseOutcome.Complete -> FetchResult.Ok(o.events, clock())
+                        is ParseOutcome.Complete -> FetchResult.Ok(o.events, clock(), o.stats.truncated)
                         is ParseOutcome.Exhausted -> FetchResult.Failed(SourceError.PARSE_LIMIT)
                         is ParseOutcome.Rejected -> FetchResult.Failed(SourceError.PARSE)
                     }

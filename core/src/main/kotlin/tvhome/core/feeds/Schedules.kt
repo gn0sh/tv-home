@@ -79,11 +79,16 @@ object Schedules {
         return rows(games, window) { nhlGame(team, it, now) }
     }
 
-    /** US broadcasters only (the feed also lists Canadian ones): `tvBroadcasts[].network` where `countryCode` is US. */
-    private fun nhlNetworks(g: JsonObject): List<String> =
+    /**
+     * Where the game is on for a viewer in our team's market: `tvBroadcasts[].network` where `countryCode` is US and
+     * `market` is national (`N`) or our own side (`H` home, `A` away); the other club's local feed (e.g. `CARNHL` when
+     * Carolina visits) is left out. A row with no market is kept. Order as the feed gives it.
+     */
+    private fun nhlNetworks(g: JsonObject, isHome: Boolean): List<String> =
         (g["tvBroadcasts"] as? JsonArray).orEmpty().asSequence()
             .mapNotNull { it as? JsonObject }
             .filter { it["countryCode"].str() == "US" }
+            .filter { when (it["market"].str()) { null, "N" -> true; "H" -> isHome; "A" -> !isHome; else -> false } }
             .mapNotNull { Feeds.clean(it["network"].str()) }
             .distinct().take(GameInfo.MAX_NETWORKS).toList()
 
@@ -120,7 +125,7 @@ object Schedules {
         }
         if (!plausible(start, now)) return Row.Skip
         val scored = phase != GamePhase.UPCOMING
-        return Row.Game(GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period, nhlNetworks(g)))
+        return Row.Game(GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period, nhlNetworks(g, isHome)))
     }
 
     private fun name(e: JsonElement?): String? = (e as? JsonObject)?.get("default").str()
@@ -136,17 +141,29 @@ object Schedules {
 
     /**
      * The team schedule gives `broadcasts[].media.shortName` ("BTN", "ABC"); the scoreboard gives `broadcasts[].names[]`
-     * ("CBSSN"). Both are read; anything else is skipped.
+     * ("CBSSN") and `geoBroadcasts[]`. A `geoBroadcasts` row counts only when its `type.shortName` is TV or Streaming
+     * (not radio) and its `market.type` is National or our own side (Home when [isHome], else Away): another market's
+     * local channel is not where we can watch it (espn-geo-filter). Order as the feed gives it, duplicates once.
      */
-    private fun espnNetworks(comp: JsonObject): List<String> =
-        (comp["broadcasts"] as? JsonArray).orEmpty().asSequence()
+    private fun espnNetworks(comp: JsonObject, isHome: Boolean): List<String> {
+        val plain = (comp["broadcasts"] as? JsonArray).orEmpty().asSequence()
             .mapNotNull { it as? JsonObject }
             .flatMap { b ->
                 val names = (b["names"] as? JsonArray).orEmpty().map { n -> n.str() }
                 (listOf((b["media"] as? JsonObject)?.get("shortName").str()) + names).asSequence()
             }
+        val ourSide = if (isHome) "home" else "away"
+        val geo = (comp["geoBroadcasts"] as? JsonArray).orEmpty().asSequence()
+            .mapNotNull { it as? JsonObject }
+            .filter { g -> (g["type"] as? JsonObject)?.get("shortName").str()?.lowercase() in GEO_TYPES }
+            .filter { g -> (g["market"] as? JsonObject)?.get("type").str()?.lowercase().let { it == "national" || it == ourSide } }
+            .map { g -> (g["media"] as? JsonObject)?.get("shortName").str() }
+        return (plain + geo)
             .mapNotNull { Feeds.clean(it) }
             .distinct().take(GameInfo.MAX_NETWORKS).toList()
+    }
+
+    private val GEO_TYPES = setOf("tv", "streaming")
 
     private fun espnGame(team: TeamConfig, e: JsonObject?, now: Instant): Row? {
         e ?: return null
@@ -174,9 +191,10 @@ object Schedules {
             GamePhase.LIVE -> espnLive(type, status)
             GamePhase.FINAL -> status["period"].int()?.takeIf { it > 4 }?.let { "OT" }
         }
+        val isHome = own["homeAway"].str() == "home"
         return Row.Game(GameInfo(
-            start, opponent, own["homeAway"].str() == "home", phase,
-            if (scored) score(own["score"]) else null, if (scored) score(opp["score"]) else null, period, espnNetworks(comp),
+            start, opponent, isHome, phase,
+            if (scored) score(own["score"]) else null, if (scored) score(opp["score"]) else null, period, espnNetworks(comp, isHome),
         ))
     }
 

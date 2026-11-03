@@ -2,7 +2,10 @@ package tvhome.core.state
 
 import tvhome.core.agenda.AgendaDay
 import tvhome.core.agenda.agendaWindow
+import tvhome.core.agenda.WEEK_DAYS
 import tvhome.core.agenda.buildAgenda
+import tvhome.core.agenda.buildDays
+import tvhome.core.agenda.fetchWindow
 import tvhome.core.calendar.FetchResult
 import tvhome.core.calendar.InstantRange
 import tvhome.core.calendar.SourceError
@@ -19,10 +22,17 @@ private fun SourceError.isUnreadable(): Boolean =
 
 sealed interface AgendaState {
     /** Fresh enough to show without alarm. [ageText] is the header line, e.g. "Updated 4 min ago". */
-    data class Ok(val today: AgendaDay, val tomorrow: AgendaDay, val updatedAt: Instant, val ageText: String) : AgendaState
+    data class Ok(
+        val today: AgendaDay, val tomorrow: AgendaDay, val updatedAt: Instant, val ageText: String,
+        /** The Board's days from today ([WEEK_DAYS] at most; fewer when the cache does not cover them). */
+        val week: List<AgendaDay> = emptyList(),
+    ) : AgendaState
 
     /** Ok, but both days are empty: both headings render "Nothing scheduled". */
-    data class NothingScheduled(val today: AgendaDay, val tomorrow: AgendaDay, val updatedAt: Instant, val ageText: String) : AgendaState
+    data class NothingScheduled(
+        val today: AgendaDay, val tomorrow: AgendaDay, val updatedAt: Instant, val ageText: String,
+        val week: List<AgendaDay> = emptyList(),
+    ) : AgendaState
 
     /**
      * Showing a cache after a failed or overdue fetch. [emphasised] (age over 60 min) means amber, bold, warning and
@@ -40,6 +50,7 @@ sealed interface AgendaState {
         val cause: StaleCause,
         /** Both days empty: render the "Nothing scheduled" body under the stale header (and footer when emphasised). */
         val nothingScheduled: Boolean,
+        val week: List<AgendaDay> = emptyList(),
     ) : AgendaState
 
     sealed interface Unavailable : AgendaState
@@ -89,7 +100,10 @@ fun ageText(ageMinutes: Long): String {
 fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, now: Instant, zone: ZoneId): AgendaState {
     if (!hasSecret) return AgendaState.NotSetUp
     val data = if (lastFetch is FetchResult.Ok) cacheOf(lastFetch, zone) else cache
-    val usable = data?.takeIf { it.covers(neededRange(now, zone)) }
+    val needed = neededRange(now, zone)
+    // Usable by the same rule as before the fetch window grew (Board): the narrow window of its fetch time must cover
+    // today and tomorrow, so a wider cache is never shown for longer than before.
+    val usable = data?.takeIf { it.covers(needed) && CachedAgenda(it.fetchedAt, agendaWindow(it.fetchedAt, zone), emptyList()).covers(needed) }
     if (usable == null) {
         if (lastFetch == null) return AgendaState.Loading
         // A session Ok whose window has passed is treated like a failed fetch: nothing usable to show.
@@ -106,12 +120,13 @@ fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, no
     }
     val (today, tomorrow) = buildAgenda(usable.events, now, zone)
     val empty = today.items.isEmpty() && tomorrow.items.isEmpty()
+    val week = buildDays(usable.events, now, zone, WEEK_DAYS, usable.window.end)
     if (!failed && ageSec <= STALE_AFTER_MIN * 60) {
         val text = ageText(minutes)
-        return if (empty) AgendaState.NothingScheduled(today, tomorrow, usable.fetchedAt, text)
-        else AgendaState.Ok(today, tomorrow, usable.fetchedAt, text)
+        return if (empty) AgendaState.NothingScheduled(today, tomorrow, usable.fetchedAt, text, week)
+        else AgendaState.Ok(today, tomorrow, usable.fetchedAt, text, week)
     }
-    return AgendaState.Stale(today, tomorrow, usable.fetchedAt, minutes, ageText(minutes), ageSec >= EMPHASIS_AFTER_MIN * 60, cause, empty)
+    return AgendaState.Stale(today, tomorrow, usable.fetchedAt, minutes, ageText(minutes), ageSec >= EMPHASIS_AFTER_MIN * 60, cause, empty, week)
 }
 
 /** Start of today to end of tomorrow in [zone]. */
@@ -121,4 +136,26 @@ fun neededRange(now: Instant, zone: ZoneId): InstantRange {
 }
 
 /** Builds the cache for a good fetch; the window is derived from the fetch time, not from "now". */
-fun cacheOf(r: FetchResult.Ok, zone: ZoneId) = CachedAgenda(r.fetchedAt, agendaWindow(r.fetchedAt, zone), r.events)
+fun cacheOf(r: FetchResult.Ok, zone: ZoneId): CachedAgenda {
+    val full = fetchWindow(r.fetchedAt, zone)
+    return CachedAgenda(r.fetchedAt, if (r.truncated) truncatedWindow(full, r.events, r.fetchedAt, zone) else full, r.events)
+}
+
+/**
+ * The window a truncated parse really covers (board-truncated-week). The parser keeps today and tomorrow first, then the
+ * earliest instances, so every day that ends by the last kept instance's start day is complete; that day and the ones
+ * after it may miss events. The cached window is cut to the start of that day, never before the end of tomorrow (the
+ * agenda's own range, so the cache stays usable): the Board then shows those days as "Not loaded yet", never as
+ * "Nothing scheduled". Persisted through the window, so the cache format is unchanged.
+ */
+internal fun truncatedWindow(full: InstantRange, events: List<tvhome.core.calendar.EventInstance>, fetchedAt: Instant, zone: ZoneId): InstantRange {
+    val lastStart = events.maxOfOrNull { e ->
+        when (val s = e.start) {
+            is tvhome.core.calendar.EventTime.At -> s.instant
+            is tvhome.core.calendar.EventTime.AllDay -> s.date.atStartOfDay(zone).toInstant()
+        }
+    } ?: return InstantRange(full.start, agendaWindow(fetchedAt, zone).end.coerceAtMost(full.end))
+    val cut = lastStart.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+    val floor = fetchedAt.atZone(zone).toLocalDate().plusDays(2).atStartOfDay(zone).toInstant()
+    return InstantRange(full.start, maxOf(cut, floor).coerceAtMost(full.end))
+}
