@@ -1,6 +1,7 @@
 package tvhome.core.feeds
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -86,14 +87,16 @@ class PanelSettingsTest {
         assertEquals(10, TravelRules.add(ten, TravelRule("K3", 9))?.size, "replacing one still fits")
     }
 
-    @Test fun switchesDefaultWhenNothingStoredAndBriefShipsOff() {
+    @Test fun switchesDefaultWhenNothingStoredAndBriefShipsOn() {
         assertEquals(PanelSwitches(), panelSwitches { null })
-        assertEquals(false, panelSwitches { null }.brief)
+        assertEquals(true, panelSwitches { null }.brief, "approved: on by default (calls only with a key)")
+        assertFalse(panelSwitches { if (it == PanelId.BRIEF) false else null }.brief, "provisioned off stays off")
         val s = panelSwitches { if (it == PanelId.ALERTS) false else null }
         assertEquals(PanelSwitches(alerts = false), s)
         // A store that throws (a bad stored type) gives the default, never a crash.
         assertEquals(PanelSwitches(), panelSwitches { throw ClassCastException() })
         assertTrue(panelSwitches { true }.brief)
+        assertEquals(PanelId.BRIEF to false, SettingsValidator.panel(mapOf("id" to "brief", "on" to false)))
     }
 }
 

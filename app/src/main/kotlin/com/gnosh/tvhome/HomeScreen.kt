@@ -306,7 +306,9 @@ fun HomeScreen(
         // the second would reach the activity.
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
-        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, appsTop = appsTop)
+        if (heroReady) HeroLayer(
+            idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, briefColor = shown.secondaryText, appsTop = appsTop,
+        )
         CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
@@ -324,8 +326,8 @@ fun HomeScreen(
             }
             // The dock band, one Row so nothing in it can overlap (emulator tour: Watch over Ask): the Calendar and Board
             // tiles left, then the pills right-aligned and centred on the tiles' box. R1 focus order: Calendar > Board >
-            // Ask > Watch (game day only) > Quiet (last). Up from a pill returns to the Calendar tile. The label band
-            // under the pills stays free (the daily brief line, m7-brief).
+            // Ask > Watch (game day only) > Quiet (last). Up from a pill returns to the Calendar tile. The brief line has its
+            // own full-width row below.
             Row(
                 Modifier.fillMaxWidth().padding(rowPadding(theme)),
                 horizontalArrangement = Arrangement.spacedBy(TILE_GAP_DP.dp),
@@ -355,8 +357,9 @@ fun HomeScreen(
                     )
                 }
             }
-            // The brief line's reserved row (HomeLayout.BRIEF_ROW_DP; filled by m7-brief), always kept so nothing moves.
-            Spacer(Modifier.height(HomeLayout.BRIEF_ROW_DP.dp))
+            // M7-F6: the brief line's reserved full-width row (BRIEF_ROW_DP = HomeLayout.BRIEF_ROW_DP), always kept so nothing
+            // moves when the line comes and goes. The hero draws the line into it (filled with Quiet in the same frame, drifting).
+            Spacer(Modifier.height(BRIEF_ROW_DP.dp))
         }
         }
         if (idleState == IdleState.NEAR_BLACK) NearBlackLayer(idle.drift)

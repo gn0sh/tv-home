@@ -35,14 +35,19 @@ fun interface ClaudeClient {
     suspend fun send(apps: List<AskApp>, turns: List<Turn>): ClaudeResult
 }
 
+/** One prepared request body to the same endpoint, key and timeouts as Ask, without the Ask fallback (the brief). */
+fun interface BriefClient {
+    suspend fun post(body: String): ClaudeResult
+}
+
 /** Where the daily count lives. A date and a number only, never a question. */
 interface CountStore {
     fun read(): String?
     fun write(text: String)
 }
 
-class FileCountStore(private val file: File) : CountStore {
-    override fun read(): String? = if (!file.isFile) null else file.inputStream().use { String(it.readUpTo(64), Charsets.UTF_8) }
+class FileCountStore(private val file: File, private val maxBytes: Int = 64) : CountStore {
+    override fun read(): String? = if (!file.isFile) null else file.inputStream().use { String(it.readUpTo(maxBytes), Charsets.UTF_8) }
 
     override fun write(text: String) {
         val tmp = File(file.parentFile, file.name + ".tmp")

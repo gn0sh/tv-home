@@ -38,9 +38,12 @@ readable sizes at 7:1, no tickers, every panel shows its age or hides). One user
   | Calendar (Now/Next) | 3 h (`AgendaSession` age) | HIDE with "Calendar not updated since 2:10 PM" | existing 15 min |
   | Brief | next brief slot | HIDE, template line instead | 07:00 and 16:00 slots |
 
-- **Off switch.** `PanelSwitches` (weather, alerts, games, brief) in the existing `feeds` SharedPreferences, set over
-  adb through `ProvisionProvider` (`content insert --uri .../panel --bind id:s:alerts --bind on:b:false`). Each loop
-  reads its switch every slice; off means no request (fake fetcher counts calls), and the panel's view is `Off`.
+- **Off switch.** `PanelId` enum (`weather`, `alerts`, `games`, `brief`); one boolean per id under the key
+  `panel.<id>` in the existing `feeds` SharedPreferences, set over adb through `ProvisionProvider`
+  (`content insert --uri .../panel --bind id:s:alerts --bind on:b:false`). The provider accepts only an id in the enum
+  and a boolean value; anything else is rejected and nothing is stored (`panel-switch-id-allowlist`). Each loop reads
+  its switch every slice; off means no request (fake fetcher counts calls), and the panel's view is `Off`. The brief
+  switch and Quiet are adb/on-screen only: they are **not** added to the ADR 0003 tv-remote MCP allowlist.
 - **Scheduling.** Loops run only while the hero is composed (home visible), start after the first frame plus the
   existing 1.5 s settle on `Dispatchers.Default`, and each wakes at most once a minute (existing `SLICE_MS`). Leaving
   home cancels them; returning shows the disk/memory cache with its age and fetches only what is due. Nothing polls
@@ -95,36 +98,69 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   only, so they cannot change the M3 Home redirect (`HomeWatchService` watches activities, not pixels).
 
 ### 5. Claude daily brief
-- **Inputs (the only data sent).** A small JSON facts object built by `briefFacts()` from cached panel values: local
-  date and weekday, the weather chip text, the next rain window, today's high/low, the active alert event name, the
-  game line (team, opponent, local time, network), and up to 3 calendar items (local time + title; **no titles when
-  Quiet is on**, no titles older than today). Never sent: location, ZIP, calendar URL, app list, keys, device ids.
-- **Request.** Same key, host pin, timeouts, `fallbacks: "default"` and model as Ask (`AskConfig.MODEL`,
-  `claude-opus-5-5`), effort `low`, `max_tokens` 1024 (thinking counts toward it), structured output
-  `{"line": string}`, no tools, no history. `AnthropicClient` gets a `post(body)` used by both Ask and the brief.
-- **Cap (fail closed).** At most 2 generations per local day (slots 07:00 and 16:00; the first home visit after a slot
-  generates) and at most 62 per month, each in its own no-backup count file (`DailyCap` reused with limit 2; a new
-  `MonthlyCap`). A count that cannot be written means no call. No refresh button in M7. Worst case per call is about
-  600 input + 1,024 output tokens = about $0.023 at $4/$20 per MTok, so the hard ceiling is about $1.42/month
-  (typical about $0.30). The dedicated key's own limit stays the backstop.
-- **Cache and freshness.** The line is cached on disk with its facts fingerprint (SHA-256 of the facts JSON) and
-  `hadTitles`. It is shown only while the current facts' fingerprint still matches; otherwise (a game ended, an event
-  passed) the free local template line is shown ("Rain after 4 · Preds 7:00 PM · Dentist tomorrow 9 AM"). Same
-  fallback for no key, cap reached, network or API error, refusal, or empty reply. No error text ever shows.
-- **Output handling.** One line, `Feeds.clean`-style control-character removal, URLs removed, capped at 90 chars,
-  else the template. Event titles are outside input (invites), so the line is display-only: no links, no actions.
-- **Off by default until Brian says yes** (hard stop 3, new recurring spend on his key): the brief's switch ships off
-  and the template line fills the slot at no cost.
+- **Inputs (the only data sent; no event titles, `brief-titles-egress`).** A small JSON facts object built by
+  `briefFacts()` from cached panel values: local date and weekday, the weather chip text, the next rain window, today's
+  high and low (two facts; the current temperature is not sent, `brief-fingerprint-churn`), the active alert event
+  name and the game line (team, opponent, local time, network; both feed text, cleaned and cut to 60 chars before
+  sending, `brief-feed-injection`), and up to 3 calendar
+  items as **placeholders only**: `{"id":"E1","when":"tomorrow 9:00 AM","allDay":false}`. Never sent: event titles,
+  location, ZIP, calendar URL, app list, keys, device ids. Golden test: no fixture title substring appears in the
+  request body, Quiet on or off.
+- **Placeholders.** Claude writes the line with `{E1}`..`{E3}` where an event goes ("Rain after 4, Preds 7 on ESPN+,
+  {E1} tomorrow 9am"). The app fills them locally at draw time: the cleaned title cut to 24 chars at a word boundary,
+  or "Busy" when Quiet is on. A line naming a placeholder that was not sent (`{E4}`, `{X}`) is rejected (template).
+  The cached line never contains a title, so Quiet needs no cache discard.
+- **Request (`brief-fallback-price`).** Same key, host pin and timeouts as Ask. The model is **pinned, with no
+  `fallbacks` field and no fallback beta header**: a refusal is just "no line" (template). Model `AskConfig.MODEL`
+  (`claude-opus-5-5`) unless Brian picks `claude-haiku-5-5`; effort `low`, `max_tokens` 1024 (thinking counts toward
+  it), structured output `{"line": string, "uses": [enum weather, rain, high, low, alert, game, E1, E2, E3]}`, no tools,
+  no history. `AnthropicClient` gets a `post(body)` used by both Ask (unchanged, keeps its fallback) and the brief.
+- **Slots (`brief-slot-attempt`).** Two slots a day, 07:00 and 16:00 local; the first home visit after a slot may
+  attempt it. The slot is recorded as attempted **before** the call; if that write fails there is no call. One attempt
+  per slot whatever the outcome (success, error, timeout, refusal, cancel), no refunds, no retry, no refresh button.
+- **Monthly cap (`brief-cap-fail-open`).** `BriefLedger`, its own no-backup file (`brief-ledger.txt`, separate from
+  Ask's `ask-count.txt`): `<yyyy-mm> <count> <last slot>`. Limit 62 a month. Fail closed: an unreadable or malformed
+  file counts as exhausted for the current month (it is rewritten as exhausted, so it heals at the next month); a
+  stored month or slot later than now means no call and no rewrite (clock moved back). Ask's `DailyCap` is untouched.
+- **Cost ceiling.** One pinned model and one request per attempt, so the per-call bound holds: about 600 input +
+  1,024 output tokens. Opus 5.5 ($4/$20 per MTok): about $0.023 a call, at most about $1.42 a month (typical about
+  $0.30). Haiku 5.5 ($0.10/$0.50): about $0.0006 a call, at most about $0.04 a month. With `fallbacks: "default"` the
+  bound would not hold (a refused call can be re-served by a pricier model and billed twice), which is why it is off.
+  The dedicated key's own limit stays the backstop.
+- **Cache and freshness (`brief-fingerprint-churn`).** The line is cached on disk with a fingerprint over **only the
+  facts it names**: the `uses` list plus any placeholder found in the line (canonical JSON of those facts, SHA-256).
+  It shows while those facts are unchanged; when one changes (the game ended, `{E1}` passed or moved) the free local
+  template line shows ("Rain after 4 · Preds 7:00 PM · Dentist tomorrow 9 AM", titles or "Busy" filled locally).
+  Unrelated changes (the temperature, when the line does not name it) keep the line. Same template for no key, cap
+  reached, network or API error, refusal, or empty reply. No error text ever shows.
+- **Output handling.** One line, `Feeds.clean`-style control-character removal, URLs removed, at most 90 chars after
+  filling, else the template. Display-only: no links, no actions.
+- **On by default since Brian approved it (2026-11-03)** (hard stop 3 cleared: recurring spend on his key, within the
+  cap above): the switch defaults on, and the engine still calls only when the Ask key is provisioned. It stays
+  provisionable off (`--bind id:s:brief --bind on:b:false`). **Off means no brief line at all** (not even the
+  template, nor a cached line); **no key** means the free template line (`brief-off-still-shows`).
+- **Review fixes (PR #24).** No slot is spent on empty facts (cold start before the feeds fill in,
+  `brief-empty-snapshot`). The fingerprint always includes the date, so a line never carries over to the next day
+  (`brief-date-carryover`). A ledger more than a month ahead counts as malformed: exhausted now, rewritten, healed next
+  month (`brief-ledger-future-lock`). The line has its own full-width row at the bottom of the dock band, inside the
+  overscan margins plus the drift travel, and drifts with the hero text (`brief-oled-drift`); it is fitted by
+  measuring at the row's real width and font, dropping template parts (or falling back from a cached line) so it is
+  never ellipsized (`brief-line-truncation`). Placeholders are filled in the same composition as the Quiet value
+  (`brief-quiet-flash`). The switch is re-read each minute and keys the line, so off hides it within a minute
+  (`brief-off-lag`). The prompt asks for at most 50 characters, counting each placeholder as a full 24-character title,
+  so a reply fits the row (about 60-65 characters at 24 sp) and a paid call is not lost to the fit check
+  (`brief-prompt-width`). Accepted, no change: `brief-zone-hop` (a time-zone change on the TV can shift or repeat a
+  slot within a day; the monthly cap still bounds the spend).
 
 ### 6. Quiet mode
 - `QuietMode` flag in SharedPreferences (survives restart), toggled by the Quiet pill (last in focus order) and over
-  adb/the PC remote through the provider. A remote key chord is left to ux: HOME, SEARCH and ASSIST never reach the app
-  (PR #15 facts), and the remaining keys all have jobs.
-- Applied inside `homeGlance()`, `calendarTile()` and `screenModel(..., hideTitles)` (the full-screen calendar is covered too, decided in
-  review `quiet-calendar-fullscreen`); every title and spoken description goes through `QuietMode.title`: titles become "Busy", times stay.
-  While the stored Quiet value is still loading (null) callers treat it as on. Turning Quiet on
-  discards a cached brief with `hadTitles`, and briefs made in Quiet carry no titles (template only, no call).
-- Test: with Quiet on, no fixture title substring appears in any string of `HomeGlance` or `CalendarTile`.
+  adb through the provider. Not exposed to the tv-remote MCP tools (ADR 0003 allowlist unchanged). A remote key chord
+  is left to ux: HOME, SEARCH and ASSIST never reach the app (PR #15 facts), and the remaining keys all have jobs.
+- Applied in every title renderer: `homeGlance()`, `calendarTile()`, **`screenModel()` (the full-screen AgendaScreen
+  the Calendar tile opens, `quiet-agenda-leak`)** and the brief's placeholder fill. Titles become "Busy", times stay.
+  While the stored Quiet value is still loading (null), callers treat it as on. Nothing is discarded: no title is ever stored in the brief cache, and briefs keep running in Quiet (no title leaves).
+- Test (B11): with Quiet on, no fixture title substring appears in any string of `HomeGlance`, `CalendarTile`, the
+  AgendaScreen `ScreenModel`, or the filled brief line.
 
 ## Alternatives considered
 - **A separate `PanelRepository` beside `LiveFeeds`.** Cleaner names, but two fetch paths and two allowlists; the
@@ -133,12 +169,14 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   nothing is shown, plus a new dependency. Rejected for M7; revisit if returning to stale panels annoys Brian.
 - **Dim by uniform 50% scrim.** Simplest, but fails R3's 7:1 in the dimmed state. Rejected.
 - **Focusable hero card with Watch inside.** Matches the mockup, but reintroduces home-back-twice. Rejected.
-- **Brief on Claude Haiku 5.5** ($0.10/$0.50 per MTok, about 40x cheaper). Changing models is Brian's call, so the
-  default stays the Ask model; offered to him as a one-word choice.
+- **Brief on Claude Haiku 5.5** ($0.10/$0.50 per MTok, about 40x cheaper; recommended by the security review). Changing
+  models is Brian's call, so the default stays the Ask model; offered to him as a one-word choice.
+- **Send titles and discard on Quiet** (first draft). Better wording, but titles leave the TV and Quiet depends on a
+  cache flag. Rejected by the security review.
 - **Do nothing / ambient mode only** (panel's steelman): kept as the post-M7 "Later" item.
 
 ## Consequences
 - `FeedsSnapshot` changes shape; `Hero.kt` and `LiveFeedsTest` change with it (task M7-B4).
-- Event titles reach Anthropic for the first time (brief only, off by default): security-engineer reviews section 5
-  before the brief task starts.
+- No event title reaches Anthropic: the brief sends placeholders (security design review 2026-11-02, REQUEST CHANGES
+  on sections 5 and 6, applied in place).
 - Two adb-set settings files grow (switches, profile, travel rules, team-to-app map); all are non-secret.

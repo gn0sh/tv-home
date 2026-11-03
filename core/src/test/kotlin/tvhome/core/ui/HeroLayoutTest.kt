@@ -62,3 +62,10 @@ class HomeLayoutTest {
         assertEquals(HeroZones.Zone(64, 644, 1152, 40), m.brief)
     }
 }
+
+class BriefRowTest {
+    /** The brief line's 32 dp text box (PR #24) plus the drift's travel above and below fits the reserved row. */
+    @Test fun briefRowHoldsTheTextAndTheDrift() {
+        assertEquals(32, HomeLayout.BRIEF_ROW_DP - 2 * Drift.MAX_Y_DP.toInt())
+    }
+}
