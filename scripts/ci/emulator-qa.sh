@@ -21,7 +21,7 @@ URI="content://$PKG.provision/calendar_url"
 MAX_COLD_MS=${MAX_COLD_MS:-2000}   # AC8
 MAX_REGRESSION_MS=${MAX_REGRESSION_MS:-300}   # AC8 baseline: PR median may exceed the merge base's by at most this
 BASE_APK=${BASE_APK:-}   # merge base's APK, same throwaway signer (pull requests); empty or missing = no comparison
-DEBUG_APK=${DEBUG_APK:-}   # debuggable build of the same code, used only by the M7 Q1/Q2 block (run-as cache planting)
+QA_BUILD_APK=${QA_BUILD_APK:-}   # the qa build (release + R8, debuggable) of the same code, used only by the M7 Q1/Q2 block (run-as cache planting)
 # Fake value that passes the validator. Built from parts so the full string is not in this file's text either.
 DUMMY_TOKEN="private-$(printf 'f%.0s' $(seq 1 32))"
 DUMMY_URL="https://calendar.google.com/calendar/ical/x%40example.com/$DUMMY_TOKEN/basic.ics"
@@ -165,7 +165,14 @@ final_scan() {
 }
 # idle-test-sticky: never leave the idle_test override on the device, whatever failed (the TV also expires it at 60 min).
 idle_cleanup() { timeout 30 adb shell content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true; }
-on_exit() { local rc=$?; idle_cleanup; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
+on_exit() {
+  local rc=$?
+  idle_cleanup
+  declare -F m3_cleanup >/dev/null && m3_cleanup
+  declare -F m7_offline >/dev/null && m7_offline off   # m7-dns-restore-on-exit: a failed Q1 must not leave DNS broken
+  final_scan || rc=1
+  exit $rc
+}
 trap on_exit EXIT
 
 step "device"
@@ -777,7 +784,28 @@ m3_home() { # $1 = settle seconds; the rest = what sets the press up again befor
   if launcher_dialog_up; then record_launcher_dialog retry; fail "m3-launcher-dialog: ShowDialogsActivity came back on the retried Home press"; fi
   return 0
 }
-m3_dash() { sh_ am start -W -n "$MAIN" >/dev/null; sleep 4; }   # the dashboard in front again (an app shown: ends a stay)
+# Retry setups (m3-retry-precondition): each re-asserts the starting point the original press had.
+m3_dash() { # the dashboard in front again (an app shown: ends a stay)
+  sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  in_front || fail "m3 retry setup: the dashboard did not come to the front ($(resumed | head -1))"
+}
+m3_other() { # another app in front: not the dashboard, not the TV's own home or its dialog
+  local top
+  other_app
+  top=$(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1)
+  [[ -n $top && ${top%%/*} != "$PKG" && ${top%%/*} != "${stock_pkg:-com.google.android.tvlauncher}" ]] \
+    || fail "m3 retry setup: Settings is not in front ($top)"
+}
+m3_refocus() { # dashboard with focus moved off the first tile, as before the focus check
+  local m
+  m3_dash; key DPAD_RIGHT; key DPAD_RIGHT
+  m=$(focus_after m3)
+  [[ -n ${m%%|*} && ${m%%|*} != "$start_name" ]] || fail "m3 retry setup: Right x2 did not move focus off '$start_name'"
+}
+m3_full() { # the full-screen calendar showing, as before the Home-from-full-screen check
+  m3_dash; key DPAD_DOWN; key DPAD_CENTER; sleep 2
+  expect_text "m3-full-retry" "Calendar full screen"
+}
 m3_idle_to() { # dashboard awake, then $1 s of idle_test time, and the state that the original press started from
   local t
   m3_dash
@@ -789,7 +817,7 @@ m3_idle_to() { # dashboard awake, then $1 s of idle_test time, and the state tha
 # If a check below fails mid-step, put the emulator back (m3-dirty-on-fail), in case it is reused.
 m3_dirty=1
 m3_cleanup() { [[ -n ${m3_dirty:-} ]] && m3_restore; return 0; }
-other_app; m3_home 3 other_app
+other_app; m3_home 3 m3_other
 in_front && fail "m3: as installed, Home opened the dashboard (the Home watch must be off until turned on)"
 stock_pkg=$(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1); stock_pkg=${stock_pkg%%/*}
 [[ -n $stock_pkg ]] || fail "m3: could not read the TV's own home package (test setup)"
@@ -804,7 +832,7 @@ a11y_state() { sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services
 sh_ dumpsys accessibility | tr -d '\r' | grep -q "HomeWatchService" || { a11y_state; fail "m3: the Home watch was not bound after turning it on"; }
 other_app
 in_front && fail "m3: Settings did not come to the front (test setup)"
-m3_home 3 other_app
+m3_home 3 m3_other
 if ! in_front; then
   a11y_state
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
@@ -840,7 +868,7 @@ pass "m3: Home twice quickly leaves the TV's own home (and its Settings) showing
 m3_home 4
 in_front && fail "m3: Home on the TV's own home during a stay brought the dashboard back"
 pass "m3: further Home presses keep the TV's own home until an app is opened"
-other_app; m3_home 3 other_app
+other_app; m3_home 3 m3_other
 in_front || fail "m3: after leaving the TV's own home, Home did not open the dashboard again ($(resumed | head -1))"
 pass "m3: once another app has been opened, Home opens the dashboard again"
 if (( napps >= 2 )); then
@@ -848,7 +876,7 @@ if (( napps >= 2 )); then
   key DPAD_RIGHT; key DPAD_RIGHT
   moved=$(focus_after m3)
   [[ -n ${moved%%|*} && ${moved%%|*} != "$start_name" ]] || fail "m3: Right x2 did not move focus off '$start_name' (test setup; m3-home-focus-vacuous)"
-  m3_home 3 eval 'm3_dash; key DPAD_RIGHT; key DPAD_RIGHT'
+  m3_home 3 m3_refocus
   cur=$(focus_after m3)
   [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"
   pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
@@ -856,14 +884,14 @@ fi
 m3_home 3 m3_dash   # focus back on the first tile, as before Down in M2b
 key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
 expect_text "m3-full" "Calendar full screen"
-m3_home 3 eval 'm3_dash; key DPAD_DOWN; key DPAD_CENTER; sleep 2' 
+m3_home 3 m3_full
 in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
 pass "m3: Home from the full-screen calendar returns to the home row"
 m3_restore
 m3_dirty=""
 sleep 2
-other_app; m3_home 3 other_app
+other_app; m3_home 3 m3_other
 in_front && fail "m3: after rollback, Home still opens the dashboard"
 pass "m3: rollback (Home watch off, settings restored) gives Home back to the TV"
 echo "m3-launcher-dialog: ShowDialogsActivity dismissed $m3_dialogs time(s) in M3"
@@ -904,7 +932,8 @@ m7_relog() { # restart the background logcat stream (appending) after adbd resta
 }
 step "M7 Q1: hero shows the next event with a countdown and a severe-alert override (planted caches, network off)"
 # The release APK has no cache-planting path and is not debuggable, so the caches are planted one of two ways:
-#  runas (primary): the app job's debug APK (DEBUG_APK: same code and applicationId, debuggable, debug key) replaces
+#  runas (primary): the app job's qa APK (QA_BUILD_APK: the release build with R8, made debuggable, debug key, same
+#    applicationId) replaces
 #    the release app for Q1 and Q2 only, and `run-as` writes into its no_backup dir. The android-tv API 34 image is a
 #    user build without adb root, so CI takes this route.
 #  root (fallback, images that allow adb root): the release app's files are written as root.
@@ -993,14 +1022,14 @@ m7_diag() { # on a hero failure: what the hero showed and what is on disk (QA da
 }
 m7_fail() { m7_diag; fail "$@"; }
 m7_swapped=""
-if [[ -z $DEBUG_APK || ! -f $DEBUG_APK ]]; then
-  m7_why="no debug APK (DEBUG_APK='$DEBUG_APK')"
-elif m7_swapped=1; m7_install "$DEBUG_APK" debug; then
+if [[ -z $QA_BUILD_APK || ! -f $QA_BUILD_APK ]]; then
+  m7_why="no qa APK (QA_BUILD_APK='$QA_BUILD_APK')"
+elif m7_swapped=1; m7_install "$QA_BUILD_APK" qa; then
   if [[ $(sh_ "run-as $PKG sh -c 'mkdir -p no_backup/panels && test -w no_backup/panels && echo ok'" 2>&1 | tr -d '\r') == ok ]]; then
     m7_mode=runas
-    pass "m7: debug APK installed for Q1; caches are planted with run-as"
+    pass "m7: qa APK (release + R8, debuggable) installed for Q1; caches are planted with run-as"
   else
-    m7_why="run-as $PKG does not work with the debug APK"
+    m7_why="run-as $PKG does not work with the qa APK"
   fi
 fi
 if [[ -z $m7_mode ]]; then
@@ -1173,7 +1202,7 @@ fi
     sh_ run-as "$PKG" true >/dev/null 2>&1 && fail "m7: run-as still works after reinstalling the release APK"
     # m7-reinstall-state: the later steps need only the release app, the dummy URL (fetch attempt, final scan) and
     # networking on; ProvisionActivity and the forced crash need nothing else. Location, watch map, Quiet, idle test and
-    # the Home watch were wiped with the debug app and are not used after this point.
+    # the Home watch were wiped with the qa app and are not used after this point.
     sh_ content query --uri "$URI" | tr -d '\r' | grep -q 'configured=1' || fail "m7: the dummy URL is not configured on the reinstalled release APK"
     pass "m7: release APK reinstalled; dumpsys shows it not debuggable; dummy URL configured; later steps run on release"
   fi
