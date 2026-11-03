@@ -939,13 +939,16 @@ def load_alpha(path):
 
 
 def skyline(alpha):
-    """Per sample column, the highest land pixel's row as a fraction of the image height (1.0 when no land)."""
+    """Per sample, the highest land pixel's row as a fraction of the image height (1.0 when no land), over the window of
+    columns within half a step either side, so a peak between two samples still clips the sun (skyline-sample-gap)."""
     h, w = alpha.shape
+    land = alpha > 0.5
+    top = np.where(land.any(axis=0), land.argmax(axis=0), h)  # first land row per column
     out = []
+    half = SKYLINE_STEP // 2
     for x in range(0, w + 1, SKYLINE_STEP):
-        col = alpha[:, min(x, w - 1)] > 0.5
-        rows = np.nonzero(col)[0]
-        out.append(round(float(rows[0]) / h if rows.size else 1.0, 4))
+        lo, hi = max(0, x - half), min(w, x + half + 1)
+        out.append(round(float(top[lo:hi].min()) / h, 4))
     return out
 
 
@@ -967,8 +970,9 @@ def write_skyline_kt(path, skylines, work):
         "",
         "/**",
         " * The hills' top edge in each sun backdrop image (hero_dawn, hero_day, hero_sunset): for x = 0, 1/N .. 1 of the",
-        f" * image width ({SKYLINE_STEP} px steps of {W}), the highest land pixel as a fraction of the image height ({H} px)",
-        " * from the top. The sun sits on this line at elevation 0 and is clipped below it ([SunArc]).",
+        f" * image width ({SKYLINE_STEP} px steps of {W}), the highest land pixel within half a step either side, as a",
+        f" * fraction of the image height ({H} px) from the top. The sun sits on this line at elevation 0 and is clipped",
+        " * below it ([SunArc]).",
         " */",
         "object BackdropSkyline {",
     ]
