@@ -15,16 +15,22 @@
   calendar link, and prints no secrets. Windows PowerShell 5.1 or later.
 .PARAMETER Fetch  get the APK with gh when the incoming folder has none
 .PARAMETER Force  with -Fetch, reinstall even if this build was already installed
+.PARAMETER DryRun  (CI) check the APK, then stop before adb; installs nothing
 #>
 [CmdletBinding()]
 param(
     [switch]$Fetch,
-    [switch]$Force
+    [switch]$Force,
+    # CI only (scripts/ci/test-install-tv-home.ps1): run every check, then stop before adb. Nothing is installed.
+    [switch]$DryRun,
+    [string]$DryRunPin,          # replaces the pinned certificate, only together with -DryRun
+    [switch]$LibraryOnly         # define the functions and return (dot-sourced by the CI test)
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $PinnedSha256 = '18:E2:7C:A1:DF:5A:EA:B8:4C:E4:65:8E:0E:A3:94:02:67:77:1F:71:DE:9C:4B:49:07:96:F2:7C:2C:4B:64:2A'
+if ($DryRun -and $DryRunPin) { $PinnedSha256 = $DryRunPin }
 $Package = 'com.gnosh.tvhome'
 $Repo = 'gn0sh/tv-home'
 $Workflow = 'android.yml'
@@ -256,6 +262,8 @@ function Get-LatestMainApk {
     return $id
 }
 
+if ($LibraryOnly) { return }
+
 # ================================ main ========================================================================
 $fetchedRun = $null
 try {
@@ -287,6 +295,8 @@ try {
     if ($m.Package -cne $Package) { Fail "The APK's package is '$($m.Package)', not $Package." }
     if ($m.Debuggable) { Fail 'The APK is a debuggable build.' }
     Write-Host "Package is $Package and the build is not debuggable." -ForegroundColor Green
+
+    if ($DryRun) { Write-Host 'DRY RUN OK: every check passed; adb was not used.'; exit 0 }
 
     # --- adb and the TV ---
     $adbItem = Get-ChildItem $Tools -Recurse -Filter adb.exe -ErrorAction SilentlyContinue | Select-Object -First 1

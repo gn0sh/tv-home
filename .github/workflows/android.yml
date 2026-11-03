@@ -92,6 +92,9 @@ jobs:
     name: app (lint, release APK, checks)
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    outputs:
+      # Signer SHA-256 of the qa APK (pull requests only), for the install-script dry run below.
+      qa_signer_sha256: ${{ steps.qasigner.outputs.sha256 }}
     env:
       # The only job that includes :app (settings.gradle.kts); core and live never resolve AGP or Compose.
       TVHOME_BUILD_APP: "true"
@@ -355,6 +358,22 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # The qa APK's signer digest, read by apksigner (full verification), so the Windows job can compare it with what
+      # scripts/install-tv-home.ps1 reads from the APK on its own. Not the release key; a value, not a secret.
+      - name: Qa APK signer digest (install-script dry run)
+        id: qasigner
+        if: steps.qabuildscan.outputs.path != ''
+        env:
+          QA_BUILD_APK: ${{ steps.qabuildscan.outputs.path }}
+        run: |
+          set -euo pipefail
+          apksigner=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          [ -n "$apksigner" ] || { echo "::error::apksigner not found in the SDK"; exit 1; }
+          d=$("$apksigner" verify --print-certs "$QA_BUILD_APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)
+          [ "${#d}" -eq 64 ] || { echo "::error::no SHA-256 digest from apksigner"; exit 1; }
+          case "$d" in *[!0-9a-f]*) echo "::error::odd digest from apksigner"; exit 1 ;; esac
+          echo "sha256=$d" >> "$GITHUB_OUTPUT"
+
       # AC8 baseline (spec M7-1.5: cold start before and after): pull requests only. Builds the merge base's release APK,
       # unsigned (no signing secrets exist on pull_request), from a git worktree, with that tree's own wrapper,
       # verification metadata and gradle-quiet.sh. The emulator job signs it with the same throwaway key.
@@ -412,6 +431,32 @@ jobs:
           path: ${{ steps.basescan.outputs.path }}
           retention-days: 7
           if-no-files-found: error
+
+  # Dry run of scripts/install-tv-home.ps1 on Windows PowerShell 5.1 (pull requests only): the script's own APK readers
+  # against the qa APK, no adb, no secrets. See scripts/ci/test-install-tv-home.ps1.
+  install-script:
+    name: install script (Windows PowerShell 5.1 dry run)
+    needs: app
+    if: github.event_name == 'pull_request' && needs.app.outputs.qa_signer_sha256 != ''
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download qa APK
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: tv-home-qa-build-apk
+          path: ${{ runner.temp }}\qa-build-apk
+      - name: Dry-run the install script
+        shell: powershell
+        env:
+          EXPECTED_SHA256: ${{ needs.app.outputs.qa_signer_sha256 }}
+        run: |
+          .\scripts\ci\test-install-tv-home.ps1 -QaApk "$env:RUNNER_TEMP\qa-build-apk\tv-home-qa-build.apk" -ExpectedSha256 $env:EXPECTED_SHA256
 
   # Manual only (T2b.6). Fetches the public Google US-holiday feed (no secret) inside GoogleFramingLiveTest, which
   # asserts Complete and records CRLF, VERSION and the component set. Must pass before T11.
