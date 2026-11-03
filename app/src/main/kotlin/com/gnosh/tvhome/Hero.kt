@@ -38,6 +38,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -54,6 +55,8 @@ import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -92,6 +95,11 @@ import tvhome.core.feeds.PanelView
 import tvhome.core.feeds.view
 import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.Precip
+import tvhome.core.feeds.Location
+import tvhome.core.ui.BackdropSkyline
+import tvhome.core.ui.SkyNow
+import tvhome.core.ui.SunArc
+import tvhome.core.ui.SunSpot
 import tvhome.core.ui.ContextCard
 import tvhome.core.ui.DriftOffset
 import tvhome.core.ui.Drift
@@ -193,7 +201,7 @@ fun HeroLayer(
     val inputs = remember(now, snap, agenda, settings, is24h, quiet) {
         // isInstalled reads a set built on IO (HeroSettings.read): no package manager call on the main thread.
         GlanceInputs(
-            instant, zone, is24h, snap, settings.switches, settings.hasLocation, agenda, settings.travel,
+            instant, zone, is24h, snap, settings.switches, settings.location != null, agenda, settings.travel,
             quiet = quiet, watchMap = settings.watchMap, isInstalled = { it in settings.installed },
         )
     }
@@ -247,8 +255,12 @@ fun HeroLayer(
     LaunchedEffect(glance.watch) { onWatch(glance.watch) }
     val weather = (view(snap.weather, PanelPolicies.WEATHER, settings.switches.weather, instant) as? PanelView.Shown)?.value
     val game = if (settings.switches.games) GameDay.select(snap.games?.value.orEmpty(), instant, zone) else null
+    // The real sky at the weather location, on the minute tick only (a few dozen trig calls). Null without a location:
+    // the scenes keep the clock buckets and the sun its old fixed spot (never a guessed sky).
+    val sky = remember(now, settings.location) { settings.location?.let { SkyNow.of(instant, zone, it.lat, it.lon) } }
     // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).
-    val resolved = HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game)
+    val resolved = HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game, sky?.position)
+    val sun = rememberUpdatedState(remember(sky, resolved.motif) { heroSun(sky, resolved.motif) })
     val dim = idle.value == IdleState.DIM
     val ink = HeroInk(
         text = if (dim) OledTokens.DIM_TEXT else resolved.text,
@@ -258,6 +270,7 @@ fun HeroLayer(
     Box(modifier.fillMaxSize().testTag(HERO_IDLE_TAG_PREFIX + idle.value.name)) {
         HeroBackdrop(
             resolved, weather?.precipNow,
+            sun = { sun.value },
             scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
             modifier = Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION),
         )
@@ -314,18 +327,19 @@ private class HeroInk(val text: Int, val secondary: Int)
 /** The adb-set settings the hero reads ([FeedSettings]). */
 private data class HeroSettings(
     val switches: PanelSwitches,
-    val hasLocation: Boolean,
+    /** The weather location; the hero's sun follows the real sky there (null: the clock buckets). */
+    val location: Location?,
     val travel: List<TravelRule>,
     val watchMap: WatchMap = WatchMap.EMPTY,
     /** The watch map's packages that have a TV launch intent, checked once a minute on IO. */
     val installed: Set<String> = emptySet(),
 ) {
     companion object {
-        val NONE = HeroSettings(PanelSwitches(), hasLocation = false, travel = emptyList())
+        val NONE = HeroSettings(PanelSwitches(), location = null, travel = emptyList())
 
         /** Disk and package manager: call off the main thread. */
         fun read(context: Context) = HeroSettings(
-            FeedSettings.switches(context), FeedSettings.location(context) != null, FeedSettings.travelRules(context),
+            FeedSettings.switches(context), FeedSettings.location(context), FeedSettings.travelRules(context),
             FeedSettings.watchMap(context),
             FeedSettings.watchPackages(context).filterTo(HashSet()) { InstalledApps.canLaunch(context, it) },
         )
@@ -513,6 +527,8 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  *   image crossfades in over the Canvas motif (no crossfade when animations are off).
  * - The image is drawn with the theme's own gradient over it at [TINT_ALPHA] when the theme is not the one the image was
  *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, every team shares GAME).
+ * - The sun scenes' images (DAWN, DAY, SUNSET) have no sun: [sun] places it where the real sun is (core SunArc, moved on
+ *   the minute tick only), clipped to the sky above the art's hills (BackdropSkyline). Null [sun]: no sun.
  * - The rain and snow particles are drawn on top of the image.
  * - A black scrim ([scrimAlpha], read in the draw phase) goes over everything but the bottom fade (M7, R3).
  * - Only Christmas animates (slow snowfall), plus the rain or snow overlay while it is falling now. The loop ticks about 15 times a second with a delay, not every vsync, and
@@ -520,7 +536,7 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  *   reach an idle state; it also honours the user's "remove animations" choice).
  */
 @Composable
-private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, scrimAlpha: () -> Float, modifier: Modifier) {
+private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, sun: () -> SunSpot?, scrimAlpha: () -> Float, modifier: Modifier) {
     val context = LocalContext.current
     val frozen = remember(context) { animationsFrozen(context) }
     var ready by remember { mutableStateOf(false) }
@@ -565,6 +581,10 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, scrimAlpha: () -> Fl
                 val hill = if (theme.motif == HeroMotif.SNOW) hillPath(w, h) else null
                 val moon = if (theme.motif == HeroMotif.STARS) moonPath(w, h) else null
                 val tint = if (theme.backdropTop != renderedTop(theme.motif)) base else null
+                val sunLook = sunLook(theme)
+                val art = ArtFit(w, h)
+                val sky = sunLook?.let { skyPath(art, BackdropSkyline.of(theme.motif)) }
+                var sunCache: Pair<SunSpot, SunBrushes>? = null
                 onDrawBehind {
                     drawRect(base)
                     // Read in the draw phase only: a decode or a crossfade step redraws this layer, nothing else.
@@ -574,11 +594,10 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, scrimAlpha: () -> Fl
                         when (theme.motif) {
                             HeroMotif.MOON_BATS -> drawMoonAndBats(theme)
                             HeroMotif.SNOW -> { if (image == null) drawSnow(tick.longValue); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
-                            HeroMotif.DAWN -> drawSun(theme, 0.74f, 0.98f, 0.11f, 0.30f)
-                            HeroMotif.DAY -> { drawSun(theme, 0.80f, 0.34f, 0.07f, 0.22f); drawClouds(0.22f) }
-                            HeroMotif.SUNSET -> drawSun(theme, 0.74f, 0.88f, 0.14f, 0.34f)
+                            HeroMotif.DAWN, HeroMotif.SUNSET -> Unit // the sun is drawn below, over image or not
+                            HeroMotif.DAY -> drawClouds(0.22f)
                             HeroMotif.STARS -> drawStars(theme, moon)
-                            HeroMotif.GAME -> drawSun(theme, 0.80f, 0.36f, 0.08f, 0.22f)
+                            HeroMotif.GAME -> if (sun() != null) drawSun(theme, 0.80f, 0.36f, 0.08f, 0.22f)
                         }
                     }
                     if (image != null && alpha > 0f) {
@@ -586,6 +605,14 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, scrimAlpha: () -> Fl
                         tint?.let { drawRect(it, alpha = TINT_ALPHA * alpha) }
                         // Christmas snowfall keeps falling over the rendered scene.
                         if (theme.motif == HeroMotif.SNOW) drawSnow(tick.longValue)
+                    }
+                    // The sun scenes' art has no sun: it is drawn where the real one is (read in the draw phase, so the
+                    // minute's move redraws this layer only), clipped to the sky above the hills.
+                    val spot = if (ready && sunLook != null && sky != null) sun() else null
+                    if (spot != null && sunLook != null && sky != null) {
+                        val brushes = sunCache?.takeIf { it.first == spot }?.second
+                            ?: sunBrushes(sunLook, art.at(spot), art.px(sunLook.radius)).also { sunCache = spot to it }
+                        clipPath(sky) { drawRealSun(sunLook, brushes) }
                     }
                     if (ready) {
                         // Weather motif overlay (never a theme change): particles only when it is falling now.
@@ -675,6 +702,66 @@ private fun DrawScope.drawSun(theme: HeroTheme, cx: Float, cy: Float, r: Float, 
     drawCircle(rgb(theme.accent, glowAlpha * 0.5f), rad * 2.6f, c)
     drawCircle(rgb(theme.accent, glowAlpha), rad * 1.6f, c)
     drawCircle(rgb(theme.accent, 0.9f), rad, c)
+}
+
+/** The sun's spot for this minute: the real sun when a location is set, else the art's old fixed spot. */
+private fun heroSun(sky: SkyNow?, motif: HeroMotif): SunSpot? = when {
+    sky == null -> SunArc.fixed(motif) ?: if (motif == HeroMotif.GAME) GAME_SUN else null
+    motif == HeroMotif.GAME -> if (sky.position.elevation >= 0) GAME_SUN else null
+    else -> SunArc.place(sky, BackdropSkyline.of(motif))
+}
+
+/** GAME's Canvas fallback sun (the image has none); only its presence is used. */
+private val GAME_SUN = SunSpot(0.80f, 0.36f)
+
+/** Size and colours of the sun in each sun motif, as the art had it (render_backdrops.py), glow in the theme's accent. */
+private class SunLook(val radius: Float, val core: Int, val halo: Int, val accent: Int, val streak: Int?)
+
+private fun sunLook(theme: HeroTheme): SunLook? = when (theme.motif) {
+    HeroMotif.DAWN -> SunLook(0.05f, 0xFFF0C8, 0xFFD9A0, theme.accent, 0xE89A6A)
+    HeroMotif.DAY -> SunLook(0.04f, 0xFFF6D8, 0xFFF0C8, theme.accent, null)
+    HeroMotif.SUNSET -> SunLook(0.065f, 0xFFD08A, 0xFFB070, theme.accent, 0xE07048)
+    else -> null
+}
+
+/** Image (1920 x 600) fractions to canvas pixels, the same cover fit as [drawBackdrop]. */
+private class ArtFit(w: Float, h: Float) {
+    private val scale = maxOf(w / ART_W, h / ART_H)
+    private val dx = (w - ART_W * scale) / 2
+    fun x(fx: Float) = dx + fx * ART_W * scale
+    fun y(fy: Float) = fy * ART_H * scale
+    fun at(s: SunSpot) = Offset(x(s.x), y(s.y))
+    fun px(fy: Float) = fy * ART_H * scale
+}
+
+private const val ART_W = 1920f
+private const val ART_H = 600f
+
+/** The sky above the hills (or above the flat horizon), as a clip: the sun never shows in front of the land. */
+private fun skyPath(art: ArtFit, line: FloatArray?): Path = Path().apply {
+    val pts = line ?: floatArrayOf(BackdropSkyline.HORIZON, BackdropSkyline.HORIZON)
+    moveTo(art.x(0f), 0f)
+    for (i in pts.indices) lineTo(art.x(i.toFloat() / (pts.size - 1)), art.y(pts[i]))
+    lineTo(art.x(1f), 0f)
+    close()
+}
+
+private class SunBrushes(val c: Offset, val r: Float, val wide: Brush, val near: Brush, val streak: Brush?)
+
+/** Built once per spot (once a minute), not per frame: a rain or snow overlay redraws the layer 15 times a second. */
+private fun sunBrushes(look: SunLook, c: Offset, r: Float) = SunBrushes(
+    c, r,
+    wide = Brush.radialGradient(listOf(rgb(look.accent, 0.30f), rgb(look.accent, 0.10f), Color.Transparent), c, r * 9f),
+    near = Brush.radialGradient(listOf(rgb(look.halo, 0.55f), rgb(look.halo, 0f)), c, r * 2.6f),
+    streak = look.streak?.let { Brush.radialGradient(listOf(rgb(it, 0.45f), rgb(it, 0f)), c, r * 3f) },
+)
+
+private fun DrawScope.drawRealSun(look: SunLook, b: SunBrushes) {
+    // Low sun: a warm band along the horizon, the art's old stretched glow (3 radii tall, 24 wide).
+    b.streak?.let { s -> scale(8f, 1f, pivot = b.c) { drawCircle(s, b.r * 3f, b.c) } }
+    drawCircle(b.wide, b.r * 9f, b.c)
+    drawCircle(b.near, b.r * 2.6f, b.c)
+    drawCircle(rgb(look.core), b.r, b.c)
 }
 
 private fun DrawScope.drawClouds(alpha: Float) {
