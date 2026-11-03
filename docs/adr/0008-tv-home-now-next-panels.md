@@ -146,7 +146,10 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   overscan margins plus the drift travel, and drifts with the hero text (`brief-oled-drift`); it is fitted by
   measuring at the row's real width and font, dropping template parts (or falling back from a cached line) so it is
   never ellipsized (`brief-line-truncation`). Placeholders are filled in the same composition as the Quiet value
-  (`brief-quiet-flash`). Accepted, no change: `brief-zone-hop` (a time-zone change on the TV can shift or repeat a
+  (`brief-quiet-flash`). The switch is re-read each minute and keys the line, so off hides it within a minute
+  (`brief-off-lag`). The prompt asks for at most 50 characters, counting each placeholder as a full 24-character title,
+  so a reply fits the row (about 60-65 characters at 24 sp) and a paid call is not lost to the fit check
+  (`brief-prompt-width`). Accepted, no change: `brief-zone-hop` (a time-zone change on the TV can shift or repeat a
   slot within a day; the monthly cap still bounds the spend).
 
 ### 6. Quiet mode
