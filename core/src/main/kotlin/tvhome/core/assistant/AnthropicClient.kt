@@ -37,7 +37,7 @@ class AnthropicClient internal constructor(
     private val allowed: (HttpUrl) -> Boolean,
     timeoutMs: Long,
     customize: OkHttpClient.Builder.() -> Unit,
-) : ClaudeClient {
+) : ClaudeClient, BriefClient {
 
     constructor(apiKey: () -> String?) :
         this(apiKey, API_URL.toHttpUrl(), ::isPinned, AskConfig.TIMEOUT_MS, {})
@@ -55,7 +55,13 @@ class AnthropicClient internal constructor(
         }
         .build()
 
-    override suspend fun send(apps: List<AskApp>, turns: List<Turn>): ClaudeResult {
+    override suspend fun send(apps: List<AskApp>, turns: List<Turn>): ClaudeResult =
+        post(requestBody(apps, turns), withFallbackBeta = true)
+
+    /** The brief (ADR 0008 section 5): its own body, and no fallback beta header, so a refusal is just no line. */
+    override suspend fun post(body: String): ClaudeResult = post(body, withFallbackBeta = false)
+
+    private suspend fun post(body: String, withFallbackBeta: Boolean): ClaudeResult {
         if (!allowed(baseUrl)) return ClaudeResult.Failed(ClaudeError.HTTP_STATUS)
         val result = try {
             // The key is read on the IO dispatcher (KeystoreSecretStore decrypts), together with the call.
@@ -65,9 +71,9 @@ class AnthropicClient internal constructor(
                 .url(baseUrl)
                 .header("x-api-key", key)
                 .header("anthropic-version", API_VERSION)
-                .header("anthropic-beta", FALLBACK_BETA)
+                .apply { if (withFallbackBeta) header("anthropic-beta", FALLBACK_BETA) }
                 .header("content-type", "application/json")
-                .post(requestBody(apps, turns).toRequestBody(JSON))
+                .post(body.toRequestBody(JSON))
                 .build()
             val call = client.newCall(request)
             coroutineScope {
