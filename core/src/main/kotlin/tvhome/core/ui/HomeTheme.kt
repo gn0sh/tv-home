@@ -19,8 +19,26 @@ data class HomeTheme(
     val tileWidthDp: Int = 192,
     val tileHeightDp: Int = 108,
 ) {
+    /**
+     * This theme on a game day whose hero asks for a [screen] background and [tile] fill (Predators navy), or this
+     * theme unchanged when either is null or the result would not read (game-screen-theme-contrast): the theme's text
+     * and secondary text keep 7:1 on the screen and on the tile, and the tile and the focused fill stand out from the
+     * screen by at least [GAME_SEPARATION]:1, so a voice-set custom theme never ends up unreadable.
+     */
+    fun forGameDay(screen: Int?, tile: Int?): HomeTheme {
+        if (screen == null || tile == null) return this
+        val reads = listOf(screen, tile).all { bg ->
+            Tokens.contrast(text, bg) >= 7.0 && Tokens.contrast(secondaryText, bg) >= 7.0
+        }
+        val separate = Tokens.contrast(tile, screen) >= GAME_SEPARATION && Tokens.contrast(focusFill, screen) >= GAME_SEPARATION
+        return if (reads && separate) copy(background = screen, tile = tile) else this
+    }
+
     companion object {
         val DEFAULT = HomeTheme()
+
+        /** Luminance contrast the tile and focused fill keep against a game-day screen (the default pair is about 1.16). */
+        const val GAME_SEPARATION = 1.3
 
         /** Files larger than this are not read at all. */
         const val MAX_BYTES = 4096

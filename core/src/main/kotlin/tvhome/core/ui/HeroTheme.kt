@@ -2,6 +2,7 @@ package tvhome.core.ui
 
 import tvhome.core.feeds.GameDay
 import tvhome.core.feeds.TeamGame
+import tvhome.core.feeds.Venue
 import tvhome.core.sky.SunPosition
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -10,7 +11,8 @@ import java.time.Month
 import java.time.temporal.TemporalAdjusters
 
 /** What the hero backdrop draws on top of its gradient. The app has one Canvas drawing per motif. */
-enum class HeroMotif { MOON_BATS, SNOW, DAWN, DAY, SUNSET, STARS, GAME }
+/** GAME is the outdoor stadium (Ohio State), ARENA the indoor hockey arena (Predators); see [TeamConfig.venue]. */
+enum class HeroMotif { MOON_BATS, SNOW, DAWN, DAY, SUNSET, STARS, GAME, ARENA }
 
 /**
  * The hero area's look for one moment (M2e). Colours are 0xRRGGBB. [text] and [secondaryText] are for the title,
@@ -25,6 +27,13 @@ data class HeroTheme(
     val badge: String?,
     val text: Int = 0xF4F1EA,
     val secondaryText: Int = 0xD5DCE8,
+    /** The scrim's colour (R3: the art shows at [GlanceTokens.BACKDROP_BRIGHTNESS] over it). Black but on game days. */
+    val scrim: Int = 0x000000,
+    /** The screen background behind the tiles and dock, and the tile fill on it, or null for the home theme's. */
+    val screen: Int? = null,
+    val tile: Int? = null,
+    /** A full-strength accent line along the hero's bottom edge, below every text zone, or null. */
+    val edge: Int? = null,
 ) {
     companion object {
         /** The fourth Thursday of [year]'s November (US Thanksgiving). */
@@ -43,7 +52,14 @@ data class HeroTheme(
 
         fun forGame(game: TeamGame): HeroTheme {
             val t = game.team
-            return HeroTheme(t.backdropTop, t.backdropBottom, t.accent, HeroMotif.GAME, GameDay.badge(game))
+            val motif = when (t.venue) {
+                Venue.ARENA -> HeroMotif.ARENA
+                Venue.STADIUM -> HeroMotif.GAME
+            }
+            return HeroTheme(
+                t.backdropTop, t.backdropBottom, t.accent, motif, GameDay.badge(game),
+                scrim = t.scrim, screen = t.screen, tile = t.tile, edge = t.edge,
+            )
         }
 
         /**

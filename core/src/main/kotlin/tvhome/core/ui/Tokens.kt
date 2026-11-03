@@ -77,6 +77,20 @@ object GlanceTokens {
     const val BACKDROP_BRIGHTNESS = 0.25f
     val SCRIM_ALPHA: Float get() = 1f - BACKDROP_BRIGHTNESS
 
+    /**
+     * One composited backdrop pixel: [art] at [BACKDROP_BRIGHTNESS] over a [scrim]-coloured scrim (sRGB, as Compose
+     * blends). On game days the scrim is the team colour, so a white art pixel can break 7:1; the game art has none
+     * (tools/art/render_backdrops.py checks the art's 99.9th-percentile pixel composited like this).
+     */
+    fun composite(art: Int, scrim: Int): Int {
+        fun ch(shift: Int): Int {
+            val a = (art shr shift) and 0xFF
+            val s = (scrim shr shift) and 0xFF
+            return kotlin.math.round(a * BACKDROP_BRIGHTNESS + s * SCRIM_ALPHA).toInt().coerceIn(0, 255)
+        }
+        return (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
+
     /** Hero text colours: the [HeroTheme] defaults, here so the test names them. */
     const val HERO_TEXT = 0xF4F1EA
     const val HERO_SECONDARY = 0xD5DCE8

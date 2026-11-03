@@ -10,7 +10,7 @@
 # followed by a line "TOUR <n> <name>: PRODUCED|NOT PRODUCED (<reason>)" from a uiautomator check of what is on screen.
 # A state that cannot be produced is reported as NOT PRODUCED, never faked.
 #
-# Then the real sun at four UTC clock times (adb root + date -u) and two cold-start frames.
+# This run: the game-day skins of PR #29 (preds-arena).
 #
 # Fake data only: invented events and games, the FakeSecrets dummy calendar URL, a fixed location. Helpers follow
 # scripts/ci/emulator-qa.sh (a, sh_, ui_text, the Private DNS offline switch from its M7 Q1 block).
@@ -271,8 +271,6 @@ plant_weather() { # $1 = the fields before "days"
   printf '{"v":1,"at":"%s","data":{%s,"days":[%s]}}' "$(iso "$(dev_now)")" "$1" "$(forecast_days)" | put panels/weather.json
 }
 W_EVENING='"tempF":58,"condition":"Partly cloudy","nextPrecip":"Rain after 2 AM","highF":62,"lowF":45,"highHour":15,"overnightLowF":44'
-W_MORNING='"tempF":47,"condition":"Mostly clear","nextPrecip":"Rain after 4 PM","highF":62,"lowF":45,"highHour":15,"overnightLowF":46'
-W_STORM='"tempF":66,"condition":"Thunderstorm","precipNow":"RAIN","highF":71,"lowF":52,"highHour":14,"overnightLowF":52'
 plant_alerts() { printf '{"v":1,"at":"%s","data":{"alerts":[%s]}}' "$(iso "$(dev_now)")" "$1" | put panels/alerts.json; }
 
 # Games: panels/games.json (the combined list the hero reads) and the per-team season caches (NHL for the Predators,
@@ -330,166 +328,88 @@ if [[ -n $WATCH_PKG ]]; then
 fi
 quiet false >/dev/null 2>&1 || true
 
-# ---- home shots (run at each size) --------------------------------------------------------------------------------
-home_shots() { # $1 = first shot number, $2 = name suffix
-  local n=$1 sfx=$2 v now
-
-  # Evening: weather chip, next event with countdown, the Tomorrow card, the brief line.
-  v=""
-  local_clock 19 05 || v="the device clock and zone could not be set to evening"
-  rmc panels/alerts.json; no_games
-  evening_agenda; plant_weather "$W_EVENING"; plant_brief
-  home; look
-  has 'content-desc="Hero now: [^"]*in [0-9]+ min' || v="${v:+$v; }no next event with a countdown"
-  has 'content-desc="Hero card: Tomorrow' || v="${v:+$v; }no Tomorrow time-of-day card"
-  has 'text="[0-9]+°F' || v="${v:+$v; }no weather chip"
-  has "resource-id=\"dock_brief\"" || v="${v:+$v; }no brief line"
-  has "text=\"$BRIEF_LINE\"" || v="${v:+$v; }brief shows the template line, not the planted one"
-  shot "$n" "evening$sfx" "$v"; n=$((n + 1))
-
-  # Morning, with the weather arc (Today) card.
-  v=""
-  local_clock 07 30 || v="the device clock and zone could not be set to morning"
-  morning_agenda; plant_weather "$W_MORNING"; plant_brief
-  home; look
-  has 'content-desc="Hero card: Today' || v="${v:+$v; }no Today weather card"
-  shot "$n" "morning$sfx" "$v"; n=$((n + 1))
-
-  local_clock 19 05 || warn "tour: evening clock not set; the remaining home shots do not depend on the hour"
-  evening_agenda; plant_weather "$W_EVENING"; plant_brief
-
-  # Severe storm alert override (a game is planted too: the alert must win).
-  v=""
-  now=$(dev_now)
-  week_games
-  plant_alerts '{"event":"Severe Thunderstorm Warning","severity":"Severe","kind":"OVERRIDE","until":"'"$(iso $((now + 75 * 60)))"'"}'
-  plant_weather "$W_STORM"
-  home; look
-  has 'content-desc="Hero card: Severe Thunderstorm Warning until' || v="no alert override card"
-  shot "$n" "severe-storm$sfx" "$v"; n=$((n + 1))
-  rmc panels/alerts.json; no_games
-  plant_weather "$W_EVENING"
-
-  # Quiet on (event titles hidden).
-  v=""
-  quiet true || v="quiet insert refused"
-  home; look
-  has 'resource-id="hero_quiet"' || v="${v:+$v; }no Quiet marker"
-  has 'Trash night|Movie night' && v="${v:+$v; }an event title still shows"
-  shot "$n" "quiet$sfx" "$v"; n=$((n + 1))
-  quiet false >/dev/null 2>&1 || true
-
-  # Next game card (no game today): Predators in two days, with the network.
-  v=""
-  week_games
-  home; look
-  has 'content-desc="Hero card: Predators vs Stars [^"]*TV: ESPN\+' || v="no next-game card naming the network"
-  shot "$n" "next-game$sfx" "$v"; n=$((n + 1))
-
-  # Preds game day with the Watch pill (ESPN+ mapped to an installed app).
-  v=""
-  [[ -n $WATCH_PKG ]] || v="no installed app to map ESPN+ to"
-  [[ -n $WATCH_PKG && -z $WATCH_OK ]] && v="watch map insert refused"
-  now=$(dev_now)
-  plant_games "$(game predators $((now + 55 * 60)) Blues true '["ESPN+"]'),$(game predators "$(at_local 6 18:00)" Jets false '[]')" \
-    "$(game ohio-state "$(at_local 4 11:00)" Penn\ State true '["FOX"]')"
-  home; look
-  has 'content-desc="Hero card: Predators vs Blues' || v="${v:+$v; }no Predators game-day card"
-  has 'content-desc="Watch the game on ESPN\+"' || v="${v:+$v; }no Watch pill"
-  shot "$n" "preds-game-day$sfx" "$v"
+# ---- game-day skins (PR #29 preds-arena) ---------------------------------------------------------------------------
+# Predators: indoor arena, navy screen, gold edge line, no weather overlay. Ohio State: scarlet stadium, outdoor, so
+# its snow is drawn. All shots at 1280x720 (JPEG in the log; full PNG in the artifact).
+set_local() { # $1 = "yyyy-mm-dd HH:MM" in the device zone
+  local tz target now; tz=$(dev_tz); target=$(TZ=$tz date -d "$1" +%s)
+  sh_ cmd alarm set-time "$((target * 1000))" >/dev/null 2>&1 || true
+  sleep 2; now=$(dev_now)
+  (( now - target < 120 && target - now < 120 )) || { warn "tour: could not set the clock to $1"; return 1; }
+  echo "tour: clock set to $(sh_ date | tr -d '\r')"
 }
-
-home_shots 1 ""
-
-# ---- Board ----------------------------------------------------------------------------------------------------------
-local_clock 19 05 || warn "tour: evening clock not set for the Board shots"
-evening_agenda; plant_weather "$W_EVENING"; plant_brief; week_games; rmc panels/alerts.json
-
-# 7. Board full screen (the dock's Board, opened by its intent). Columns carry "<date>, N events" for TalkBack; the
-# block titles are only drawn, so they are checked in the day list.
-v=""
-board; look
-has 'content-desc="Board full screen"' || v="the Board did not open"
-has 'content-desc="[^"]*, 1[2-9] events"' || v="${v:+$v; }no busy day column"
-has 'Predators[^"]*vs Stars[^"]*TV: ESPN\+' || v="${v:+$v; }no Predators next game with its network"
-has 'Ohio State[^"]*vs Penn State[^"]*TV: FOX' || v="${v:+$v; }no Ohio State next game with its network"
-shot 7 board "$v"
-
-# 8. Board day list for the busy day (today+2): Right twice from today, then OK.
-v=""
-key DPAD_RIGHT; key DPAD_RIGHT; key DPAD_CENTER; sleep 2
-look
-has 'content-desc="Board day list"' || v="the day list did not open"
-has 'Spirit week' || v="${v:+$v; }not the busy day's list"
-has 'Vet appointment' || v="${v:+$v; }no event titles in the list"
-shot 8 board-day-list "$v"
-
-# 9. Board in Quiet (every title "Busy"): checked in the busy day's list, then Back to the week for the shot.
-v=""
-quiet true || v="quiet insert refused"
-board
-key DPAD_RIGHT; key DPAD_RIGHT; key DPAD_CENTER; sleep 2
-look
-has 'content-desc="Board day list"' || v="${v:+$v; }the day list did not open"
-has 'Vet appointment|Design review|Spirit week' && v="${v:+$v; }an event title still shows"
-has 'Busy' || v="${v:+$v; }no Busy rows"
-key BACK; sleep 2
-look
-has 'content-desc="Board full screen"' || v="${v:+$v; }not back on the Board week"
-shot 9 board-quiet "$v"
-quiet false >/dev/null 2>&1 || true
-
-# 10. DIM, with idle_test 30 s (DIM at 30 s of no keys).
-sh_ content insert --uri "$P/idle_test" --bind seconds:i:30 || warn "tour: idle_test insert refused"
-home; t0=$(date +%s)
-n=$(( t0 + 38 - $(date +%s) )); (( n > 0 )) && sleep "$n"
-look; v=""
-has 'resource-id="hero_idle_DIM"' || v="not in DIM"
-shot 10 dim "$v"
-sh_ content delete --uri "$P/idle_test" >/dev/null 2>&1 || true
-
-# ---- the real sun (PR #26): location is Clarksville TN (provisioned above); the clock is set in UTC with root -------
-# CST is UTC-6 in November. 18:00Z noon (sun high), 22:30Z 4:30 PM (low, near the hills), 23:45Z 5:45 PM (after
-# sunset, dusk), 01:00Z next day 7 PM (night). Each shot relaunches home, so the hero computes the sky for the new time.
-a root >/dev/null 2>&1 || warn "tour: adb root refused"
-a wait-for-device
-sleep 3
-sh_ settings put global auto_time 0 >/dev/null 2>&1 || true
-sh_ cmd alarm set-timezone America/Chicago >/dev/null 2>&1 || true
-utc_clock() { # $1 = MMDDhhmmYY.ss in UTC, $2 = the expected epoch
-  local now
-  sh_ date -u "$1" >/dev/null 2>&1 || true
-  sleep 1
-  now=$(dev_now)
-  if (( now - $2 < 120 && $2 - now < 120 )); then echo "tour: clock $(sh_ date | tr -d '\r') ($(sh_ date -u | tr -d '\r'))"; return 0; fi
-  sh_ cmd alarm set-time "$(( $2 * 1000 ))" >/dev/null 2>&1 || true   # fallback: shell's SET_TIME
-  sleep 2
-  now=$(dev_now)
-  (( now - $2 < 120 && $2 - now < 120 )) || { warn "tour: could not set the clock to $1 UTC"; return 1; }
-  echo "tour: date -u refused; set-time gave $(sh_ date | tr -d '\r')"
+W_SNOW='"tempF":29,"condition":"Snow","precipNow":"SNOW","highF":33,"lowF":24,"highHour":14,"overnightLowF":22'
+preds_day() { # puck drop at 19:00 local today, now 17:00
+  plant_games "$(game predators "$(at_local 0 19:00)" Blues true '["ESPN+"]'),$(game predators "$(at_local 6 18:00)" Jets false '[]')" \
+    "$(game ohio-state "$(at_local 4 11:00)" Penn\ State true '["FOX"]')"
+}
+osu_day() { # kickoff 14:30 local today (a Saturday), now 11:00
+  plant_games "$(game predators "$(at_local 3 19:00)" Stars true '["ESPN+"]')" \
+    "$(game ohio-state "$(at_local 0 14:30)" Michigan true '["FOX"]'),$(game ohio-state "$(at_local 7 11:00)" Purdue false '["BTN"]')"
+}
+replant() { # $1 = weather fields
+  evening_agenda; plant_weather "$1"; plant_brief
+}
+back_capture() { # Back, then the screen ~200 ms later, captured on the device
+  sh_ "input keyevent KEYCODE_BACK; sleep 0.2; screencap -p /sdcard/tour-back.png" || true
 }
 quiet false >/dev/null 2>&1 || true
 rmc panels/alerts.json; no_games
-n=11
-for spec in "110318000026.00 2026-11-03T18:00:00Z sun-noon" "110322300026.00 2026-11-03T22:30:00Z sun-1630" \
-            "110323450026.00 2026-11-03T23:45:00Z sun-dusk" "110401000026.00 2026-11-04T01:00:00Z sun-1900"; do
-  read -r stamp utc name <<<"$spec"
-  v=""
-  utc_clock "$stamp" "$(date -u -d "$utc" +%s)" || v="the clock could not be set to $utc"
-  evening_agenda; plant_weather "$W_EVENING"; plant_brief
-  home; sleep 3; look
-  has 'content-desc="Hero now: ' || v="${v:+$v; }no hero"
-  shot "$n" "$name" "$v"; n=$((n + 1))
-done
 
-# Cold start: the first frame (~300 ms after launch) should be the plain background, never a wrong scene; then 2 s.
-# Captured on the device in one shell command, so adb latency does not shift the timing.
-for spec in "0.3 cold-300ms" "2 cold-2s"; do
-  read -r wait name <<<"$spec"
-  sh_ "am force-stop $PKG; am start -n $MAIN >/dev/null; sleep $wait; screencap -p /sdcard/tour-cold.png" || true
-  shot "$n" "$name" "" /sdcard/tour-cold.png; n=$((n + 1))
-  sh_ rm -f /sdcard/tour-cold.png || true
-done
+# 1. Preds game day, two hours before puck drop.
+v=""
+local_clock 17 00 || v="the clock could not be set to 17:00"
+replant "$W_EVENING"; preds_day
+home; look
+has 'content-desc="Hero card: Predators vs Blues' || v="${v:+$v; }no Predators game-day card"
+[[ -n $WATCH_OK ]] && ! has 'content-desc="Watch the game on ESPN\+"' && v="${v:+$v; }no Watch pill"
+shot 1 preds-game-day "$v"
+
+# 2. Calendar opened, Back, ~200 ms; then the Board, Back, ~200 ms.
+v=""
+key DPAD_DOWN; key DPAD_CENTER; sleep 3; look
+has 'content-desc="Calendar full screen"' || { key DPAD_DOWN; key DPAD_CENTER; sleep 3; look; }
+has 'content-desc="Calendar full screen"' || v="the calendar did not open"
+back_capture
+shot 2 back-from-calendar-200ms "$v" /sdcard/tour-back.png
+sleep 2
+v=""
+key DPAD_RIGHT; key DPAD_CENTER; sleep 3; look
+has 'content-desc="Board full screen"' || v="the Board did not open from the dock"
+back_capture
+shot 3 back-from-board-200ms "$v" /sdcard/tour-back.png
+sh_ rm -f /sdcard/tour-back.png || true
+
+# 4. Preds game day with snow falling: indoors, so no snow is drawn.
+v=""
+replant "$W_SNOW"; preds_day
+home; look
+has 'content-desc="Hero card: Predators vs Blues' || v="no Predators game-day card"
+shot 4 preds-snow "$v"
+
+# 5. Preds game day in DIM (idle_test 30 s): no navy tint, no gold line.
+v=""
+replant "$W_EVENING"; preds_day
+sh_ content insert --uri "$P/idle_test" --bind seconds:i:30 || warn "tour: idle_test insert refused"
+home; t0=$(date +%s)
+n=$(( t0 + 38 - $(date +%s) )); (( n > 0 )) && sleep "$n"
+look
+has 'resource-id="hero_idle_DIM"' || v="not in DIM"
+shot 5 preds-dim "$v"
+sh_ content delete --uri "$P/idle_test" >/dev/null 2>&1 || true
+
+# 6. Ohio State game day on Saturday 7 Nov 2026, 11:00 (kickoff 14:30). 7. The same with snow: drawn (outdoors).
+v=""
+set_local "2026-11-07 11:00" || v="the clock could not be set to Saturday 11:00"
+replant "$W_EVENING"; osu_day
+home; look
+has 'content-desc="Hero card: Ohio State vs Michigan' || v="${v:+$v; }no Ohio State game-day card"
+shot 6 osu-game-day "$v"
+v=""
+replant "$W_SNOW"; osu_day
+home; look
+has 'content-desc="Hero card: Ohio State vs Michigan' || v="no Ohio State game-day card"
+shot 7 osu-snow "$v"
 
 echo
 echo "== Tour summary"

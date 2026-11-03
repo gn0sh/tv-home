@@ -29,6 +29,31 @@ $updatePlaces = @(
     (Join-Path ([Environment]::GetFolderPath('Programs')) 'Update TV Remote.lnk')
 )
 
+# Closes this repo's own tv-remote processes (matched by executable path under tv-remote\.venv\Scripts, never by name
+# alone): politely first, then after about 3 seconds Stop-Process on any that remain. A background helper can hold
+# tv-remote.exe after the window is closed, and then uv sync cannot replace it (os error 32). Returns the names closed.
+function Stop-OwnTvRemote([string]$RepoRoot) {
+    $scripts = (Join-Path $RepoRoot 'tv-remote\.venv\Scripts').TrimEnd('\') + '\'
+    $mine = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($scripts, [StringComparison]::OrdinalIgnoreCase) -and
+        ($_.Name -like 'tv-remote*.exe' -or $_.Name -ieq 'python.exe' -or $_.Name -ieq 'pythonw.exe')
+    })
+    $closed = @()
+    $procs = @()
+    foreach ($m in $mine) {
+        $p = Get-Process -Id $m.ProcessId -ErrorAction SilentlyContinue
+        if ($p) { $procs += $p; [void]$p.CloseMainWindow() }
+    }
+    if ($procs.Count -eq 0) { return $closed }
+    $deadline = (Get-Date).AddSeconds(3)
+    while ((Get-Date) -lt $deadline -and @($procs | Where-Object { -not $_.HasExited }).Count -gt 0) { Start-Sleep -Milliseconds 200 }
+    foreach ($p in $procs) {
+        if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        $closed += $p.ProcessName
+    }
+    return $closed
+}
+
 if ($Remove) {
     foreach ($p in $places + $updatePlaces) { if (Test-Path $p) { Remove-Item $p; Write-Host "Removed $p" } }
     exit 0
@@ -48,6 +73,8 @@ if ($Classic) {
     elseif (Test-Path (Join-Path $env:USERPROFILE '.local\bin\uv.exe')) { $uv = Join-Path $env:USERPROFILE '.local\bin\uv.exe' }
     if (-not $uv) { throw 'uv not found (on PATH or in %USERPROFILE%\.local\bin). The tv-remote setup installs it; or use -Classic.' }
     if (-not (Test-Path (Join-Path $project 'uv.lock'))) { throw "tv-remote\uv.lock not found under $repo." }
+    $stopped = @(Stop-OwnTvRemote $repo)
+    if ($stopped.Count -gt 0) { Write-Host ('Closed TV Remote processes so they can be replaced: ' + ($stopped -join ', ')) }
     Write-Host 'Installing the remote app (uv sync --locked --no-dev)...'
     # uv reports progress on stderr; under Stop, Windows PowerShell could turn that into an error, so check the exit
     # code instead.
