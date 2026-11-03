@@ -48,6 +48,8 @@ object BriefConfig {
     const val MORNING_SLOT_HOUR = 7
     const val AFTERNOON_SLOT_HOUR = 16
     const val MAX_CACHE_BYTES = 2048
+    /** Alert event names and the game line come from outside feeds: cleaned and cut to this before they are sent. */
+    const val FEED_CUT = 60
 }
 
 /** An event offered to the brief. [title] stays on the TV; only [id], [whenText] and [allDay] are sent. */
@@ -57,13 +59,13 @@ data class BriefEvent(val id: String, val title: String, val whenText: String, v
 
 /**
  * The facts the brief may use. Only the fields named in [sentJson] leave the TV. [weather] is the condition word,
- * [rain] the next rain or snow window, [temps] a "now/high/low" triple; none carries a location.
+ * [rain] the next rain or snow window, [highF]/[lowF] today's high and low (separate facts; the current temperature
+ * is not sent, so its minute-to-minute changes cannot churn the line); none carries a location.
  */
 data class BriefFacts(
     val date: String,
     val weather: String?,
     val rain: String?,
-    val nowF: Int?,
     val highF: Int?,
     val lowF: Int?,
     val alert: String?,
@@ -74,7 +76,9 @@ data class BriefFacts(
     internal fun fact(name: String): String? = when (name) {
         "weather" -> weather
         "rain" -> rain
-        "temps" -> if (nowF == null && highF == null && lowF == null) null else "now=$nowF,high=$highF,low=$lowF"
+        "date" -> date
+        "high" -> highF?.toString()
+        "low" -> lowF?.toString()
         "alert" -> alert
         "game" -> game
         else -> events.firstOrNull { it.id == name }?.let { "${it.whenText}|${it.allDay}" }
@@ -85,9 +89,8 @@ data class BriefFacts(
         put("date", date)
         weather?.let { put("weather", it) }
         rain?.let { put("rain", it) }
-        if (nowF != null || highF != null || lowF != null) putJsonObject("temps") {
-            nowF?.let { put("now", it) }; highF?.let { put("high", it) }; lowF?.let { put("low", it) }
-        }
+        highF?.let { put("high", it) }
+        lowF?.let { put("low", it) }
         alert?.let { put("alert", it) }
         game?.let { put("game", it) }
         putJsonArray("events") {
@@ -95,11 +98,14 @@ data class BriefFacts(
         }
     }
 
+    /** Nothing to sum up (no weather, temperatures, alert, game or event): no request, no slot spent. */
+    fun isEmpty(): Boolean = weather == null && rain == null && highF == null && lowF == null && alert == null && game == null && events.isEmpty()
+
     override fun toString(): String = "BriefFacts(${events.size} events)"
 }
 
 /** Names Claude may list in `uses`: facts it relied on. */
-internal val BRIEF_USES: List<String> = listOf("weather", "rain", "temps", "alert", "game", "E1", "E2", "E3")
+internal val BRIEF_USES: List<String> = listOf("weather", "rain", "high", "low", "alert", "game", "E1", "E2", "E3")
 
 private val PLACEHOLDER = Regex("""\{[^{}]*\}""")
 private val EVENT_PLACEHOLDER = Regex("""\{(E[1-3])\}""")
@@ -120,15 +126,16 @@ fun briefFacts(i: GlanceInputs): BriefFacts {
         val net = i.watchMap.network(tg)?.let { " on $it" }.orEmpty()
         "${tg.team.name} $vs ${tg.game.opponent}, " + formatTime(tg.game.start.atZone(i.zone).toLocalTime().withSecond(0).withNano(0), i.is24h) + net
     }
+    // Feed text (NWS event names, ESPN/NHL opponent and network) is outside input: one clean line, cut, before it is sent.
+    fun feed(t: String?): String? = t?.let { BriefText.clean(it).take(BriefConfig.FEED_CUT).trimEnd() }?.ifEmpty { null }
     return BriefFacts(
         date = local.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH) + ", " + local.toLocalDate(),
         weather = weather?.condition?.ifEmpty { null },
         rain = weather?.nextPrecip,
-        nowF = weather?.tempF,
         highF = weather?.highF,
         lowF = weather?.lowF,
-        alert = alerts?.alerts?.firstOrNull()?.event,
-        game = gameText,
+        alert = feed(alerts?.alerts?.firstOrNull()?.event),
+        game = feed(gameText),
         events = briefEvents(i.agenda, i.now, i.zone, i.is24h),
     )
 }
@@ -235,18 +242,42 @@ fun fillPlaceholders(line: String, events: List<BriefEvent>, quiet: Boolean): St
         events.firstOrNull { it.id == m.groupValues[1] }?.let { BriefText.title(it.title, quiet) } ?: "an event"
     }
 
-/** The free local line, from the same facts: "Rain after 4 PM · Predators vs Blues, 7:00 PM · Dentist tomorrow 9:00 AM". */
-fun templateLine(f: BriefFacts, quiet: Boolean): String? {
+/**
+ * The free local line, from the same facts: "Rain after 4 PM · Predators vs Blues, 7:00 PM · Dentist tomorrow 9:00 AM".
+ * [fits] is the screen's measurement (the dock band's one line at its real width and font): parts are dropped from the
+ * end until the line fits, so it is never cut mid-part by an ellipsis. If even the first part does not fit, it is cut
+ * at a word boundary until it does (null if nothing fits).
+ */
+fun templateLine(f: BriefFacts, quiet: Boolean, fits: (String) -> Boolean = { true }): String? {
     val parts = buildList {
         f.alert?.let { add(it) }
         f.rain?.let { add(it.replaceFirstChar { c -> c.uppercase() }) }
         f.game?.let { add(it) }
         f.events.firstOrNull()?.let { add("${BriefText.title(it.title, quiet)} ${it.whenText}") }
     }.map(BriefText::clean).filter { it.isNotEmpty() }
+    fun ok(t: String) = t.length <= BriefConfig.MAX_LINE && runCatching { fits(t) }.getOrDefault(false)
     var keep = parts
-    while (keep.isNotEmpty() && keep.joinToString(" · ").length > BriefConfig.MAX_LINE) keep = keep.dropLast(1)
-    if (keep.isEmpty()) return parts.firstOrNull()?.take(BriefConfig.MAX_LINE)
-    return keep.joinToString(" · ")
+    while (keep.isNotEmpty() && !ok(keep.joinToString(" · "))) keep = keep.dropLast(1)
+    if (keep.isNotEmpty()) return keep.joinToString(" · ")
+    var first = parts.firstOrNull()?.take(BriefConfig.MAX_LINE)?.trimEnd() ?: return null
+    while (!ok(first)) {
+        val sp = first.lastIndexOf(' ')
+        if (sp <= 0) return null
+        first = first.substring(0, sp).trimEnd()
+    }
+    return first
+}
+
+/**
+ * What the dock band draws, from [raw] (the validated cached line, placeholders still in it, from [BriefEngine.load]):
+ * the placeholders filled with titles or "Busy" in Quiet, if the result is at most [BriefConfig.MAX_LINE] and [fits];
+ * else the [templateLine]. Pure and cheap, so the caller runs it in the same composition as the Quiet value: a title
+ * can never show for a frame after Quiet turns on (brief-quiet-flash).
+ */
+fun briefLine(raw: String?, f: BriefFacts, quiet: Boolean, fits: (String) -> Boolean = { true }): String? {
+    val filled = raw?.let { BriefText.clean(fillPlaceholders(it, f.events, quiet)) }
+        ?.takeIf { it.isNotEmpty() && it.length <= BriefConfig.MAX_LINE && runCatching { fits(it) }.getOrDefault(false) }
+    return filled ?: templateLine(f, quiet, fits)
 }
 
 // --- reply ---------------------------------------------------------------------------------------------------------
@@ -255,8 +286,11 @@ fun templateLine(f: BriefFacts, quiet: Boolean): String? {
 class BriefReply(val line: String, val uses: List<String>) {
     override fun toString(): String = "BriefReply(${line.length} chars, $uses)"
 
-    /** Everything the line depends on: `uses` plus any placeholder it contains. */
-    fun named(): List<String> = (uses + EVENT_PLACEHOLDER.findAll(line).map { it.groupValues[1] }).distinct().sorted()
+    /**
+     * Everything the line depends on: `uses`, any placeholder it contains, and always the date, so a line written
+     * yesterday ("{E1} tomorrow") never carries over to today (brief-date-carryover).
+     */
+    fun named(): List<String> = (uses + EVENT_PLACEHOLDER.findAll(line).map { it.groupValues[1] } + "date").distinct().sorted()
 
     companion object {
         private val json = Json { ignoreUnknownKeys = false }
@@ -298,7 +332,8 @@ internal fun fingerprint(named: List<String>, f: BriefFacts): String {
  * brief-slot-attempt):
  * - the slot is recorded as attempted BEFORE the call; if that write fails there is no call;
  * - a file that exists but is unreadable or malformed counts as exhausted for the current month and is rewritten so;
- * - a stored month or slot later than now (clock moved back) means no call and no rewrite;
+ * - a stored month or slot later than now (clock moved back) means no call and no rewrite; more than a month ahead is
+ *   malformed (exhausted for now, rewritten so it heals next month);
  * - no file at all is a fresh month.
  * One attempt per slot whatever the outcome; no refunds.
  */
@@ -324,7 +359,12 @@ class BriefLedger(
             val ok = p.size == 3 && storedMonth != null && Regex("""\d{4}-\d{2}""").matches(storedMonth) && storedCount != null &&
                 storedCount in 0..10_000 && (last == "-" || (last != null && Regex("""\d{4}-\d{2}-\d{2}T\d{2}""").matches(last)))
             if (!ok) return exhaust(month)
-            if (storedMonth!! > month) return false
+            // More than a month ahead (a wild clock, or a planted file) would lock the brief for years: malformed, so
+            // exhausted for now and rewritten with the current month, which heals next month (brief-ledger-future-lock).
+            val next = runCatching { java.time.YearMonth.parse(month).plusMonths(1).toString() }.getOrNull() ?: return exhaust(month)
+            val storedOk = runCatching { java.time.YearMonth.parse(storedMonth) }.isSuccess
+            if (!storedOk || storedMonth!! > next || (last != "-" && last!!.substring(0, 7) > next)) return exhaust(month)
+            if (storedMonth > month) return false
             if (last != "-" && last!! > slot) return false
             if (last == slot) return false
             count = if (storedMonth == month) storedCount!! else 0
@@ -347,11 +387,16 @@ class BriefLedger(
 
 // --- engine --------------------------------------------------------------------------------------------------------
 
+/** See [BriefEngine.load]. [raw] holds no title. */
+class BriefSource(val raw: String?) {
+    override fun toString(): String = "BriefSource(${raw?.length} chars)"
+}
+
 /**
  * Generates and serves the brief. [refreshIfDue] is called on the home screen's minute tick; it does nothing unless the
- * switch is on, a key exists and [BriefLedger] grants the slot, and then makes exactly one request. [line] is what the
- * dock band draws: the cached line while the facts it names are unchanged, else the free [templateLine]; it never throws
- * and never shows error text. [cache] holds `{line, uses, fingerprint, at}` (no titles) in its own small file.
+ * switch is on, a key exists, the facts are not empty and [BriefLedger] grants the slot, and then makes exactly one
+ * request. [line] is what the dock band draws: nothing when switched off; else the cached line while the facts it names
+ * are unchanged, else the free [templateLine] (also with no key); it never throws and never shows error text. [cache] holds `{line, uses, fingerprint, at}` (no titles) in its own small file.
  */
 class BriefEngine(
     private val client: BriefClient,
@@ -363,32 +408,45 @@ class BriefEngine(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun refreshIfDue(facts: BriefFacts) {
+    /**
+     * True only when a new line was cached (the caller redraws). Empty facts (a cold start before the feeds fill in)
+     * return before the ledger, so no slot is spent on them (brief-empty-snapshot).
+     */
+    suspend fun refreshIfDue(facts: BriefFacts): Boolean {
+        if (facts.isEmpty()) return false
         val go = withContext(Dispatchers.IO) { runCatching { enabled() && hasKey() && ledger.tryBegin() }.getOrDefault(false) }
-        if (!go) return
+        if (!go) return false
         val result = try {
             client.post(briefRequestBody(facts))
         } catch (e: CancellationException) {
             throw e // the slot stays spent: no refund, no retry
         } catch (_: Throwable) {
-            return
+            return false
         }
-        val reply = (result as? ClaudeResult.Text)?.let { BriefReply.parse(it.text, facts) } ?: return
+        val reply = (result as? ClaudeResult.Text)?.let { BriefReply.parse(it.text, facts) } ?: return false
         val entry = buildJsonObject {
             put("line", reply.line)
             put("uses", buildJsonArray { reply.uses.forEach { add(it) } })
             put("fingerprint", fingerprint(reply.named(), facts))
             put("at", clock().toString())
         }.toString()
-        if (entry.length <= BriefConfig.MAX_CACHE_BYTES) withContext(Dispatchers.IO) { runCatching { cache.write(entry) } }
+        if (entry.length > BriefConfig.MAX_CACHE_BYTES) return false
+        return withContext(Dispatchers.IO) { runCatching { cache.write(entry) }.isSuccess }
     }
 
-    /** The line to draw now, or null when there is nothing to say. Placeholders are filled here, with "Busy" in Quiet. */
-    fun line(facts: BriefFacts, quiet: Boolean): String? {
-        val cached = runCatching { cachedFor(facts) }.getOrNull()
-        val filled = cached?.let { BriefText.clean(fillPlaceholders(it, facts.events, quiet)) }?.takeIf { it.isNotEmpty() && it.length <= BriefConfig.MAX_LINE }
-        return filled ?: templateLine(facts, quiet)
+    /**
+     * What the line is drawn from, read on IO (the switch and the cache file): null when the brief is switched off (no
+     * line at all, not even the template); else [BriefSource.raw], the validated cached line with placeholders still in
+     * it, or null for the template. No titles in it, so it may be held across a Quiet change.
+     */
+    fun load(facts: BriefFacts): BriefSource? {
+        if (!runCatching { enabled() }.getOrDefault(false)) return null
+        return BriefSource(runCatching { cachedFor(facts) }.getOrNull())
     }
+
+    /** [load] then [briefLine]: the line to draw now, or null (switched off, or nothing to say). */
+    fun line(facts: BriefFacts, quiet: Boolean, fits: (String) -> Boolean = { true }): String? =
+        load(facts)?.let { briefLine(it.raw, facts, quiet, fits) }
 
     private fun cachedFor(facts: BriefFacts): String? {
         val text = cache.read() ?: return null

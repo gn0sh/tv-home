@@ -12,20 +12,19 @@ import java.util.concurrent.atomic.AtomicBoolean
 class BriefTicker(private val engine: BriefEngine, private val settleMs: Long = SETTLE_MS) {
     private val busy = AtomicBoolean(false)
 
-    /** True when a refresh ran (the caller then redraws the line from the cache). Never throws but for cancellation. */
+    /** True when a new line was cached ([BriefEngine.refreshIfDue]; the caller then re-reads it). Never throws but for cancellation. */
     suspend fun onTick(facts: BriefFacts, visibleForMs: Long?): Boolean {
         if (visibleForMs == null || visibleForMs < settleMs) return false
         if (!busy.compareAndSet(false, true)) return false
         try {
-            engine.refreshIfDue(facts)
+            return engine.refreshIfDue(facts)
         } finally {
             busy.set(false)
         }
-        return true
     }
 
-    /** The line to draw ([BriefEngine.line]): reads the small cache file, so call it off the main thread. */
-    fun line(facts: BriefFacts, quiet: Boolean): String? = engine.line(facts, quiet)
+    /** [BriefEngine.load]: reads the switch and the small cache file, so call it off the main thread. */
+    fun load(facts: BriefFacts): BriefSource? = engine.load(facts)
 
     override fun toString(): String = "BriefTicker"
 
