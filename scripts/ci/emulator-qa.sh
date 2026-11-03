@@ -1124,6 +1124,16 @@ fi
     q2_restart
     watch_shown || fail "q2: an upcoming game today with a mapped, installed app shows no Watch pill"
     pass "q2: game day with a mapped, installed app shows the Watch pill"
+    # watch-pill-a11y: each dock pill's description must be on the node that takes focus and clicks (TalkBack reads the
+    # focused node; a description on a separate, non-focusable node is never spoken when the pill is focused).
+    ui=$(ui_text)
+    for d in "Watch the game on YouTube" "Quiet mode, off" "Ask Claude"; do
+      node=$(grep -oE '<node [^>]*>' <<<"$ui" | grep -F "content-desc=\"$d" | head -1 || true)
+      [[ -n $node ]] || fail "q2: no node describes '$d'"
+      grep -qF 'focusable="true"' <<<"$node" && grep -qF 'clickable="true"' <<<"$node" \
+        || fail "q2: the '$d' description is not on a focusable, clickable node (watch-pill-a11y): $node"
+    done
+    pass "q2: the Watch, Quiet and Ask pills carry their descriptions on their focusable nodes"
     # Focus order (R1): apps row > Calendar > Ask > Watch > Quiet.
     first=$(focus_after q2)
     case ${first%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*|"Quiet mode"*|"Watch the game on "*) fail "q2: first focus is '${first%%|*}', not the apps row (R1)" ;; esac
