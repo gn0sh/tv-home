@@ -168,4 +168,100 @@ class WeekGridTest {
         val b = weekGrid(week(listOf(timed("A", 0, 13, 5, 14))), true, now, zone, true, false).columns[0].blocks.single()
         assertEquals("13:05", b.time)
     }
+
+    // ---- fit (board-blocks-readable) --------------------------------------------------------------------------------
+
+    /** Same lane never overlaps, and every block is at least one text line tall. */
+    private fun assertReadable(g: WeekGrid, fontScale: Float = 1f) {
+        val hourDp = g.hourDp!!
+        for (c in g.columns) {
+            for (b in c.blocks) {
+                assertTrue(BlockText.blockHeight(b, hourDp) >= BlockText.oneLineDp(fontScale) - 0.01f, "$b too short at $hourDp dp/h")
+                assertTrue(b.startMin >= g.startHour * 60 && b.endMin <= g.endHour * 60, "$b outside ${g.startHour}-${g.endHour}")
+            }
+            for (a in c.blocks) for (b in c.blocks) if (a !== b && a.lane == b.lane) {
+                assertTrue(a.endMin <= b.startMin || b.endMin <= a.startMin, "$a and $b share lane ${a.lane}")
+            }
+        }
+    }
+
+    /** The emulator tour's week at 1280x720: 6:30 gym and a movie to 22:30 used to stretch the grid to 6 AM-11 PM (23 dp/h). */
+    private fun tourWeek() = week(
+        listOf(timed("Gym", 0, 6, 30, 7, 30), timed("Plumber", 0, 10, 0, 10, 30), timed("Lunch", 0, 12, 0, 13), timed("Pickup", 0, 15, 15, 15, 45),
+            timed("Trash", 0, 19, 45, 20), timed("Movie night", 0, 20, 30, 22, 30)),
+        listOf(timed("Gym", 1, 7, 0, 7, 45), timed("Dentist", 1, 9, 0, 10), timed("Standup", 1, 9, 30, 10), timed("Lunch", 1, 12, 30, 13, 30),
+            timed("Pickup", 1, 15, 15, 15, 45), timed("Dinner", 1, 18, 30, 20, 30)),
+        listOf(timed("Gym", 2, 7, 0, 8), timed("Drop-off", 2, 8, 0, 8, 20), timed("Standup", 2, 9, 0, 9, 30), timed("Vet", 2, 9, 15, 10, 15),
+            timed("Design review", 2, 10, 30, 12), timed("Vendor", 2, 11, 0, 11, 30), timed("Lunch", 2, 12, 0, 13), timed("Budget", 2, 13, 0, 14),
+            timed("Interview", 2, 13, 30, 14, 15), timed("1:1", 2, 14, 30, 15), timed("Pickup", 2, 15, 15, 15, 45), timed("Piano", 2, 16, 0, 16, 45),
+            timed("Soccer", 2, 17, 30, 19), timed("PTA", 2, 19, 0, 20, 30), timed("Call Mom", 2, 20, 30, 21)),
+        emptyList(), emptyList(),
+        listOf(timed("Hotel", 5, 21, 0, 22)), emptyList(),
+    )
+
+    @Test fun tourWeekFitsWithEveryBlockReadable() {
+        val raw = weekGrid(tourWeek(), true, now, zone, false, false)
+        assertEquals(6, raw.startHour); assertEquals(23, raw.endHour)
+        val g = raw.fit(GridFit(bodyDp = 440f, innerColDp = 150f, moreRowDp = 28f))
+        assertTrue(g.hours <= 13, "cut to the hours that fit: ${g.startHour}-${g.endHour}")
+        assertTrue(g.hourDp!! >= BlockText.MIN_HOUR_DP)
+        assertReadable(g)
+        // The early gym is pinned to the top, still labelled with its own time; the day list has it in full.
+        val gym = g.columns[0].blocks.first { it.title == "Gym" }
+        assertEquals(g.startHour * 60, gym.startMin); assertEquals("6:30", gym.time)
+        // Most columns need no "more" row: blocks are lifted to one line, and only the busy day's 3-wide overlaps may hide.
+        assertEquals(0, g.columns[0].hidden); assertEquals(0, g.columns[1].hidden)
+        assertEquals(g.columns.any { it.hidden > 0 }, g.moreRow)
+    }
+
+    /** Short back-to-back events lifted to one line overlap as drawn, so they go side by side instead of covering each other. */
+    @Test fun packingUsesTheDrawnSlots() {
+        val items = listOf(timed("A", 0, 9, 0, 9, 15), timed("B", 0, 9, 15, 9, 30), timed("C", 0, 9, 30, 9, 45), timed("D", 0, 11, 0, 11, 15))
+        val g = weekGrid(week(items), true, now, zone, false, false).fit(GridFit(400f, 150f, 28f))
+        assertReadable(g)
+        val (a, b, c, d) = g.columns[0].blocks
+        assertEquals(setOf(0, 1), setOf(a.lane, b.lane), "9:00 and 9:15 drawn one line tall overlap")
+        assertEquals(1, d.lanes, "11:00 is on its own")
+        assertTrue(c.lanes >= 2)
+        assertFalse(g.moreRow)
+    }
+
+    @Test fun moreRowOnlyWhenABlockHasNoRoom() {
+        val calm = weekGrid(week(listOf(timed("A", 0, 9, 0, 10), timed("B", 0, 9, 0, 10))), true, now, zone, false, false)
+        val fitted = calm.fit(GridFit(440f, 150f, 28f))
+        assertFalse(fitted.moreRow); assertEquals(0, fitted.columns[0].hidden)
+        assertEquals(440f / fitted.hours, fitted.hourDp!!, 0.01f)
+        val busy = weekGrid(week(List(5) { timed("E$it", 0, 9, 0, 10) }), true, now, zone, false, false).fit(GridFit(440f, 150f, 28f))
+        assertTrue(busy.moreRow)
+        assertEquals(5, busy.columns[0].hidden, "five side by side are 26 dp wide: no text")
+        assertEquals(412f / busy.hours, busy.hourDp!!, 0.01f, "the row's height comes off the grid")
+    }
+
+    @Test fun rangeKeptWhenItFits() {
+        val g = weekGrid(week(listOf(timed("A", 0, 9, 0, 10))), true, now, zone, false, false).fit(GridFit(600f, 150f, 28f))
+        assertEquals(8, g.startHour); assertEquals(21, g.endHour)
+        assertEquals(14 * 60 + 30, g.nowMin)
+        assertReadable(g)
+    }
+
+    @Test fun fontScaleTakesFewerHoursAndKeepsOneLine() {
+        val g = weekGrid(tourWeek(), true, now, zone, false, false).fit(GridFit(440f, 150f, 28f, fontScale = 1.3f))
+        assertTrue(g.hourDp!! >= BlockText.MIN_HOUR_DP * 1.3f)
+        assertReadable(g, 1.3f)
+    }
+
+    @Test fun nowLineFollowsTheFittedRange() {
+        val early = today.atTime(6, 45).atZone(zone).toInstant()
+        val raw = weekGrid(tourWeek(), true, early, zone, false, false)
+        assertEquals(6 * 60 + 45, raw.nowMin)
+        val g = raw.fit(GridFit(440f, 150f, 28f))
+        assertEquals(if (g.startHour <= 6) 6 * 60 + 45 else null, g.nowMin)
+    }
+
+    @Test fun emptyDayListSaysNothingScheduledOnlyForKnownDays() {
+        val g = weekGrid(week(emptyList(), emptyList()), true, now, zone, false, false)
+        assertEquals("Nothing scheduled", g.columns[1].emptyText)
+        assertFalse(g.columns[2].known)
+        assertEquals(BoardCopy.NOT_LOADED, g.columns[2].emptyText)
+    }
 }

@@ -90,7 +90,11 @@ class BoardTest {
         assertEquals(listOf(BoardAlert("Tornado Warning until 9:45 AM", true), BoardAlert("Flood Watch", false)), b.alerts)
         val unknown = board(inputs(feeds = FeedsSnapshot(weather = Stamped(weather, now), alerts = Stamped(set, now.minus(Duration.ofHours(1))), alertsChecked = true)))
         assertTrue(unknown.alerts.isEmpty())
-        assertEquals(BoardCopy.ALERTS_UNKNOWN, unknown.weather.lines.last())
+        // On the status row, not as a hidden fourth line of the weather cell; the strip keeps to two lines when fresh.
+        assertTrue(unknown.alertsUnknown)
+        assertTrue(BoardCopy.ALERTS_UNKNOWN !in unknown.weather.lines)
+        assertEquals(2, unknown.stripLines)
+        assertTrue(!b.alertsUnknown)
     }
 
     @Test fun calendarMessageOrAge() {

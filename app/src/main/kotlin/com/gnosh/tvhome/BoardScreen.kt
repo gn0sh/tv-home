@@ -67,8 +67,10 @@ import tvhome.core.board.BoardCell
 import tvhome.core.board.BoardForecast
 import tvhome.core.board.BoardInputs
 import tvhome.core.board.GridColumn
+import tvhome.core.board.GridFit
 import tvhome.core.board.WeekGrid
 import tvhome.core.board.board
+import tvhome.core.board.fit
 import tvhome.core.feeds.FeedsSnapshot
 import tvhome.core.feeds.LiveFeeds
 import tvhome.core.feeds.PanelSwitches
@@ -166,7 +168,7 @@ fun BoardFullScreen(theme: HomeTheme, quiet: Boolean, onClose: () -> Unit) {
             ) {
                 StatusRows(model, shown)
                 WeekView(model, shown, columnFocus, onFocusColumn = { focusedColumn = it }, onOpen = { i -> openDay = i }, modifier = Modifier.weight(1f))
-                if (feedsReady) BottomStrip(model, shown) else Spacer(Modifier.fillMaxWidth().height(bottomStripDp().dp))
+                if (feedsReady) BottomStrip(model, shown) else Spacer(Modifier.fillMaxWidth().height((2 * lineDp()).dp))
             }
             LaunchedEffect(Unit) {
                 // On open, and back from a day list: focus the column it came from (today at first).
@@ -187,12 +189,12 @@ private const val LINE_SP = GlanceTokens.MIN_SP // 22 sp: 33 px at 1080p
 private const val LINE_DP = 28
 private const val MAX_ALL_DAY_ROWS = 2
 
+/** Header lines are set tight (22 sp text on 24 sp lines): the hours below get the room. */
+private const val HEADER_LINE_SP = 24
+
 /** A 22 sp line's height at the user's font scale (board-fontscale): fixed rows grow with the text. */
 @Composable
 private fun lineDp(): Float = LINE_DP * LocalDensity.current.fontScale.coerceAtLeast(1f)
-
-@Composable
-private fun bottomStripDp(): Float = 3 * lineDp()
 
 private val BLOCK_FILL = Color(0xFF2B4C7E)
 private val TODAY_FILL = Color(0xFF18202A)
@@ -216,12 +218,21 @@ private fun StatusRows(model: Board, theme: HomeTheme) {
         }
     }
     val age = model.calendarAge
-    if (age != null) {
-        Text(
-            (if (age.emphasised) "⚠ " else "") + age.text,
-            color = if (age.emphasised) AMBER else color(theme.secondaryText), fontSize = LINE_SP.sp,
-            fontWeight = if (age.emphasised) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+    if (age != null || model.alertsUnknown) {
+        // One row: the calendar's age when it matters, then "Alerts unknown" (amber) when the alerts could not be loaded.
+        Row {
+            if (age != null) {
+                Text(
+                    (if (age.emphasised) "⚠ " else "") + age.text,
+                    color = if (age.emphasised) AMBER else color(theme.secondaryText), fontSize = LINE_SP.sp,
+                    fontWeight = if (age.emphasised) FontWeight.Bold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+            if (model.alertsUnknown) {
+                Text((if (age != null) " · " else "") + tvhome.core.board.BoardCopy.ALERTS_UNKNOWN, color = AMBER, fontSize = LINE_SP.sp, maxLines = 1)
+            }
+        }
     }
 }
 
@@ -235,44 +246,47 @@ private fun WeekView(
     onOpen: (Int) -> Unit,
     modifier: Modifier,
 ) {
-    val grid = model.grid
-    val allDayRows = minOf(grid.maxAllDay, MAX_ALL_DAY_ROWS)
+    val raw = model.grid
+    val allDayRows = minOf(raw.maxAllDay, MAX_ALL_DAY_ROWS)
+    // The rain line under the temperatures only when some day shows a chance (it answers "umbrella?"); else two lines.
+    val rainRow = model.forecast.any { it?.rain != null }
     Column(modifier) {
         Row(Modifier.fillMaxWidth()) {
             Spacer(Modifier.width(GUTTER_DP.dp))
-            grid.columns.forEachIndexed { i, c -> HeaderCell(c, model.forecast.getOrNull(i), theme) }
+            raw.columns.forEachIndexed { i, c -> HeaderCell(c, model.forecast.getOrNull(i), rainRow, theme) }
         }
         if (allDayRows > 0) {
             Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 Spacer(Modifier.width(GUTTER_DP.dp))
-                grid.columns.forEach { c -> AllDayCell(c, allDayRows, theme) }
+                raw.columns.forEach { c -> AllDayCell(c, allDayRows, theme) }
             }
         }
         val moreRowDp = lineDp()
         val fontScale = LocalDensity.current.fontScale
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(top = 6.dp)) {
-            val bodyDp = maxHeight.value - moreRowDp // the "more" row under the grid
-            val hourDp = bodyDp / grid.hours
+            // board-blocks-readable: :core fits the hours and the blocks to the measured room (one line per block at
+            // least, overlaps packed as drawn) and says whether the "more" row is needed at all.
+            val bodyDp = maxHeight.value
+            val innerColDp = (maxWidth.value - GUTTER_DP) / raw.columns.size - 2 * COLUMN_PAD_DP
+            val grid = remember(raw, bodyDp, innerColDp, fontScale, moreRowDp) {
+                raw.fit(GridFit(bodyDp, innerColDp, moreRowDp, fontScale))
+            }
+            val hourDp = grid.hourDp ?: (bodyDp / grid.hours)
             Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().height(bodyDp.dp)) {
+                Row(Modifier.fillMaxWidth().height((hourDp * grid.hours).dp)) {
                     HourAxis(grid, hourDp, theme)
                     grid.columns.forEachIndexed { i, c ->
                         DayColumn(grid, c, hourDp, theme, focus[i], onFocus = { onFocusColumn(i) }, onOpen = { if (c.known) onOpen(i) },
                             message = if (i == 0) model.calendarMessage else null)
                     }
                 }
-                Row(Modifier.fillMaxWidth().height(moreRowDp.dp)) {
-                    Spacer(Modifier.width(GUTTER_DP.dp))
-                    BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
-                        val colDp = maxWidth.value / grid.columns.size
-                        Row(Modifier.fillMaxSize()) {
-                            grid.columns.forEach { c ->
-                                // Same sizes as DayColumn draws: the column's inner width (less its 2 dp padding each side).
-                                val hidden = BlockText.hiddenCount(c, hourDp, colDp - 2 * COLUMN_PAD_DP, fontScale)
-                                Box(Modifier.width(colDp.dp).fillMaxHeight().padding(horizontal = 4.dp), contentAlignment = Alignment.CenterStart) {
-                                    if (hidden > 0) {
-                                        Text("$hidden more · OK", color = color(theme.secondaryText), fontSize = LINE_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
+                if (grid.moreRow) {
+                    Row(Modifier.fillMaxWidth().height(moreRowDp.dp)) {
+                        Spacer(Modifier.width(GUTTER_DP.dp))
+                        grid.columns.forEach { c ->
+                            Box(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 4.dp), contentAlignment = Alignment.CenterStart) {
+                                if (c.hidden > 0) {
+                                    Text("${c.hidden} more · OK", color = color(theme.secondaryText), fontSize = LINE_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }
@@ -284,7 +298,7 @@ private fun WeekView(
 }
 
 @Composable
-private fun RowScope.HeaderCell(c: GridColumn, f: BoardForecast?, theme: HomeTheme) {
+private fun RowScope.HeaderCell(c: GridColumn, f: BoardForecast?, rainRow: Boolean, theme: HomeTheme) {
     Column(
         Modifier.weight(1f)
             .background(if (c.isToday) TODAY_FILL else Color.Transparent, RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
@@ -292,9 +306,13 @@ private fun RowScope.HeaderCell(c: GridColumn, f: BoardForecast?, theme: HomeThe
             .clearAndSetSemantics { },
     ) {
         Text(c.heading, color = if (c.isToday) color(theme.focusRing) else color(theme.text), fontSize = LINE_SP.sp,
-            fontWeight = if (c.isToday) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(f?.temps ?: "", color = color(theme.secondaryText), fontSize = LINE_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(f?.rain ?: "", color = AMBER, fontSize = LINE_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            lineHeight = HEADER_LINE_SP.sp, fontWeight = if (c.isToday) FontWeight.Bold else FontWeight.Medium, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+        Text(f?.temps ?: "", color = color(theme.secondaryText), fontSize = LINE_SP.sp, lineHeight = HEADER_LINE_SP.sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+        if (rainRow) {
+            Text(f?.rain ?: "", color = AMBER, fontSize = LINE_SP.sp, lineHeight = HEADER_LINE_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
@@ -377,7 +395,7 @@ private fun RowScope.DayColumn(
             Box(
                 Modifier
                     .offset(x = (laneW * b.lane + 2).dp, y = (y + 1).dp)
-                    .size(w.dp, (h - 2).coerceAtLeast(2f).dp)
+                    .size(w.dp, (h - BlockText.GAP_Y_DP).coerceAtLeast(2f).dp)
                     .background(BLOCK_FILL, RoundedCornerShape(4.dp))
                     .padding(horizontal = 4.dp, vertical = BlockText.PAD_DP.dp),
             ) {
@@ -402,7 +420,8 @@ private fun RowScope.DayColumn(
 /** Next Predators game, next Ohio State game, today's weather: three boxes side by side. */
 @Composable
 private fun BottomStrip(model: Board, theme: HomeTheme) {
-    Row(Modifier.fillMaxWidth().heightIn(min = bottomStripDp().dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+    // As tall as its tallest cell: two lines when fresh, three when something says its age (Board.stripLines).
+    Row(Modifier.fillMaxWidth().heightIn(min = (model.stripLines * lineDp()).dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         for (cell in model.games) CellBox(cell, theme)
         CellBox(model.weather, theme)
     }
@@ -447,7 +466,8 @@ private fun DayList(c: GridColumn, theme: HomeTheme, onClose: () -> Unit) {
             overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(12.dp))
         if (c.rows.isEmpty()) {
-            Text(tvhome.core.ui.Copy.NOTHING_SCHEDULED, color = color(theme.secondaryText), fontSize = Tokens.ROW_SP.sp,
+            // "Nothing scheduled" only for a day the calendar covers; otherwise "Not loaded yet" (GridColumn.emptyText).
+            Text(c.emptyText, color = color(theme.secondaryText), fontSize = Tokens.ROW_SP.sp,
                 modifier = Modifier.focusRequester(panel).focusable())
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.ROW_GAP_DP.dp)) {

@@ -29,6 +29,11 @@ data class GridBlock(
     val time: String,
     val title: String,
     val description: String,
+    /** The event's own minutes on this day (wall clock, before clipping to the grid): what [fit] re-clips from. */
+    val spanStart: Int = startMin,
+    val spanEnd: Int = endMin,
+    /** Started the day before (drawn from midnight); never widens the range. */
+    val continues: Boolean = false,
 ) {
     override fun toString(): String = "GridBlock($startMin-$endMin, lane $lane/$lanes, title=${title.length} chars)"
 }
@@ -47,8 +52,16 @@ data class GridColumn(
     val blocks: List<GridBlock>,
     val rows: List<RowModel>,
     val description: String,
+    /** Blocks too narrow for any text once fitted ([fit]): the column's "N more · OK" count. */
+    val hidden: Int = 0,
 ) {
     val eventCount: Int get() = rows.size
+
+    /**
+     * The day list's line when it has no rows: "Nothing scheduled" only for a day the calendar covers; a day it does not
+     * cover says "Not loaded yet" (never "Nothing scheduled" for data we do not have).
+     */
+    val emptyText: String get() = if (known) Copy.NOTHING_SCHEDULED else BoardCopy.NOT_LOADED
     override fun toString(): String = "GridColumn($date, known=$known, ${allDay.size} all-day, ${blocks.size} blocks)"
 }
 
@@ -59,6 +72,11 @@ data class WeekGrid(
     val columns: List<GridColumn>,
     /** Minutes from midnight for the now line on the today column; null when now is outside the grid's hours. */
     val nowMin: Int?,
+    /** Set by [fit]: dp per hour, and whether the "N more" row under the grid is needed (some block has no room for text). */
+    val hourDp: Float? = null,
+    val moreRow: Boolean = false,
+    /** Now as minutes from local midnight (wall clock), whatever the range: [fit] re-derives [nowMin] from it. */
+    val nowOfDay: Int = -1,
 ) {
     val hours: Int get() = endHour - startHour
 
@@ -86,8 +104,17 @@ object BlockText {
     fun lines(heightDp: Float, widthDp: Float, fontScale: Float = 1f): Int {
         val k = fontScale.coerceAtLeast(1f)
         if (widthDp < MIN_WIDTH_DP * k) return 0
-        return ((heightDp - 2 * PAD_DP) / (LINE_DP * k)).toInt().coerceIn(0, 4)
+        return ((heightDp - GAP_Y_DP - 2 * PAD_DP) / (LINE_DP * k) + 0.001f).toInt().coerceIn(0, 4)
     }
+
+    /** Space the app leaves between blocks stacked in time (the drawn box is this much shorter than its slot). */
+    const val GAP_Y_DP = 2f
+
+    /** The smallest slot that still carries one line of "time title" at [fontScale]. */
+    fun oneLineDp(fontScale: Float = 1f): Float = LINE_DP * fontScale.coerceAtLeast(1f) + 2 * PAD_DP + GAP_Y_DP
+
+    /** An hour is drawn at least this tall (per font scale) when the range has to be cut to fit ([fit]). */
+    const val MIN_HOUR_DP = 32f
 
     /** Gap between lanes and around a block, dp. */
     const val BLOCK_GAP_DP = 4f
@@ -158,7 +185,7 @@ fun weekGrid(week: List<AgendaDay>, known: Boolean, now: Instant, zone: ZoneId, 
         val blocks = drawn.mapIndexed { i, (s, a, b) ->
             val title = QuietMode.title(s.item.title, quiet, max = MAX_TITLE)
             val time = if (s.continues) Copy.CONTINUES else shortTime(s.start, is24h)
-            GridBlock(a, b, lanes[i].first, lanes[i].second, time, title, "$time, $title")
+            GridBlock(a, b, lanes[i].first, lanes[i].second, time, title, "$time, $title", s.start, s.end, s.continues)
         }
         val rows = day.items.map { rowOf(it, zone, is24h, quiet) }
         val count = rows.size
@@ -167,7 +194,7 @@ fun weekGrid(week: List<AgendaDay>, known: Boolean, now: Instant, zone: ZoneId, 
     }
     val nowLocal = now.atZone(zone)
     val nowMinute = nowLocal.hour * 60 + nowLocal.minute
-    return WeekGrid(startHour, endHour, columns, nowMinute.takeIf { it in lo until hi })
+    return WeekGrid(startHour, endHour, columns, nowMinute.takeIf { it in lo until hi }, nowOfDay = nowMinute)
 }
 
 private const val MAX_TITLE = 80
@@ -243,4 +270,65 @@ private fun rowOf(item: AgendaItem, zone: ZoneId, is24h: Boolean, quiet: Boolean
     }
     val title = QuietMode.title(item.title, quiet, max = Int.MAX_VALUE)
     return RowModel(time, title, "$time, $title")
+}
+
+/**
+ * The room the grid body has, as the app measures it: [bodyDp] tall (the hours, without the "more" row), each day column
+ * [innerColDp] wide inside its padding, [moreRowDp] for the "N more · OK" row, at the user's [fontScale].
+ */
+data class GridFit(val bodyDp: Float, val innerColDp: Float, val moreRowDp: Float, val fontScale: Float = 1f)
+
+/**
+ * The grid sized to [f] (board-blocks-readable): every block gets at least one line of "time title", like a calendar's
+ * week view, and overlaps are packed on those drawn slots so a lifted short block never covers the next one.
+ *
+ * - Hours: an hour is at least [BlockText.MIN_HOUR_DP] (font-scaled). When the week's range does not fit, the window of
+ *   the hours that fit is the one where most events start, then the one covering most event minutes, then the one
+ *   nearest [WeekGrid.DEFAULT_START]. An event outside it is pinned to the top or bottom edge, still labelled with its
+ *   own start time, and the day list has it in full.
+ * - Blocks: at least [BlockText.oneLineDp] tall. A block still without text is one too narrow (many side-by-side
+ *   overlaps); only then does its column count it in [GridColumn.hidden] and the grid reserve the "more" row
+ *   ([WeekGrid.moreRow]), fitted again in the smaller height.
+ */
+fun WeekGrid.fit(f: GridFit): WeekGrid {
+    val first = fitTo(f.bodyDp, f)
+    if (first.columns.none { it.hidden > 0 }) return first
+    return fitTo(f.bodyDp - f.moreRowDp, f).copy(moreRow = true)
+}
+
+private fun WeekGrid.fitTo(bodyDp: Float, f: GridFit): WeekGrid {
+    val k = f.fontScale.coerceAtLeast(1f)
+    val body = bodyDp.coerceAtLeast(1f)
+    val maxHours = (body / (BlockText.MIN_HOUR_DP * k)).toInt().coerceIn(1, 24)
+    val (start, end) = if (hours <= maxHours) startHour to endHour else bestWindow(maxHours)
+    val hourDp = body / (end - start)
+    val lo = start * 60
+    val hi = end * 60
+    val minSlot = maxOf(WeekGrid.MIN_BLOCK_MIN, kotlin.math.ceil(BlockText.oneLineDp(k) / hourDp * 60f).toInt()).coerceAtMost(hi - lo)
+    val cols = columns.map { c ->
+        if (!c.known) return@map c.copy(hidden = 0)
+        val kept = c.blocks.filter { !(it.continues && it.spanEnd <= lo) }
+        val slots = kept.map { b ->
+            val a = b.spanStart.coerceIn(lo, hi - minSlot)
+            a to maxOf(b.spanEnd.coerceIn(lo, hi), a + minSlot)
+        }
+        val lanes = packLanes(slots)
+        val blocks = kept.mapIndexed { i, b ->
+            b.copy(startMin = slots[i].first, endMin = slots[i].second, lane = lanes[i].first, lanes = lanes[i].second)
+        }
+        val placed = c.copy(blocks = blocks)
+        placed.copy(hidden = BlockText.hiddenCount(placed, hourDp, f.innerColDp, f.fontScale))
+    }
+    return copy(startHour = start, endHour = end, columns = cols, nowMin = nowOfDay.takeIf { it in lo until hi }, hourDp = hourDp, moreRow = false)
+}
+
+/** The [hours]-long window inside the current range that shows the most of the week (see [fit]). */
+private fun WeekGrid.bestWindow(hours: Int): Pair<Int, Int> {
+    val blocks = columns.filter { it.known }.flatMap { it.blocks }
+    fun starts(s: Int) = blocks.count { !it.continues && it.spanStart >= s * 60 && it.spanStart < (s + hours) * 60 }
+    fun minutes(s: Int) = blocks.sumOf { maxOf(0, minOf(it.spanEnd, (s + hours) * 60) - maxOf(it.spanStart, s * 60)) }
+    val best = (startHour..endHour - hours).sortedWith(
+        compareByDescending<Int> { starts(it) }.thenByDescending { minutes(it) }.thenBy { kotlin.math.abs(it - WeekGrid.DEFAULT_START) },
+    ).first()
+    return best to best + hours
 }
