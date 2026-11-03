@@ -2,6 +2,7 @@ package tvhome.core.ui
 
 import tvhome.core.feeds.GameDay
 import tvhome.core.feeds.TeamGame
+import tvhome.core.sky.SunPosition
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -33,18 +34,37 @@ data class HeroTheme(
         /**
          * Game day beats holiday beats time of day (M2f). [game] is the followed game that owns the hero, if any (see
          * [GameDay.select]); a live game is chosen over a scheduled one there, so it wins over everything. Weather never
-         * changes the theme: it is a chip and a motif overlay in the app.
+         * changes the theme: it is a chip and a motif overlay in the app. [sun] is the real sun now, when a location is
+         * set (see [at]).
          */
-        fun resolve(date: LocalDate, time: LocalTime, game: TeamGame?): HeroTheme =
-            if (game != null) forGame(game) else at(date, time)
+        fun resolve(date: LocalDate, time: LocalTime, game: TeamGame?, sun: SunPosition? = null): HeroTheme =
+            if (game != null) forGame(game) else at(date, time, sun)
 
         fun forGame(game: TeamGame): HeroTheme {
             val t = game.team
             return HeroTheme(t.backdropTop, t.backdropBottom, t.accent, HeroMotif.GAME, GameDay.badge(game))
         }
 
-        /** Holidays win over time of day. Time of day: morning 5-11, day 11-17, evening 17-21, night 21-5. */
-        fun at(date: LocalDate, time: LocalTime): HeroTheme = holiday(date) ?: timeOfDay(time)
+        /**
+         * Holidays win over time of day. With the real [sun] (a location is set), time of day follows the sky: night once
+         * the sun is more than 6 degrees down (civil dusk to civil dawn), the dawn or sunset scene in the twilight and
+         * golden-hour band up to 6 degrees above the horizon (dawn before the sun crosses the meridian, sunset after),
+         * day above it. Without a location, the clock: morning 5-11, day 11-17, evening 17-21, night 21-5.
+         */
+        fun at(date: LocalDate, time: LocalTime, sun: SunPosition? = null): HeroTheme =
+            holiday(date) ?: if (sun != null) bySky(sun) else timeOfDay(time)
+
+        /** Degrees: civil twilight's end. Below it the scene is night. */
+        const val NIGHT_BELOW = -6.0
+
+        /** Degrees: the golden hour's top. From [NIGHT_BELOW] up to it the scene is dawn or sunset. */
+        const val GOLDEN_BELOW = 6.0
+
+        private fun bySky(sun: SunPosition): HeroTheme = when {
+            sun.elevation < NIGHT_BELOW -> NIGHT
+            sun.elevation < GOLDEN_BELOW -> if (sun.morning) MORNING else EVENING
+            else -> DAY
+        }
 
         private val HALLOWEEN = HeroTheme(0x120A1E, 0x3A1A12, 0xFF9A3C, HeroMotif.MOON_BATS, "HALLOWEEN")
         private val CHRISTMAS = HeroTheme(0x0A2418, 0x1B4A36, 0xFF8A80, HeroMotif.SNOW, "CHRISTMAS")
