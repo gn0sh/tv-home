@@ -11,28 +11,33 @@ import tvhome.core.calendar.EventTime
  *
  * Two instances are the same event only when their start and end are equal (all-day dates or instants) AND they share
  * a non-empty UID or their titles match ([titlesMatch]). Different times are never merged. Within one start/end the
- * matches are joined transitively (connected groups), so the result does not depend on feed order
- * (dedupe-order-dependent). Each group keeps ONE member whole, uid and title together (dedupe-title-swap-fields): the
- * one with the longest title (it says most), ties broken by title, then uid. Groups stay in the order of their first
- * member; the agenda sorts the days itself.
+ * events are taken in a fixed order (longest title, then title, then uid), so feed order does not change the result
+ * (dedupe-order-dependent): the first is kept whole, uid and title together (dedupe-title-swap-fields), and only the
+ * events that match it directly, or share a uid with one of those, are dropped (no title-only chains,
+ * dedupe-transitive-chain). Kept events stay in feed order; the agenda sorts the days itself.
  */
 fun dedupeEvents(events: List<EventInstance>): List<EventInstance> {
     if (events.size < 2) return events
     val slots = LinkedHashMap<Pair<EventTime, EventTime?>, MutableList<Int>>()
     events.forEachIndexed { i, e -> slots.getOrPut(e.start to e.end) { ArrayList() } += i }
     val keep = BooleanArray(events.size)
+    val order = compareByDescending<Int> { events[it].title.length }.thenBy { events[it].title }.thenBy { events[it].uid }
     for (idx in slots.values) {
-        if (idx.size == 1) { keep[idx[0]] = true; continue }
-        val parent = IntArray(idx.size) { it }
-        fun find(x: Int): Int { var r = x; while (parent[r] != r) r = parent[r]; return r }
-        for (a in idx.indices) for (b in a + 1 until idx.size) {
-            if (sameEvent(events[idx[a]], events[idx[b]])) parent[find(a)] = find(b)
-        }
-        idx.indices.groupBy(::find).values.forEach { group ->
-            val best = group.map { idx[it] }.minWithOrNull(
-                compareByDescending<Int> { events[it].title.length }.thenBy { events[it].title }.thenBy { events[it].uid },
-            )!!
+        // dedupe-transitive-chain: take the best remaining event, drop only what matches IT directly (plus anything that
+        // shares a uid with a dropped one: a uid is real identity), repeat. "Soccer practice" folds into one child's
+        // event, but "Soccer practice Jack" and "Soccer practice Emma" both stay.
+        val left = idx.sortedWith(order).toMutableList()
+        while (left.isNotEmpty()) {
+            val best = left.removeAt(0)
             keep[best] = true
+            val gone = left.filter { sameEvent(events[best], events[it]) }.toMutableSet()
+            val uids = (gone.map { events[it].uid } + events[best].uid).filter { it.isNotEmpty() }.toMutableSet()
+            do {
+                val more = left.filter { it !in gone && events[it].uid in uids }
+                gone += more
+                more.forEach { uids += events[it].uid }
+            } while (more.isNotEmpty())
+            left.removeAll(gone)
         }
     }
     return events.filterIndexed { i, _ -> keep[i] }

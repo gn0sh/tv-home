@@ -81,8 +81,23 @@ class CalendarDedupeTest {
         val expected = dedupeEvents(events).toSet()
         val rnd = java.util.Random(7)
         repeat(50) { assertEquals(expected, dedupeEvents(events.shuffled(rnd)).toSet()) }
-        assertEquals(1, expected.count { it.start == EventTime.At(now) })
+        assertEquals(1, expected.count { it.start == EventTime.At(now) }, "uid-linked members collapse with the event they match")
         assertTrue(expected.any { it.uid == "y" && it.title == "VIP beard trim" }, "the kept event's uid and title are one member's")
+    }
+
+    /** dedupe-transitive-chain: a generic title folds into one specific event; two specific events never merge via it. */
+    @Test fun titleOnlyChainKeepsBothSpecificEvents() {
+        val t = EventTime.At(now); val e = EventTime.At(now.plusSeconds(3600))
+        val events = listOf(
+            EventInstance("g", "Soccer practice", t, e),
+            EventInstance("j", "Soccer practice Jack", t, e),
+            EventInstance("m", "Soccer practice Emma", t, e),
+        )
+        val rnd = java.util.Random(11)
+        repeat(50) {
+            // Fixed order: the longest title, ties by title, so "...Emma" is taken first and absorbs the generic one.
+            assertEquals(setOf("Soccer practice Emma", "Soccer practice Jack"), dedupeEvents(events.shuffled(rnd)).map { it.title }.toSet())
+        }
     }
 
     @Test fun neverMergesDifferentTimes() {
