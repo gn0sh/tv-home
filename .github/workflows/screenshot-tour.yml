@@ -29,9 +29,9 @@ jobs:
       actions: read # to download the PR run's qa APK artifact
     env:
       TVHOME_BUILD_APP: "true"
-      # PR #30 (watch-defaults b88931e): the android.yml run whose qa APK this tour installs.
-      PR_RUN_ID: "41720350267"
-      PR_HEAD_SHA: b88931e78100f8166e5c2d23c52d9c0acbb270bb
+      # PR #30 (watch-defaults f12d414): the android.yml run whose qa APK this tour installs.
+      PR_RUN_ID: "41724308372"
+      PR_HEAD_SHA: f12d41480a0e4d5d319209508d27d366ec5201f2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

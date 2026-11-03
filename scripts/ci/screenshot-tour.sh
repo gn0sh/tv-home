@@ -316,6 +316,7 @@ quiet() { sh_ content insert --uri "$P/quiet" --bind on:b:"$1"; }
 sh_ content delete --uri "$P/watch" >/dev/null 2>&1 || true
 quiet false >/dev/null 2>&1 || true
 rmc panels/alerts.json; no_games
+FOCUSED=""
 CDE_A=com.example.tourfake.cde; CDE_B=com.example.tourfake.cdetwo; ESPN_F=com.example.tourfake.espn
 for p_ in "$CDE_A" "$CDE_B" "$ESPN_F"; do a uninstall "$p_" >/dev/null 2>&1 || true; done
 fake_install() { # $1 = apk name in $FAKE
@@ -327,32 +328,41 @@ preds_on() { # $1 = networks JSON list: Preds at 19:00 today (now 17:00)
   plant_games "$(game predators "$(at_local 0 19:00)" Blues true "$1")" "$(game ohio-state "$(at_local 4 11:00)" Penn\ State true '["FOX"]')"
 }
 replant() { evening_agenda; plant_weather "$1"; plant_brief; }
-pill_desc() { { grep -oE 'content-desc="Watch the game on [^"]*"' <<<"$UI" | head -1 | sed 's/^content-desc="Watch the game on //; s/"$//'; } || true; }
+pill_desc() { { grep -oE 'content-desc="Watch the game on [^"]*"' <<<"$UI" | head -1 | sed 's/^content-desc="//; s/"$//'; } || true; }
+pill_text() { { grep -oE 'text="Watch( on [^"]*)?"' <<<"$UI" | head -1 | sed 's/^text="//; s/"$//'; } || true; }
 # Focus the pill: Down from the app row lands on the Calendar tile; Right goes Board, Ask Claude, then the pill (seen
 # in the last run, where a focused="true" search on the pill's node never matched and Right went on to Quiet).
 focus_pill() {
   key DPAD_DOWN; key DPAD_RIGHT; key DPAD_RIGHT; key DPAD_RIGHT
   look
-  echo "tour: pill node: $(grep -oE '<node[^>]*Watch the game on [^>]*>' <<<"$UI" | head -1 | grep -oE '(focusable|focused|clickable)="[a-z]+"' | tr '\n' ' ' || true)"
-  echo "tour: focused node: $(grep -oE '<node[^>]*focused="true"[^>]*>' <<<"$UI" | head -1 | grep -oE '(content-desc|text|class)="[^"]*"' | tr '\n' ' ' || true)"
+  FOCUSED=$({ grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | head -1 | grep -oE 'content-desc="[^"]*"' | sed 's/^content-desc="//; s/"$//'; } || true)
+  echo "tour: focused node content-desc: '$FOCUSED'"
+  echo "tour: Ask node: $({ grep -oE 'content-desc="Ask Claude[^"]*"' <<<"$UI" | head -1; } || true)"
+  echo "tour: Quiet node: $({ grep -oE 'content-desc="Quiet mode[^"]*"' <<<"$UI" | head -1; } || true)"
 }
 top_pkg() { { resumed | head -1 | grep -oE '[a-z][a-z0-9_.]+/' | head -1 | tr -d /; } || true; }
-# One pill case: $1 n, $2 name, $3 expected pill network ("" = no pill), $4 expected package
+# One pill case: $1 n, $2 name, $3 expected pill text ("" = no pill), $4 expected package, $5 network
 pill_case() {
-  local n=$1 name=$2 want=$3 pkg=$4 v="" got top
+  local n=$1 name=$2 want=$3 pkg=$4 net=${5:-} v="" got txt top
   home; look
-  got=$(pill_desc)
+  got=$(pill_desc); txt=$(pill_text)
+  echo "tour: $name: pill text '${txt}', description '${got}'"
   if [[ -z $want ]]; then
-    [[ -z $got ]] || v="a Watch pill shows (on $got)"
+    [[ -z $got && -z $txt ]] || v="a Watch pill shows ('$txt')"
     has 'content-desc="Hero card: Predators vs Blues' || v="${v:+$v; }no Predators game-day card"
     shot "$n" "$name" "$v"
     return 0
   fi
-  [[ $got == "$want" ]] || v="pill is '${got:-none}', expected Watch on $want"
+  [[ $txt == "$want" ]] || v="pill text '${txt:-none}', expected '$want'"
+  [[ $got == "Watch the game on $net"* ]] || v="${v:+$v; }description '${got:-none}'"
   shot "$n" "$name" "$v"
   v=""
   focus_pill
-  shot "$((n + 1))" "$name-focused" ""
+  [[ $FOCUSED == "Watch the game on $net"* ]] || v="focused node description '$FOCUSED'"
+  has 'content-desc="Ask Claude\. Talk or type a question\."' || v="${v:+$v; }Ask pill description missing"
+  has 'content-desc="Quiet mode, off\. Turn on to hide event titles\."' || v="${v:+$v; }Quiet pill description missing"
+  shot "$((n + 1))" "$name-focused" "$v"
+  v=""
   key DPAD_CENTER; sleep 3
   top=$(top_pkg)
   echo "tour: OK on the pill opened ${top:-nothing} (expected $pkg)"
@@ -367,12 +377,12 @@ replant "$W_EVENING"
 # (a) broadcast/local network, one CDE app installed: Watch opens CDE.
 fake_install cde-a || true
 preds_on '["SCRIPPS"]'
-pill_case 1 watch-scripps-cde SCRIPPS "$CDE_A"
+pill_case 1 watch-scripps-cde "Watch on CDE" "$CDE_A" SCRIPPS
 
 # (b) streaming only (ESPN+), the ESPN app installed: Watch opens ESPN.
 fake_install espn || true
 replant "$W_EVENING"; preds_on '["ESPN+"]'
-pill_case 4 watch-espnplus-espn ESPN+ "$ESPN_F"
+pill_case 4 watch-espnplus-espn "Watch on ESPN" "$ESPN_F" ESPN+
 
 # (c) a network the defaults do not know: no pill.
 replant "$W_EVENING"; preds_on '["Gnosh Sports Net"]'

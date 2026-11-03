@@ -2,8 +2,11 @@ package tvhome.core.feeds
 
 import java.util.Locale
 
-/** The app a Watch pill opens: [network] is the name to show ("ESPN+"), [packageName] the app to launch. */
-data class WatchTarget(val network: String, val packageName: String)
+/**
+ * The app a Watch pill opens: [network] is the name the game card shows ("ESPN+"), [packageName] the app to launch,
+ * [appLabel] its launcher label when known ("CDE", "ESPN"): the pill says "Watch on <app>" ([tvhome.core.ui.WatchPill]).
+ */
+data class WatchTarget(val network: String, val packageName: String, val appLabel: String? = null)
 
 /**
  * Which app carries a game (spec M7-4.2/4.3, A-M7-8): the feeds do not say, so this is a small map Brian sets over adb.
