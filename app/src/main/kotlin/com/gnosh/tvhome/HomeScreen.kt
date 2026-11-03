@@ -35,6 +35,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -161,6 +164,10 @@ fun HomeScreen(
     val rowState = rememberLazyListState()
     val appFocus = remember { AppFocus() }
     fun close() { returningTo = open; open = null }
+    // The hero's game-day screen and tile colours (Predators navy), or null. Held here, above the full-screen switch,
+    // and in process memory, so coming back from Calendar, Board or Ask (or a recreated activity) shows the same colour
+    // at once instead of flipping when the hero reports again (game-screen-flash-on-return).
+    var gameScreen by remember { mutableStateOf(GameScreenMemo.last) }
     when (open) {
         DOCK_CALENDAR -> { CalendarFullScreen(agenda, theme, onClose = ::close); return }
         DOCK_BOARD -> { BoardFullScreen(theme, quiet = quiet != false, onClose = ::close); return }
@@ -288,11 +295,15 @@ fun HomeScreen(
     val appsTop = remember(theme.tileHeightDp) { mutableStateOf<Int?>(HomeLayout.map(theme.tileHeightDp).apps.y) }
     val canvasTop = remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
-    val shown = if (idleState == IdleState.DIM) theme.dimmed() else theme
+    // Game day (preds-arena): the navy screen and tiles, only when they read with this theme (HomeTheme.forGameDay),
+    // and never in DIM (game-screen-dim). The background eases between the two.
+    val active = if (idleState == IdleState.DIM) theme else theme.forGameDay(gameScreen?.first, gameScreen?.second)
+    val shown = if (idleState == IdleState.DIM) theme.dimmed() else active
+    val background = animateColorAsState(color(active.background), tween(GAME_SCREEN_FADE_MS), label = "screen")
     Box(
         Modifier
             .fillMaxSize()
-            .background(color(theme.background))
+            .background(background.value)
             // Test tags (the hero's idle state) show as uiautomator resource-ids for the emulator QA; not read aloud.
             .onGloballyPositioned { canvasTop.floatValue = it.positionInRoot().y }
             .semantics { testTagsAsResourceId = true }
@@ -307,7 +318,7 @@ fun HomeScreen(
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
         if (heroReady) HeroLayer(
-            idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, briefColor = shown.secondaryText, appsTop = appsTop,
+            idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, onScreen = { gameScreen = it; GameScreenMemo.last = it }, screenColor = { background.value.toArgb() and 0xFFFFFF }, briefColor = shown.secondaryText, appsTop = appsTop,
         )
         CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(
@@ -888,3 +899,10 @@ private fun AppTile(t: TileApp, theme: HomeTheme, requester: FocusRequester?, on
         }
     }
 }
+
+/** The last game-day screen and tile colours the hero reported, for this process (memory only, no disk). */
+internal object GameScreenMemo {
+    @Volatile var last: Pair<Int, Int>? = null
+}
+
+private const val GAME_SCREEN_FADE_MS = 600

@@ -21,8 +21,20 @@ class HeroGameThemeTest {
             }
             assertTrue(Tokens.contrast(t.accent, t.backdropTop) >= 4.5, "$name accent vs top")
             // The badge text is drawn in backdropTop on an accent pill.
-            assertEquals(HeroMotif.GAME, t.motif)
+            assertEquals(if (team.venue == Venue.ARENA) HeroMotif.ARENA else HeroMotif.GAME, t.motif)
         }
+    }
+
+    @Test fun predatorsPlayIndoorsInNavyAndGoldOhioStateOutdoorsInScarlet() {
+        val preds = HeroTheme.forGame(game(Teams.PREDATORS))
+        assertEquals(HeroMotif.ARENA, preds.motif)
+        assertEquals(0x041E42, preds.backdropTop) // navy
+        assertEquals(0xFFB81C, preds.accent) // gold badge and accents
+        val osu = HeroTheme.forGame(game(Teams.OHIO_STATE))
+        assertEquals(HeroMotif.GAME, osu.motif) // the outdoor stadium
+        val r = (osu.backdropBottom shr 16) and 0xFF
+        assertTrue(r > 4 * ((osu.backdropBottom shr 8) and 0xFF), "scarlet backdrop")
+        assertEquals(0xC4C4C4, osu.accent) // gray, lightened from #666666 for contrast
     }
 
     @Test fun brandColoursArePresentInTheConfig() {

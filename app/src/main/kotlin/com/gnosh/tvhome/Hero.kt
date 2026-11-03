@@ -96,6 +96,7 @@ import tvhome.core.feeds.view
 import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.Precip
 import tvhome.core.feeds.Location
+import tvhome.core.ui.BackdropArt
 import tvhome.core.ui.BackdropSkyline
 import tvhome.core.ui.SkyNow
 import tvhome.core.ui.SunArc
@@ -166,6 +167,10 @@ fun HeroLayer(
     drift: State<DriftOffset>,
     quiet: Boolean,
     onWatch: (WatchTarget?) -> Unit,
+    /** The screen and tile colours the hero's theme asks for (team colours on game day), or null for the home theme's. */
+    onScreen: (Pair<Int, Int>?) -> Unit = {},
+    /** The screen background actually drawn behind the tiles, as it eases (read in the draw phase): the fade meets it. */
+    screenColor: () -> Int = { Tokens.BACKGROUND },
     briefColor: Int,
     modifier: Modifier = Modifier,
     /** Top of the apps row in design dp (null until measured): the hero text ends above it ([HeroZones.layout]). */
@@ -178,7 +183,8 @@ fun HeroLayer(
     // then starts after a short settle, only while the activity is STARTED (ADR 0008 section 1: nothing polls while
     // Brian watches another app); returning restarts it, and LiveFeeds fetches only what is due. It stops when the hero
     // leaves the composition. Until it exists the hero draws an empty snapshot.
-    var feeds by remember { mutableStateOf<LiveFeeds?>(null) }
+    // Already built in this process (coming back to home): its snapshot at once; else null until after the first frame.
+    var feeds by remember { mutableStateOf(graph.feedsIfBuilt) }
     val owner = LocalLifecycleOwner.current
     LaunchedEffect(graph, owner) {
         withFrameNanos { }
@@ -269,6 +275,8 @@ fun HeroLayer(
             .also { if (game == null) lastScene.theme = it }
     }
     val sun = rememberUpdatedState(remember(sky, resolved.motif) { heroSun(sky, resolved.motif) })
+    val screenAsk = resolved.screen?.let { s -> resolved.tile?.let { t -> s to t } }
+    LaunchedEffect(screenAsk) { onScreen(screenAsk) }
     val dim = idle.value == IdleState.DIM
     val ink = HeroInk(
         text = if (dim) OledTokens.DIM_TEXT else resolved.text,
@@ -279,8 +287,9 @@ fun HeroLayer(
         HeroBackdrop(
             resolved, weather?.precipNow,
             settled = settings.loaded,
+            screenColor = screenColor,
             sun = { sun.value },
-            scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
+            dimmed = { idle.value == IdleState.DIM },
             modifier = Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION),
         )
         val drifting = Modifier.graphicsLayer {
@@ -289,6 +298,22 @@ fun HeroLayer(
             translationY = o.dy.dp.toPx()
         }
         val zones = HeroZones.layout(appsTop.value)
+        // Game day accent (preds-arena): a thin full-strength team-colour line just under the hero text, in the gap
+        // above the apps row where no text sits. It drifts with the text (OLED burn-in: a fixed line would mark the
+        // panel), stays inside the drift's travel at both ends, and is hidden in DIM and Quiet (edge-line-burn-in).
+        val edge = resolved.edge
+        if (edge != null && !dim && !quiet) {
+            Box(
+                Modifier
+                    .offset(
+                        (HeroZones.SAFE_X + Drift.MAX_X_DP.toInt()).dp,
+                        (maxOf(zones.left.bottom, zones.right.bottom) + EDGE_GAP_DP).dp,
+                    )
+                    .size((HeroZones.SCREEN_W - 2 * (HeroZones.SAFE_X + Drift.MAX_X_DP.toInt())).dp, EDGE_DP.dp)
+                    .then(drifting)
+                    .background(rgb(edge)),
+            )
+        }
         HeroTopStrip(glance, resolved, ink, dim, drifting, zones.top)
         HeroNowNext(glance.nowNext, ink, drifting, zones.left)
         HeroCard(glance.card, ink, drifting, zones.right)
@@ -329,6 +354,13 @@ private val BRIEF_TEXT_DP: Int = BRIEF_ROW_DP - 2 * Drift.MAX_Y_DP.toInt()
 const val DOCK_BRIEF_TAG = "dock_brief"
 
 private const val FEEDS_START_DELAY_MS = 1500L
+
+/**
+ * The game-day edge line: 2 dp, 2 dp under the text zones. With the drift's 4 dp travel it stays within
+ * [HeroZones.APPS_GAP] (8 dp) above the apps row.
+ */
+private const val EDGE_DP = 2
+private const val EDGE_GAP_DP = 2
 
 /** The theme shown last minute, outside game day: the dead band's memory (written in a remember block only). */
 private class SceneMemo(var theme: HeroTheme? = null)
@@ -546,15 +578,18 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  * - First frame stays cheap: only the gradient and the bottom fade are drawn until the first frame has been shown; the
  *   motif, the image decode and the animation start after that (cold-start budget, AC8). The decode runs on IO and the
  *   image crossfades in over the Canvas motif (no crossfade when animations are off).
- * - The image is drawn with the theme's own gradient over it at [TINT_ALPHA] when the theme is not the one the image was
- *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, every team shares GAME).
+ * - The image is drawn with the theme's own gradient over it at [BackdropArt.TINT_ALPHA] when the theme is not the one the image was
+ *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, Ohio State's stadium is GAME, the Predators' arena ARENA).
  * - The sun scenes' images (DAWN, DAY, SUNSET) have no sun: [sun] places it where the real sun is (core SunArc, moved on
  *   the minute tick only), clipped to the sky above the art's hills (BackdropSkyline), only over the decoded image and
  *   fading in with it. Null [sun]: no sun.
  * - Until [settled] (the hero's settings read once, so whether a location is set is known), only the screen background
  *   is drawn and nothing is decoded: no clock scene that the real sky then replaces.
  * - The rain and snow particles are drawn on top of the image.
- * - A black scrim ([scrimAlpha], read in the draw phase) goes over everything but the bottom fade (M7, R3).
+ * - A scrim (read in the draw phase) goes over everything but the bottom fade (M7, R3): black at
+ *   [GlanceTokens.SCRIM_ALPHA], or the theme's [HeroTheme.scrim] team colour on game days (navy, scarlet) so the whole
+ *   hero reads in it; while [dimmed], black at the DIM brightness. The bottom fade goes to [screenColor], the screen
+ *   background actually drawn (navy on a Predators game day), so it meets the screen without a seam.
  * - Only Christmas animates (slow snowfall), plus the rain or snow overlay while it is falling now. The loop ticks about 15 times a second with a delay, not every vsync, and
  *   does not run at all when the system animator scale is 0 (snow-uiautomator-idle: QA sets that so uiautomator can
  *   reach an idle state; it also honours the user's "remove animations" choice).
@@ -565,7 +600,8 @@ private fun HeroBackdrop(
     precip: Precip?,
     settled: Boolean,
     sun: () -> SunSpot?,
-    scrimAlpha: () -> Float,
+    screenColor: () -> Int,
+    dimmed: () -> Boolean,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -588,7 +624,9 @@ private fun HeroBackdrop(
         backdrop = Backdrop(theme.motif, image)
         if (frozen) imageAlpha.snapTo(1f) else imageAlpha.animateTo(1f, tween(CROSSFADE_MS))
     }
-    val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || precip != null)
+    // No overlay (and no tick) when its capped alpha would be invisible: the Predators' indoor arena (BackdropArt).
+    val overlay = precip?.takeIf { BackdropArt.showsPrecip(theme, it) }
+    val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || overlay != null)
     // The particle tick runs only while the activity is STARTED (no animation work behind another app).
     val owner = LocalLifecycleOwner.current
     LaunchedEffect(animate, owner) {
@@ -609,35 +647,50 @@ private fun HeroBackdrop(
                 val h = size.height
                 val base = Brush.verticalGradient(listOf(rgb(theme.backdropTop), rgb(theme.backdropBottom)))
                 // Fade into the screen background so the tile row sits on a calm base.
-                val fade = Brush.verticalGradient(listOf(Color.Transparent, rgb(Tokens.BACKGROUND)), startY = h * 0.6f, endY = h)
+                // The fade follows the screen colour as it eases (fade-seam-during-ease): rebuilt only when it changes.
+                var fadeFor = -1
+                var fade: Brush = Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent))
+                fun fadeTo(c: Int): Brush {
+                    if (c != fadeFor) {
+                        fade = Brush.verticalGradient(listOf(Color.Transparent, rgb(c)), startY = h * 0.6f, endY = h)
+                        fadeFor = c
+                    }
+                    return fade
+                }
+                val scrimColour = rgb(theme.scrim)
                 val hill = if (theme.motif == HeroMotif.SNOW) hillPath(w, h) else null
                 val moon = if (theme.motif == HeroMotif.STARS) moonPath(w, h) else null
-                val tint = if (theme.backdropTop != renderedTop(theme.motif)) base else null
+                val tint = if (BackdropArt.tinted(theme)) base else null
+                // Particle alphas capped so text keeps 7:1 over a team-coloured scrim (precip-over-team-scrim).
+                val snowScale = BackdropArt.precipScale(theme, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA)
+                val rainScale = BackdropArt.precipScale(theme, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA)
                 val sunLook = sunLook(theme)
                 val art = ArtFit(w, h)
                 val sky = sunLook?.let { skyPath(art, BackdropSkyline.of(theme.motif)) }
                 var sunCache: Pair<SunSpot, SunBrushes>? = null
                 onDrawBehind {
                     // Until the settings are read, the plain screen background: the scene is not known yet.
-                    if (settled) drawRect(base) else drawRect(rgb(Tokens.BACKGROUND))
+                    val screen = screenColor()
+                    if (settled) drawRect(base) else drawRect(rgb(screen))
                     // Read in the draw phase only: a decode or a crossfade step redraws this layer, nothing else.
                     val image = backdrop?.takeIf { it.motif == theme.motif }?.image
                     val alpha = if (image == null) 0f else imageAlpha.value
                     if (ready && alpha < 1f) {
                         when (theme.motif) {
                             HeroMotif.MOON_BATS -> drawMoonAndBats(theme)
-                            HeroMotif.SNOW -> { if (image == null) drawSnow(tick.longValue); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
+                            HeroMotif.SNOW -> { if (image == null) drawSnow(tick.longValue, snowScale); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
                             HeroMotif.DAWN, HeroMotif.SUNSET -> Unit // the sun is drawn below, over image or not
                             HeroMotif.DAY -> drawClouds(0.22f)
                             HeroMotif.STARS -> drawStars(theme, moon)
                             HeroMotif.GAME -> if (sun() != null) drawSun(theme, 0.80f, 0.36f, 0.08f, 0.22f)
+                            HeroMotif.ARENA -> Unit // indoors: the navy gradient until the image is in
                         }
                     }
                     if (image != null && alpha > 0f) {
                         drawBackdrop(image, alpha)
-                        tint?.let { drawRect(it, alpha = TINT_ALPHA * alpha) }
+                        tint?.let { drawRect(it, alpha = BackdropArt.TINT_ALPHA * alpha) }
                         // Christmas snowfall keeps falling over the rendered scene.
-                        if (theme.motif == HeroMotif.SNOW) drawSnow(tick.longValue)
+                        if (theme.motif == HeroMotif.SNOW) drawSnow(tick.longValue, snowScale)
                     }
                     // The sun scenes' art has no sun: it is drawn where the real one is (read in the draw phase, so the
                     // minute's move redraws this layer only), clipped to the sky above the hills.
@@ -651,15 +704,16 @@ private fun HeroBackdrop(
                     if (ready) {
                         // Weather motif overlay (never a theme change): particles only when it is falling now.
                         when (precip) {
-                            Precip.SNOW -> if (theme.motif != HeroMotif.SNOW) drawSnow(tick.longValue)
-                            Precip.RAIN -> drawRain(tick.longValue)
+                            Precip.SNOW -> if (theme.motif != HeroMotif.SNOW && overlay != null) drawSnow(tick.longValue, snowScale)
+                            Precip.RAIN -> if (overlay != null) drawRain(tick.longValue, rainScale)
                             null -> Unit
                         }
                     }
                     // R3: the scrim caps the brightest backdrop pixel at 25% (15% in DIM), so hero text keeps 7:1 over
                     // any art. Under the fade, so the backdrop still meets the screen background without a seam.
-                    drawRect(Color.Black, alpha = scrimAlpha())
-                    drawRect(fade)
+                    if (dimmed()) drawRect(Color.Black, alpha = 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS)
+                    else drawRect(scrimColour, alpha = GlanceTokens.SCRIM_ALPHA)
+                    drawRect(fadeTo(screen))
                 }
             },
     )
@@ -669,8 +723,6 @@ private class Backdrop(val motif: HeroMotif, val image: ImageBitmap)
 
 private const val CROSSFADE_MS = 700
 
-/** How much of the theme's gradient goes over an image rendered for another theme's palette. */
-private const val TINT_ALPHA = 0.38f
 
 private fun backdropRes(motif: HeroMotif): Int = when (motif) {
     HeroMotif.DAWN -> R.drawable.hero_dawn
@@ -680,18 +732,9 @@ private fun backdropRes(motif: HeroMotif): Int = when (motif) {
     HeroMotif.MOON_BATS -> R.drawable.hero_moon_bats
     HeroMotif.SNOW -> R.drawable.hero_snow
     HeroMotif.GAME -> R.drawable.hero_game
+    HeroMotif.ARENA -> R.drawable.hero_arena
 }
 
-/** The backdropTop of the theme each image was rendered for (MOTIFS in tools/art/render_backdrops.py); GAME has none. */
-private fun renderedTop(motif: HeroMotif): Int? = when (motif) {
-    HeroMotif.DAWN -> 0x1F3B66
-    HeroMotif.DAY -> 0x1B4A86
-    HeroMotif.SUNSET -> 0x2E2250
-    HeroMotif.STARS -> 0x04060B
-    HeroMotif.MOON_BATS -> 0x120A1E
-    HeroMotif.SNOW -> 0x0A2418
-    HeroMotif.GAME -> null
-}
 
 /**
  * Decodes the motif's 1920x600 WebP. Call off the main thread. ARGB_8888, not RGB_565: 565 bands the dim night and dawn
@@ -867,7 +910,8 @@ private fun DrawScope.drawBat(center: Offset, s: Float) {
     drawCircle(Color(0xFF0A0610), s * 0.12f, center + Offset(s * 0.12f, -s * 0.32f))
 }
 
-private fun DrawScope.drawSnow(tickNs: Long) {
+/** [scale] multiplies the flake alphas (at most [BackdropArt.SNOW_MAX_ALPHA]); see [BackdropArt.precipScale]. */
+private fun DrawScope.drawSnow(tickNs: Long, scale: Float) {
     val t = tickNs / 1_000_000_000.0
     for (i in 0 until 48) {
         val speed = 0.03 + 0.05 * frac(i * 0.37f)
@@ -875,7 +919,7 @@ private fun DrawScope.drawSnow(tickNs: Long) {
         val sway = sin(t * 0.5 + i).toFloat() * size.width * 0.006f
         val x = size.width * frac(i * 0.6180339f + 0.05f) + sway
         val r = size.height * (0.004f + 0.007f * frac(i * 0.53f))
-        drawCircle(Color.White.copy(alpha = 0.35f + 0.4f * frac(i * 0.29f)), r, Offset(x, size.height * y))
+        drawCircle(Color.White.copy(alpha = (0.35f + 0.4f * frac(i * 0.29f)) * scale), r, Offset(x, size.height * y))
     }
 }
 
@@ -889,7 +933,8 @@ private fun hillPath(w: Float, h: Float): Path = Path().apply {
     close()
 }
 
-private fun DrawScope.drawRain(tickNs: Long) {
+/** [scale] multiplies the drop alphas (at most [BackdropArt.RAIN_MAX_ALPHA]); see [BackdropArt.precipScale]. */
+private fun DrawScope.drawRain(tickNs: Long, scale: Float) {
     val t = tickNs / 1_000_000_000.0
     for (i in 0 until 70) {
         val speed = 0.6 + 0.5 * frac(i * 0.37f)
@@ -897,7 +942,7 @@ private fun DrawScope.drawRain(tickNs: Long) {
         val x = size.width * frac(i * 0.6180339f + 0.05f) - y * size.width * 0.02f
         val len = size.height * (0.03f + 0.03f * frac(i * 0.53f))
         drawLine(
-            Color(0xFFAFC8F0).copy(alpha = 0.25f + 0.2f * frac(i * 0.29f)),
+            Color(0xFF000000.toInt() or BackdropArt.RAIN).copy(alpha = (0.25f + 0.2f * frac(i * 0.29f)) * scale),
             Offset(x, size.height * y), Offset(x - len * 0.2f, size.height * y + len), strokeWidth = 2f,
         )
     }

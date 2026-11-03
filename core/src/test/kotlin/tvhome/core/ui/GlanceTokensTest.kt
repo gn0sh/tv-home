@@ -1,6 +1,7 @@
 package tvhome.core.ui
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -86,6 +87,65 @@ class GlanceTokensTest {
         // Spec R3: hero text and the clock 56-72 px (1 sp = 1.5 px at 1080p).
         for (sp in listOf(GlanceTokens.HERO_SP, GlanceTokens.CLOCK_SP, GlanceTokens.ALERT_SP)) {
             assertTrue(sp * 1.5 in 56.0..72.0, "$sp sp = ${sp * 1.5} px")
+        }
+    }
+
+    @Test fun everyThemeKeepsSevenToOneOverItsArtsBrightestTextZonePixel() {
+        // BackdropPeaks is measured from the shipped images (render_backdrops.py): the brightest pixel inside the top
+        // strip, left zone and right card. Composited over each theme's scrim (team colour on game days) as drawn.
+        val themes = HeroTheme.ALL + tvhome.core.feeds.Teams.ALL.map { team ->
+            HeroTheme.forGame(tvhome.core.feeds.TeamGame(team, tvhome.core.feeds.GameInfo(
+                java.time.Instant.EPOCH, "X", true, tvhome.core.feeds.GamePhase.UPCOMING, null, null, null)))
+        }
+        for (t in themes) {
+            // The art peak (tinted when the image belongs to another theme), and that pixel under the strongest
+            // snowflake and raindrop (alphas capped by BackdropArt.precipScale), each scrimmed as drawn.
+            val name = t.badge ?: t.motif.name
+            val (peak, snow, rain) = BackdropArt.worstUnderText(t)
+            for ((what, px) in listOf("art" to peak, "a white snowflake" to snow, "rain" to rain)) {
+                assertSeven(GlanceTokens.HERO_TEXT, px, "$name text over $what")
+                assertSeven(GlanceTokens.HERO_SECONDARY, px, "$name secondary over $what")
+            }
+            if (t.scrim == 0) {
+                assertEquals(1f, BackdropArt.precipScale(t, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA), "$name snow uncapped")
+            }
+        }
+        // Thanksgiving and Valentine's are drawn over SUNSET's image with their own tint.
+        val thanks = HeroTheme.at(java.time.LocalDate.of(2026, 11, 26), java.time.LocalTime.NOON)
+        assertTrue(BackdropArt.tinted(thanks))
+        assertEquals(0x404040, GlanceTokens.composite(0xFFFFFF, 0)) // black scrim: the usual white-pixel case
+    }
+
+    @Test fun gameDayScreenAppliesOnlyWhenItReads() {
+        val preds = tvhome.core.feeds.Teams.PREDATORS
+        val on = HomeTheme.DEFAULT.forGameDay(preds.screen, preds.tile)
+        assertEquals(preds.screen, on.background)
+        assertEquals(preds.tile, on.tile)
+        assertSeven(on.text, on.background, "tile labels on the navy screen")
+        assertSeven(on.secondaryText, on.background, "brief line on the navy screen")
+        assertSeven(on.secondaryText, on.tile, "dock tile secondary text on the navy tile")
+        assertTrue(Tokens.contrast(on.tile, on.background) >= HomeTheme.GAME_SEPARATION, "tile stands out")
+        assertTrue(Tokens.contrast(on.focusFill, on.background) >= HomeTheme.GAME_SEPARATION, "focused fill stands out")
+        // A custom theme whose text would not read on navy keeps its own screen.
+        val dark = HomeTheme.DEFAULT.copy(secondaryText = 0x5A6270)
+        assertEquals(dark, dark.forGameDay(preds.screen, preds.tile))
+        assertEquals(HomeTheme.DEFAULT, HomeTheme.DEFAULT.forGameDay(null, null))
+    }
+
+    @Test fun eachTeamScrimGetsItsOwnParticleCap() {
+        fun theme(team: tvhome.core.feeds.TeamConfig) = HeroTheme.forGame(tvhome.core.feeds.TeamGame(team,
+            tvhome.core.feeds.GameInfo(java.time.Instant.EPOCH, "X", true, tvhome.core.feeds.GamePhase.UPCOMING, null, null, null)))
+        val osu = theme(tvhome.core.feeds.Teams.OHIO_STATE)
+        val preds = theme(tvhome.core.feeds.Teams.PREDATORS)
+        assertEquals(0.656f, BackdropArt.precipScale(osu, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA), 0.01f, "Ohio State snow")
+        assertEquals(1f, BackdropArt.precipScale(osu, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA), "Ohio State rain")
+        assertEquals(0.01f, BackdropArt.precipScale(preds, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA), 0.01f, "Predators snow")
+        assertEquals(0.085f, BackdropArt.precipScale(preds, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA), 0.01f, "Predators rain")
+        // Indoors: no weather overlay (and no animation) in the arena; Ohio State and black-scrim themes keep theirs.
+        for (p in tvhome.core.feeds.Precip.values()) {
+            assertFalse(BackdropArt.showsPrecip(preds, p), "Predators $p")
+            assertTrue(BackdropArt.showsPrecip(osu, p), "Ohio State $p")
+            for (t in HeroTheme.ALL) assertTrue(BackdropArt.showsPrecip(t, p), "${t.badge ?: t.motif} $p")
         }
     }
 }

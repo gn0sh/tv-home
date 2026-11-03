@@ -80,6 +80,31 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   clock 40 sp (60 px), alert 40 sp. The backdrop is dimmed with a black scrim to **25%** (spec "about 35%"): 25% is
   the value at which both hero text colours keep 7:1 even over a pure-white pixel (`#F4F1EA` 9.2:1, `#D5DCE8`
   7.5:1; at 35% they are 6.2:1 and 5.1:1), so the test needs no knowledge of the art.
+  **Game-day scrims (2026-11-03, preds-arena):** the art stays at 25% for every theme, but on a game day the scrim is
+  the team colour instead of black (`HeroTheme.scrim`: Predators navy `#041E42`, Ohio State `#2A0707`), so the
+  whole hero reads navy or scarlet. A team-coloured scrim breaks the white-pixel guarantee (white at 25% over navy is
+  5.4:1), so 7:1 is checked against each image's brightest pixel inside the hero text zones (the top strip, the left
+  zone and the right card, at 1.5 image px per dp), never a percentile: `render_backdrops.py` measures it from the
+  shipped WebP files into the generated `BackdropPeaks`, fails a render that composites below 7:1, and
+  `GlanceTokensTest` composites every theme's peak over that theme's scrim and asserts 7:1 for both hero text colours.
+  The arena's ribbon board, rail and ice lights were dimmed until they pass (peak `#FFBB47`, as read from the WebP); the
+  stadium's floodlights and windows likewise (9.5:1 and 7.7:1).
+  Full-strength team colour goes only where no text sits: a 2 dp accent line just under the hero text
+  (`HeroTheme.edge`, gold or scarlet) that drifts with the text and is hidden in DIM and Quiet. On Predators game
+  days the screen is navy `#041A3A` with navy tiles `#15305E` (`HomeTheme.forGameDay`): applied only if the active
+  home theme's text and secondary text keep 7:1 on both and the tile and focused fill stand out from the screen by at
+  least 1.3:1 luminance contrast, never in DIM. DIM keeps the black scrim. No brightness exception.
+  The test's worst pixel (`BackdropArt.worstUnderText`) also covers the gradient tint over a borrowed image
+  (Thanksgiving, Valentine's at 0.38) and the strongest snowflake and raindrop over the peak: under a team scrim their
+  alphas are capped (`BackdropArt.precipScale`, the same rule for every theme): Predators snow x0.01 and rain x0.085
+  (barely visible: the arena's peak is already near the limit), Ohio State snow x0.66 and rain uncapped (x1), every
+  black-scrim theme x1. Below x0.1 (`BackdropArt.MIN_VISIBLE_SCALE`) the backdrop draws no snow or rain overlay and
+  runs no particle animation at all: on purpose for the Predators' indoor arena, where no weather falls. The weather
+  chip and alert card are unchanged. The text zones are padded by the drift's travel (6 x 4 dp) before the peak is
+  taken, and `BackdropPeaks` is read from the WebP files: that file, not the script's log, is the source of truth.
+  The game-day screen colour is remembered for the process: coming Home after a game has ended shows navy for one
+  frame and then fades to the usual background over 600 ms.
+  Image budget: `hero_arena.webp` is 32 KB; the eight backdrops total about 135 KB (each under 120 KB).
 
 ### 4. OLED profile (LG vs Vizio, drift, idle dim)
 - **Profile.** `TvProfile.LG_OLED` (drift on, dim at 10 min, near-black at 30 min) and `TvProfile.VIZIO_LED` (drift

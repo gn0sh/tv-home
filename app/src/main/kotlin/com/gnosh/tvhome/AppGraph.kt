@@ -57,7 +57,7 @@ class AppGraph(app: Application) {
      * no-backup storage, read with the 64 KiB cap. Lazy (AC8): the hero first touches it after the first frame, so the
      * feed classes and the panel cache serializers are not loaded and built on the main thread in AgendaActivity.onCreate.
      */
-    val feeds: LiveFeeds by lazy {
+    private val feedsLazy = lazy {
         LiveFeeds(
         HttpFeedFetcher(),
         location = { FeedSettings.location(app) },
@@ -65,6 +65,15 @@ class AppGraph(app: Application) {
         caches = { id -> JvmCacheFile(File(app.noBackupFilesDir, "panels/$id.json"), PanelCacheCodec.MAX_BYTES) },
         )
     }
+    val feeds: LiveFeeds by feedsLazy
+
+    /**
+     * The feeds if this process already built them, else null, without building anything (safe on the main thread
+     * before the first frame: a field read). The hero starts from their last snapshot when it comes back (Calendar,
+     * Board, Ask, a recreated activity), so game day, the card and the Watch pill show as they were left instead of
+     * an empty snapshot for the ~200 ms until its post-first-frame effect attaches (game-state-after-board).
+     */
+    val feedsIfBuilt: LiveFeeds? get() = if (feedsLazy.isInitialized()) feedsLazy.value else null
 
     /**
      * Ask Claude (M1b lean). The key is read from [secrets] per call and goes only into the request header. The daily

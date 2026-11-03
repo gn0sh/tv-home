@@ -22,7 +22,7 @@ class RealFeedsTest {
         assertEquals(listOf("ESPN+", "HULU", "Disney+"), b.networks)
         // The game line the hero draws, on game day.
         val line = GameDay.line(TeamGame(Teams.PREDATORS, a), Instant.parse("2026-11-03T22:00:00Z"), ZoneId.of("America/Chicago"))
-        assertEquals("Predators vs Hurricanes · 7:00 PM · in 3h 0m", line)
+        assertEquals("Predators vs Hurricanes · 7:00\u00A0PM · in\u00A03h\u00A00m", line)
     }
 
     @Test fun nhlSeasonParsesFinals() {
