@@ -87,7 +87,7 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   zone and the right card, at 1.5 image px per dp), never a percentile: `render_backdrops.py` measures it from the
   shipped WebP files into the generated `BackdropPeaks`, fails a render that composites below 7:1, and
   `GlanceTokensTest` composites every theme's peak over that theme's scrim and asserts 7:1 for both hero text colours.
-  The arena's ribbon board, rail and ice lights were dimmed until they pass (peak `#FEBB27`: 8.6:1 and 7.1:1); the
+  The arena's ribbon board, rail and ice lights were dimmed until they pass (peak `#FFBB47`, as read from the WebP); the
   stadium's floodlights and windows likewise (9.5:1 and 7.7:1).
   Full-strength team colour goes only where no text sits: a 2 dp accent line just under the hero text
   (`HeroTheme.edge`, gold or scarlet) that drifts with the text and is hidden in DIM and Quiet. On Predators game
@@ -96,8 +96,9 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   least 1.3:1 luminance contrast, never in DIM. DIM keeps the black scrim. No brightness exception.
   The test's worst pixel (`BackdropArt.worstUnderText`) also covers the gradient tint over a borrowed image
   (Thanksgiving, Valentine's at 0.38) and the strongest snowflake and raindrop over the peak: under a team scrim their
-  alphas are capped (`BackdropArt.precipScale`), so on a Predators game day snow and rain are barely visible, since the
-  arena's peak is already near the limit. The text zones are padded by the drift's travel (6 x 4 dp) before the peak is
+  alphas are capped (`BackdropArt.precipScale`, the same rule for every theme): Predators snow x0.01 and rain x0.085
+  (barely visible: the arena's peak is already near the limit), Ohio State snow x0.66 and rain uncapped (x1), every
+  black-scrim theme x1. The text zones are padded by the drift's travel (6 x 4 dp) before the peak is
   taken, and `BackdropPeaks` is read from the WebP files: that file, not the script's log, is the source of truth.
   The game-day screen colour is remembered for the process: coming Home after a game has ended shows navy for one
   frame and then fades to the usual background over 600 ms.

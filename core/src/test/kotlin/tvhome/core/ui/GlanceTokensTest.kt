@@ -130,4 +130,15 @@ class GlanceTokensTest {
         assertEquals(dark, dark.forGameDay(preds.screen, preds.tile))
         assertEquals(HomeTheme.DEFAULT, HomeTheme.DEFAULT.forGameDay(null, null))
     }
+
+    @Test fun eachTeamScrimGetsItsOwnParticleCap() {
+        fun theme(team: tvhome.core.feeds.TeamConfig) = HeroTheme.forGame(tvhome.core.feeds.TeamGame(team,
+            tvhome.core.feeds.GameInfo(java.time.Instant.EPOCH, "X", true, tvhome.core.feeds.GamePhase.UPCOMING, null, null, null)))
+        val osu = theme(tvhome.core.feeds.Teams.OHIO_STATE)
+        val preds = theme(tvhome.core.feeds.Teams.PREDATORS)
+        assertEquals(0.656f, BackdropArt.precipScale(osu, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA), 0.01f, "Ohio State snow")
+        assertEquals(1f, BackdropArt.precipScale(osu, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA), "Ohio State rain")
+        assertEquals(0.01f, BackdropArt.precipScale(preds, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA), 0.01f, "Predators snow")
+        assertEquals(0.085f, BackdropArt.precipScale(preds, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA), 0.01f, "Predators rain")
+    }
 }
