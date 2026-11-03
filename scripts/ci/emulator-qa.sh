@@ -980,9 +980,9 @@ m7_offline() { # on|off
   if [[ $1 == off ]]; then
     [[ -n $m7_offline_on ]] || return 0
     if [[ -z $m7_dns_spec || $m7_dns_spec == null ]]; then sh_ settings delete global private_dns_specifier >/dev/null 2>&1 || true
-    else sh_ settings put global private_dns_specifier "$m7_dns_spec"; fi
+    else sh_ settings put global private_dns_specifier "$m7_dns_spec" || true; fi
     if [[ -z $m7_dns_mode || $m7_dns_mode == null ]]; then sh_ settings delete global private_dns_mode >/dev/null 2>&1 || true
-    else sh_ settings put global private_dns_mode "$m7_dns_mode"; fi
+    else sh_ settings put global private_dns_mode "$m7_dns_mode" || true; fi
     m7_offline_on=""
     echo "m7 offline: Private DNS restored (mode=${m7_dns_mode:-default})"
     return 0
