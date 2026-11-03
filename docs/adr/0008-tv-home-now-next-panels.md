@@ -98,7 +98,9 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   (Thanksgiving, Valentine's at 0.38) and the strongest snowflake and raindrop over the peak: under a team scrim their
   alphas are capped (`BackdropArt.precipScale`, the same rule for every theme): Predators snow x0.01 and rain x0.085
   (barely visible: the arena's peak is already near the limit), Ohio State snow x0.66 and rain uncapped (x1), every
-  black-scrim theme x1. The text zones are padded by the drift's travel (6 x 4 dp) before the peak is
+  black-scrim theme x1. Below x0.1 (`BackdropArt.MIN_VISIBLE_SCALE`) the backdrop draws no snow or rain overlay and
+  runs no particle animation at all: on purpose for the Predators' indoor arena, where no weather falls. The weather
+  chip and alert card are unchanged. The text zones are padded by the drift's travel (6 x 4 dp) before the peak is
   taken, and `BackdropPeaks` is read from the WebP files: that file, not the script's log, is the source of truth.
   The game-day screen colour is remembered for the process: coming Home after a game has ended shows navy for one
   frame and then fades to the usual background over 600 ms.

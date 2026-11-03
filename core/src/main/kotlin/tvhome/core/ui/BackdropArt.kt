@@ -55,6 +55,19 @@ object BackdropArt {
         return lo
     }
 
+    /** Below this [precipScale] the particles would not be seen: none are drawn and nothing animates for them. */
+    const val MIN_VISIBLE_SCALE = 0.1f
+
+    /**
+     * Whether the backdrop draws (and animates) the weather overlay for [precip] on [theme]. False when its capped
+     * alpha would be invisible: on purpose for the Predators' indoor arena (snow x0.01, rain x0.085), where no weather
+     * falls anyway. The weather chip and alert card are not affected.
+     */
+    fun showsPrecip(theme: HeroTheme, precip: tvhome.core.feeds.Precip): Boolean = when (precip) {
+        tvhome.core.feeds.Precip.SNOW -> precipScale(theme, 0xFFFFFF, SNOW_MAX_ALPHA)
+        tvhome.core.feeds.Precip.RAIN -> precipScale(theme, RAIN, RAIN_MAX_ALPHA)
+    } >= MIN_VISIBLE_SCALE
+
     /** The worst composited pixel under the hero text: the art peak with the strongest snowflake or raindrop. */
     fun worstUnderText(theme: HeroTheme): List<Int> {
         val peak = artPeak(theme)

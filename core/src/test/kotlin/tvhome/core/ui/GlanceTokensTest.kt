@@ -1,6 +1,7 @@
 package tvhome.core.ui
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -140,5 +141,11 @@ class GlanceTokensTest {
         assertEquals(1f, BackdropArt.precipScale(osu, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA), "Ohio State rain")
         assertEquals(0.01f, BackdropArt.precipScale(preds, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA), 0.01f, "Predators snow")
         assertEquals(0.085f, BackdropArt.precipScale(preds, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA), 0.01f, "Predators rain")
+        // Indoors: no weather overlay (and no animation) in the arena; Ohio State and black-scrim themes keep theirs.
+        for (p in tvhome.core.feeds.Precip.values()) {
+            assertFalse(BackdropArt.showsPrecip(preds, p), "Predators $p")
+            assertTrue(BackdropArt.showsPrecip(osu, p), "Ohio State $p")
+            for (t in HeroTheme.ALL) assertTrue(BackdropArt.showsPrecip(t, p), "${t.badge ?: t.motif} $p")
+        }
     }
 }

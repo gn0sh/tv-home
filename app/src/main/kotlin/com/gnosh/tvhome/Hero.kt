@@ -623,7 +623,9 @@ private fun HeroBackdrop(
         backdrop = Backdrop(theme.motif, image)
         if (frozen) imageAlpha.snapTo(1f) else imageAlpha.animateTo(1f, tween(CROSSFADE_MS))
     }
-    val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || precip != null)
+    // No overlay (and no tick) when its capped alpha would be invisible: the Predators' indoor arena (BackdropArt).
+    val overlay = precip?.takeIf { BackdropArt.showsPrecip(theme, it) }
+    val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || overlay != null)
     // The particle tick runs only while the activity is STARTED (no animation work behind another app).
     val owner = LocalLifecycleOwner.current
     LaunchedEffect(animate, owner) {
@@ -701,8 +703,8 @@ private fun HeroBackdrop(
                     if (ready) {
                         // Weather motif overlay (never a theme change): particles only when it is falling now.
                         when (precip) {
-                            Precip.SNOW -> if (theme.motif != HeroMotif.SNOW) drawSnow(tick.longValue, snowScale)
-                            Precip.RAIN -> drawRain(tick.longValue, rainScale)
+                            Precip.SNOW -> if (theme.motif != HeroMotif.SNOW && overlay != null) drawSnow(tick.longValue, snowScale)
+                            Precip.RAIN -> if (overlay != null) drawRain(tick.longValue, rainScale)
                             null -> Unit
                         }
                     }
