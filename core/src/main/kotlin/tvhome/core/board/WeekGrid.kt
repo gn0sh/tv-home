@@ -76,10 +76,10 @@ data class WeekGrid(
     }
 }
 
-/** How much text a block of this size can carry at the Board's block type size (22 sp, 24 sp line). */
+/** How much text a block of this size can carry at the Board's block type size (22 sp on a 24 sp line). */
 object BlockText {
-    const val LINE_DP = 26f
-    const val PAD_DP = 2f
+    const val LINE_DP = 24f
+    const val PAD_DP = 1f
     const val MIN_WIDTH_DP = 44f
 
     /** 0: compact (no text; the day list has it); 1: "9:00 Title"; 2 or more: time, then the title over the rest. */

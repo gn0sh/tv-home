@@ -53,8 +53,12 @@ class AgendaActivity : ComponentActivity() {
     /** M7-F6 Quiet mode, read on IO each time the screen starts (so an adb toggle applies); null until then. */
     private var quiet by mutableStateOf<Boolean?>(null)
 
-    /** M3: [ACTION_ASK] opens Ask Claude; anything else (Home, the launcher entry) shows the row. */
-    private fun targetOf(intent: Intent?): String? = if (intent?.action == ACTION_ASK) HomeEntry.ASK else null
+    /** M3: [ACTION_ASK] opens Ask Claude, [ACTION_BOARD] the Board; anything else (Home, the launcher entry) shows the row. */
+    private fun targetOf(intent: Intent?): String? = when (intent?.action) {
+        ACTION_ASK -> HomeEntry.ASK
+        ACTION_BOARD -> HomeEntry.BOARD
+        else -> null
+    }
 
     /**
      * Speech for Ask Claude: the system recognizer dialog (RecognizerIntent), so the app needs no RECORD_AUDIO
@@ -178,6 +182,12 @@ class AgendaActivity : ComponentActivity() {
     companion object {
         /** Opens Ask Claude, listening (the PC remote or adb; the mic key cannot be caught, PR #15). Any app could send it; it only shows the Ask view. */
         const val ACTION_ASK = "com.gnosh.tvhome.action.ASK"
+
+        /**
+         * Opens the Board (adb and the emulator screenshot tour). Like [ACTION_ASK] any app could send it; it only shows
+         * the Board, with Quiet applied (titles hidden until the stored Quiet value has loaded).
+         */
+        const val ACTION_BOARD = "com.gnosh.tvhome.action.BOARD"
 
         /** Shows the home row, focus on the first tile (sent by [HomeWatchService] when the TV's own home comes up). */
         const val ACTION_HOME = "com.gnosh.tvhome.action.HOME"
