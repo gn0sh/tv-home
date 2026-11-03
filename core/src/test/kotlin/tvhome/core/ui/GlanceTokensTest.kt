@@ -97,10 +97,21 @@ class GlanceTokensTest {
                 java.time.Instant.EPOCH, "X", true, tvhome.core.feeds.GamePhase.UPCOMING, null, null, null)))
         }
         for (t in themes) {
-            val px = GlanceTokens.composite(BackdropPeaks.of(t.motif), t.scrim)
-            assertSeven(GlanceTokens.HERO_TEXT, px, "${t.badge ?: t.motif} text over its art")
-            assertSeven(GlanceTokens.HERO_SECONDARY, px, "${t.badge ?: t.motif} secondary over its art")
+            // The art peak (tinted when the image belongs to another theme), and that pixel under the strongest
+            // snowflake and raindrop (alphas capped by BackdropArt.precipScale), each scrimmed as drawn.
+            val name = t.badge ?: t.motif.name
+            val (peak, snow, rain) = BackdropArt.worstUnderText(t)
+            for ((what, px) in listOf("art" to peak, "a white snowflake" to snow, "rain" to rain)) {
+                assertSeven(GlanceTokens.HERO_TEXT, px, "$name text over $what")
+                assertSeven(GlanceTokens.HERO_SECONDARY, px, "$name secondary over $what")
+            }
+            if (t.scrim == 0) {
+                assertEquals(1f, BackdropArt.precipScale(t, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA), "$name snow uncapped")
+            }
         }
+        // Thanksgiving and Valentine's are drawn over SUNSET's image with their own tint.
+        val thanks = HeroTheme.at(java.time.LocalDate.of(2026, 11, 26), java.time.LocalTime.NOON)
+        assertTrue(BackdropArt.tinted(thanks))
         assertEquals(0x404040, GlanceTokens.composite(0xFFFFFF, 0)) // black scrim: the usual white-pixel case
     }
 

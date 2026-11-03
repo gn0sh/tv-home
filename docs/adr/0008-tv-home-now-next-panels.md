@@ -94,6 +94,13 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   days the screen is navy `#041A3A` with navy tiles `#15305E` (`HomeTheme.forGameDay`): applied only if the active
   home theme's text and secondary text keep 7:1 on both and the tile and focused fill stand out from the screen by at
   least 1.3:1 luminance contrast, never in DIM. DIM keeps the black scrim. No brightness exception.
+  The test's worst pixel (`BackdropArt.worstUnderText`) also covers the gradient tint over a borrowed image
+  (Thanksgiving, Valentine's at 0.38) and the strongest snowflake and raindrop over the peak: under a team scrim their
+  alphas are capped (`BackdropArt.precipScale`), so on a Predators game day snow and rain are barely visible, since the
+  arena's peak is already near the limit. The text zones are padded by the drift's travel (6 x 4 dp) before the peak is
+  taken, and `BackdropPeaks` is read from the WebP files: that file, not the script's log, is the source of truth.
+  The game-day screen colour is remembered for the process: coming Home after a game has ended shows navy for one
+  frame and then fades to the usual background over 600 ms.
   Image budget: `hero_arena.webp` is 32 KB; the eight backdrops total about 135 KB (each under 120 KB).
 
 ### 4. OLED profile (LG vs Vizio, drift, idle dim)

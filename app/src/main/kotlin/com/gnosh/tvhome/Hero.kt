@@ -96,6 +96,7 @@ import tvhome.core.feeds.view
 import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.Precip
 import tvhome.core.feeds.Location
+import tvhome.core.ui.BackdropArt
 import tvhome.core.ui.BackdropSkyline
 import tvhome.core.ui.SkyNow
 import tvhome.core.ui.SunArc
@@ -168,8 +169,8 @@ fun HeroLayer(
     onWatch: (WatchTarget?) -> Unit,
     /** The screen and tile colours the hero's theme asks for (team colours on game day), or null for the home theme's. */
     onScreen: (Pair<Int, Int>?) -> Unit = {},
-    /** The screen background actually drawn behind the tiles: the backdrop fades into it. */
-    screenColor: Int = Tokens.BACKGROUND,
+    /** The screen background actually drawn behind the tiles, as it eases (read in the draw phase): the fade meets it. */
+    screenColor: () -> Int = { Tokens.BACKGROUND },
     briefColor: Int,
     modifier: Modifier = Modifier,
     /** Top of the apps row in design dp (null until measured): the hero text ends above it ([HeroZones.layout]). */
@@ -576,7 +577,7 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  * - First frame stays cheap: only the gradient and the bottom fade are drawn until the first frame has been shown; the
  *   motif, the image decode and the animation start after that (cold-start budget, AC8). The decode runs on IO and the
  *   image crossfades in over the Canvas motif (no crossfade when animations are off).
- * - The image is drawn with the theme's own gradient over it at [TINT_ALPHA] when the theme is not the one the image was
+ * - The image is drawn with the theme's own gradient over it at [BackdropArt.TINT_ALPHA] when the theme is not the one the image was
  *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, Ohio State's stadium is GAME, the Predators' arena ARENA).
  * - The sun scenes' images (DAWN, DAY, SUNSET) have no sun: [sun] places it where the real sun is (core SunArc, moved on
  *   the minute tick only), clipped to the sky above the art's hills (BackdropSkyline), only over the decoded image and
@@ -598,7 +599,7 @@ private fun HeroBackdrop(
     precip: Precip?,
     settled: Boolean,
     sun: () -> SunSpot?,
-    screenColor: Int,
+    screenColor: () -> Int,
     dimmed: () -> Boolean,
     modifier: Modifier,
 ) {
@@ -643,27 +644,38 @@ private fun HeroBackdrop(
                 val h = size.height
                 val base = Brush.verticalGradient(listOf(rgb(theme.backdropTop), rgb(theme.backdropBottom)))
                 // Fade into the screen background so the tile row sits on a calm base.
-                val fade = Brush.verticalGradient(
-                    listOf(Color.Transparent, rgb(screenColor)), startY = h * 0.6f, endY = h,
-                )
+                // The fade follows the screen colour as it eases (fade-seam-during-ease): rebuilt only when it changes.
+                var fadeFor = -1
+                var fade: Brush = Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent))
+                fun fadeTo(c: Int): Brush {
+                    if (c != fadeFor) {
+                        fade = Brush.verticalGradient(listOf(Color.Transparent, rgb(c)), startY = h * 0.6f, endY = h)
+                        fadeFor = c
+                    }
+                    return fade
+                }
                 val scrimColour = rgb(theme.scrim)
                 val hill = if (theme.motif == HeroMotif.SNOW) hillPath(w, h) else null
                 val moon = if (theme.motif == HeroMotif.STARS) moonPath(w, h) else null
-                val tint = if (theme.backdropTop != renderedTop(theme.motif)) base else null
+                val tint = if (BackdropArt.tinted(theme)) base else null
+                // Particle alphas capped so text keeps 7:1 over a team-coloured scrim (precip-over-team-scrim).
+                val snowScale = BackdropArt.precipScale(theme, 0xFFFFFF, BackdropArt.SNOW_MAX_ALPHA)
+                val rainScale = BackdropArt.precipScale(theme, BackdropArt.RAIN, BackdropArt.RAIN_MAX_ALPHA)
                 val sunLook = sunLook(theme)
                 val art = ArtFit(w, h)
                 val sky = sunLook?.let { skyPath(art, BackdropSkyline.of(theme.motif)) }
                 var sunCache: Pair<SunSpot, SunBrushes>? = null
                 onDrawBehind {
                     // Until the settings are read, the plain screen background: the scene is not known yet.
-                    if (settled) drawRect(base) else drawRect(rgb(screenColor))
+                    val screen = screenColor()
+                    if (settled) drawRect(base) else drawRect(rgb(screen))
                     // Read in the draw phase only: a decode or a crossfade step redraws this layer, nothing else.
                     val image = backdrop?.takeIf { it.motif == theme.motif }?.image
                     val alpha = if (image == null) 0f else imageAlpha.value
                     if (ready && alpha < 1f) {
                         when (theme.motif) {
                             HeroMotif.MOON_BATS -> drawMoonAndBats(theme)
-                            HeroMotif.SNOW -> { if (image == null) drawSnow(tick.longValue); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
+                            HeroMotif.SNOW -> { if (image == null) drawSnow(tick.longValue, snowScale); hill?.let { drawPath(it, Color.White.copy(alpha = 0.08f)) } }
                             HeroMotif.DAWN, HeroMotif.SUNSET -> Unit // the sun is drawn below, over image or not
                             HeroMotif.DAY -> drawClouds(0.22f)
                             HeroMotif.STARS -> drawStars(theme, moon)
@@ -673,9 +685,9 @@ private fun HeroBackdrop(
                     }
                     if (image != null && alpha > 0f) {
                         drawBackdrop(image, alpha)
-                        tint?.let { drawRect(it, alpha = TINT_ALPHA * alpha) }
+                        tint?.let { drawRect(it, alpha = BackdropArt.TINT_ALPHA * alpha) }
                         // Christmas snowfall keeps falling over the rendered scene.
-                        if (theme.motif == HeroMotif.SNOW) drawSnow(tick.longValue)
+                        if (theme.motif == HeroMotif.SNOW) drawSnow(tick.longValue, snowScale)
                     }
                     // The sun scenes' art has no sun: it is drawn where the real one is (read in the draw phase, so the
                     // minute's move redraws this layer only), clipped to the sky above the hills.
@@ -689,8 +701,8 @@ private fun HeroBackdrop(
                     if (ready) {
                         // Weather motif overlay (never a theme change): particles only when it is falling now.
                         when (precip) {
-                            Precip.SNOW -> if (theme.motif != HeroMotif.SNOW) drawSnow(tick.longValue)
-                            Precip.RAIN -> drawRain(tick.longValue)
+                            Precip.SNOW -> if (theme.motif != HeroMotif.SNOW) drawSnow(tick.longValue, snowScale)
+                            Precip.RAIN -> drawRain(tick.longValue, rainScale)
                             null -> Unit
                         }
                     }
@@ -698,7 +710,7 @@ private fun HeroBackdrop(
                     // any art. Under the fade, so the backdrop still meets the screen background without a seam.
                     if (dimmed()) drawRect(Color.Black, alpha = 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS)
                     else drawRect(scrimColour, alpha = GlanceTokens.SCRIM_ALPHA)
-                    drawRect(fade)
+                    drawRect(fadeTo(screen))
                 }
             },
     )
@@ -708,8 +720,6 @@ private class Backdrop(val motif: HeroMotif, val image: ImageBitmap)
 
 private const val CROSSFADE_MS = 700
 
-/** How much of the theme's gradient goes over an image rendered for another theme's palette. */
-private const val TINT_ALPHA = 0.38f
 
 private fun backdropRes(motif: HeroMotif): Int = when (motif) {
     HeroMotif.DAWN -> R.drawable.hero_dawn
@@ -722,17 +732,6 @@ private fun backdropRes(motif: HeroMotif): Int = when (motif) {
     HeroMotif.ARENA -> R.drawable.hero_arena
 }
 
-/** The backdropTop of the theme each image was rendered for (MOTIFS in tools/art/render_backdrops.py): no tint over it for that theme. */
-private fun renderedTop(motif: HeroMotif): Int? = when (motif) {
-    HeroMotif.DAWN -> 0x1F3B66
-    HeroMotif.DAY -> 0x1B4A86
-    HeroMotif.SUNSET -> 0x2E2250
-    HeroMotif.STARS -> 0x04060B
-    HeroMotif.MOON_BATS -> 0x120A1E
-    HeroMotif.SNOW -> 0x0A2418
-    HeroMotif.GAME -> 0x2A0707 // Ohio State
-    HeroMotif.ARENA -> 0x041E42 // Predators
-}
 
 /**
  * Decodes the motif's 1920x600 WebP. Call off the main thread. ARGB_8888, not RGB_565: 565 bands the dim night and dawn
@@ -908,7 +907,8 @@ private fun DrawScope.drawBat(center: Offset, s: Float) {
     drawCircle(Color(0xFF0A0610), s * 0.12f, center + Offset(s * 0.12f, -s * 0.32f))
 }
 
-private fun DrawScope.drawSnow(tickNs: Long) {
+/** [scale] multiplies the flake alphas (at most [BackdropArt.SNOW_MAX_ALPHA]); see [BackdropArt.precipScale]. */
+private fun DrawScope.drawSnow(tickNs: Long, scale: Float) {
     val t = tickNs / 1_000_000_000.0
     for (i in 0 until 48) {
         val speed = 0.03 + 0.05 * frac(i * 0.37f)
@@ -916,7 +916,7 @@ private fun DrawScope.drawSnow(tickNs: Long) {
         val sway = sin(t * 0.5 + i).toFloat() * size.width * 0.006f
         val x = size.width * frac(i * 0.6180339f + 0.05f) + sway
         val r = size.height * (0.004f + 0.007f * frac(i * 0.53f))
-        drawCircle(Color.White.copy(alpha = 0.35f + 0.4f * frac(i * 0.29f)), r, Offset(x, size.height * y))
+        drawCircle(Color.White.copy(alpha = (0.35f + 0.4f * frac(i * 0.29f)) * scale), r, Offset(x, size.height * y))
     }
 }
 
@@ -930,7 +930,8 @@ private fun hillPath(w: Float, h: Float): Path = Path().apply {
     close()
 }
 
-private fun DrawScope.drawRain(tickNs: Long) {
+/** [scale] multiplies the drop alphas (at most [BackdropArt.RAIN_MAX_ALPHA]); see [BackdropArt.precipScale]. */
+private fun DrawScope.drawRain(tickNs: Long, scale: Float) {
     val t = tickNs / 1_000_000_000.0
     for (i in 0 until 70) {
         val speed = 0.6 + 0.5 * frac(i * 0.37f)
@@ -938,7 +939,7 @@ private fun DrawScope.drawRain(tickNs: Long) {
         val x = size.width * frac(i * 0.6180339f + 0.05f) - y * size.width * 0.02f
         val len = size.height * (0.03f + 0.03f * frac(i * 0.53f))
         drawLine(
-            Color(0xFFAFC8F0).copy(alpha = 0.25f + 0.2f * frac(i * 0.29f)),
+            Color(0xFF000000.toInt() or BackdropArt.RAIN).copy(alpha = (0.25f + 0.2f * frac(i * 0.29f)) * scale),
             Offset(x, size.height * y), Offset(x - len * 0.2f, size.height * y + len), strokeWidth = 2f,
         )
     }
