@@ -83,15 +83,20 @@ object BlockText {
     const val MIN_WIDTH_DP = 44f
 
     /** 0: compact (no text; the day list has it); 1: "9:00 Title"; 2 or more: time, then the title over the rest. */
-    fun lines(heightDp: Float, widthDp: Float): Int {
-        if (widthDp < MIN_WIDTH_DP) return 0
-        return ((heightDp - 2 * PAD_DP) / LINE_DP).toInt().coerceIn(0, 4)
+    fun lines(heightDp: Float, widthDp: Float, fontScale: Float = 1f): Int {
+        val k = fontScale.coerceAtLeast(1f)
+        if (widthDp < MIN_WIDTH_DP * k) return 0
+        return ((heightDp - 2 * PAD_DP) / (LINE_DP * k)).toInt().coerceIn(0, 4)
     }
 
-    /** Hour labels every hour when an hour is at least this tall, else every other hour. */
-    const val LABEL_EVERY_HOUR_DP = 28f
+    /** An hour label's height (one 22 sp line) at font scale 1. */
+    const val LABEL_DP = 28f
 
-    fun labelStep(hourDp: Float): Int = if (hourDp >= LABEL_EVERY_HOUR_DP) 1 else 2
+    /** Hours between axis labels so no two overlap: ceil(label height / hour height), at least 1. */
+    fun labelStep(hourDp: Float, fontScale: Float = 1f): Int {
+        if (hourDp <= 0f) return 24
+        return kotlin.math.ceil(LABEL_DP * fontScale.coerceAtLeast(1f) / hourDp).toInt().coerceIn(1, 24)
+    }
 }
 
 /**
@@ -126,7 +131,9 @@ fun weekGrid(week: List<AgendaDay>, known: Boolean, now: Instant, zone: ZoneId, 
             return@map GridColumn(d, heading, d == today, false, emptyList(), emptyList(), emptyList(), "${formatDateLong(d)}, not loaded")
         }
         val allDay = day.items.filter { it.label == TimeLabel.AllDay }.map { QuietMode.title(it.title, quiet, max = MAX_TITLE) }
-        val drawn = spans.getValue(d).map { s ->
+        // A part continuing from the day before that ends before the visible hours is not drawn (grid-continues-offrange);
+        // the day list keeps it.
+        val drawn = spans.getValue(d).filter { !(it.continues && it.end <= lo) }.map { s ->
             val a = s.start.coerceIn(lo, hi - WeekGrid.MIN_BLOCK_MIN)
             val b = maxOf(s.end.coerceIn(lo, hi), a + WeekGrid.MIN_BLOCK_MIN)
             Triple(s, a, b)
@@ -152,19 +159,25 @@ private const val MAX_TITLE = 80
 /** A timed item as minutes on [date]: start clipped to midnight (then [continues]), end clipped to the next midnight. */
 private class Span(val item: AgendaItem, val start: Int, val end: Int, val continues: Boolean)
 
+/**
+ * Positions are wall-clock minutes (local hour * 60 + minute), like the axis and the now line, so a DST day draws a
+ * 9:00 event at 9:00 (grid-dst-minutes). Midnight-to-midnight is 0 to [DAY_MIN]; on the fall-back day the repeated hour
+ * shares its minutes, on the spring-forward day the skipped hour is empty.
+ */
 private fun span(item: AgendaItem, date: LocalDate, zone: ZoneId): Span? {
     if (item.label == TimeLabel.AllDay) return null
     val start = item.startsAt ?: return null
     val dayStart = date.atStartOfDay(zone).toInstant()
     val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant()
     val end = item.endsAt?.takeIf { it.isAfter(start) } ?: start.plus(Duration.ofMinutes(WeekGrid.NO_END_MIN.toLong()))
-    val dayMin = Duration.between(dayStart, dayEnd).toMinutes().toInt() // 23 or 25 on DST days
-    fun min(t: Instant) = Duration.between(dayStart, t).toMinutes().toInt().coerceIn(0, dayMin)
+    fun clock(t: Instant): Int = t.atZone(zone).toLocalTime().let { it.hour * 60 + it.minute }
     val continues = start.isBefore(dayStart)
-    val a = min(start)
-    val b = min(if (end.isAfter(dayEnd)) dayEnd else end)
+    val a = if (continues) 0 else clock(start)
+    val b = if (!end.isBefore(dayEnd)) DAY_MIN else clock(end)
     return Span(item, a, maxOf(b, a), continues).takeIf { b > a || !continues }
 }
+
+private const val DAY_MIN = 24 * 60
 
 /**
  * Side-by-side lanes for overlapping intervals (half-open, minutes). Intervals are taken by start, then longer first; each

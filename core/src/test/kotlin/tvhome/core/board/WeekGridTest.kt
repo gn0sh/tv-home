@@ -41,12 +41,20 @@ class WeekGridTest {
     }
 
     @Test fun continuingEventIsClippedToTheTopAndLabelled() {
-        val party = timed("Party", 0, 22, 0, 1, 0, endDay = 1)
-        val cont = party.copy(label = TimeLabel.Continues)
-        val g = weekGrid(week(listOf(party), listOf(cont)), true, now, zone, false, false)
+        val shift = timed("Shift", 0, 22, 0, 9, 0, endDay = 1)
+        val g = weekGrid(week(listOf(shift), listOf(shift.copy(label = TimeLabel.Continues))), true, now, zone, false, false)
         val b = g.columns[1].blocks.single()
         assertEquals("Continues", b.time)
         assertEquals(g.startHour * 60, b.startMin)
+        assertEquals(9 * 60, b.endMin)
+    }
+
+    /** grid-continues-offrange: a continuing part that ends before the visible hours is not drawn; the list keeps it. */
+    @Test fun continuingPartBeforeTheRangeIsListedNotDrawn() {
+        val party = timed("Party", 0, 22, 0, 1, 0, endDay = 1)
+        val g = weekGrid(week(listOf(party), listOf(party.copy(label = TimeLabel.Continues))), true, now, zone, false, false)
+        assertTrue(g.columns[1].blocks.isEmpty())
+        assertEquals(listOf("Continues"), g.columns[1].rows.map { it.time })
     }
 
     @Test fun overlapsGoSideBySide() {
@@ -113,7 +121,36 @@ class WeekGridTest {
         assertEquals(1, BlockText.lines(30f, 150f))
         assertEquals(2, BlockText.lines(56f, 150f))
         assertEquals(0, BlockText.lines(200f, 30f), "too narrow (four lanes)")
-        assertEquals(1, BlockText.labelStep(30f)); assertEquals(2, BlockText.labelStep(20f))
+        assertEquals(2, BlockText.lines(56f, 150f, fontScale = 1f))
+        assertEquals(1, BlockText.lines(56f, 150f, fontScale = 1.3f), "bigger text, fewer lines")
+        assertEquals(0, BlockText.lines(200f, 50f, fontScale = 1.3f), "bigger text needs a wider lane")
+    }
+
+    /** board-axis-label-overlap: labels never closer than their own height. */
+    @Test fun labelStepKeepsLabelsApart() {
+        for (hourDp in listOf(40f, 28f, 27.9f, 14f, 13.9f, 9.3f, 5f, 2f)) for (fs in listOf(1f, 1.3f)) {
+            val step = BlockText.labelStep(hourDp, fs)
+            assertTrue(step >= 1)
+            assertTrue(step * hourDp >= BlockText.LABEL_DP * fs - 1e-3, "$hourDp $fs $step")
+            if (step > 1) assertTrue((step - 1) * hourDp < BlockText.LABEL_DP * fs, "smallest such step")
+        }
+        assertEquals(1, BlockText.labelStep(30f)); assertEquals(2, BlockText.labelStep(20f)); assertEquals(3, BlockText.labelStep(10f))
+    }
+
+    /** grid-dst-minutes: on both DST days a 9:00-10:00 event sits at 9:00 on the wall-clock axis. */
+    @Test fun dstDaysUseWallClockMinutes() {
+        for (day in listOf(LocalDate.of(2026, 11, 1), LocalDate.of(2027, 3, 14))) {
+            val n = day.atTime(8, 0).atZone(zone).toInstant()
+            val item = AgendaItem("A", TimeLabel.Starts(LocalTime.of(9, 0)), day.atTime(9, 0).atZone(zone).toInstant(), day.atTime(10, 0).atZone(zone).toInstant())
+            val late = AgendaItem("B", TimeLabel.Starts(LocalTime.of(22, 0)), day.atTime(22, 0).atZone(zone).toInstant(), day.plusDays(1).atStartOfDay(zone).toInstant())
+            val g = weekGrid(listOf(AgendaDay(day, listOf(item, late))), true, n, zone, false, false)
+            val (b, l) = g.columns[0].blocks
+            assertEquals(9 * 60, b.startMin, "$day"); assertEquals(10 * 60, b.endMin, "$day")
+            assertEquals("9:00", b.time)
+            assertEquals(22 * 60, l.startMin, "$day"); assertEquals(24 * 60, l.endMin, "$day")
+            assertEquals(24, g.endHour)
+            assertEquals(8 * 60, g.nowMin, "$day")
+        }
     }
 
     @Test fun twentyFourHourTimes() {
