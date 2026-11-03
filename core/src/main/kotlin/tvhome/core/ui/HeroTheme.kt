@@ -27,6 +27,12 @@ data class HeroTheme(
     val badge: String?,
     val text: Int = 0xF4F1EA,
     val secondaryText: Int = 0xD5DCE8,
+    /** The scrim's colour (R3: the art shows at [GlanceTokens.BACKDROP_BRIGHTNESS] over it). Black but on game days. */
+    val scrim: Int = 0x000000,
+    /** The screen background behind the tiles and dock, or null for the home theme's. */
+    val screen: Int? = null,
+    /** A full-strength accent line along the hero's bottom edge, below every text zone, or null. */
+    val edge: Int? = null,
 ) {
     companion object {
         /** The fourth Thursday of [year]'s November (US Thanksgiving). */
@@ -49,7 +55,10 @@ data class HeroTheme(
                 Venue.ARENA -> HeroMotif.ARENA
                 Venue.STADIUM -> HeroMotif.GAME
             }
-            return HeroTheme(t.backdropTop, t.backdropBottom, t.accent, motif, GameDay.badge(game))
+            return HeroTheme(
+                t.backdropTop, t.backdropBottom, t.accent, motif, GameDay.badge(game),
+                scrim = t.scrim, screen = t.screen, edge = t.edge,
+            )
         }
 
         /**

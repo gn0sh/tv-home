@@ -89,19 +89,23 @@ class GlanceTokensTest {
         }
     }
 
-    @Test fun arenaExceptionStillKeepsSevenToOneOverTeamGold() {
-        // The arena art's brightest pixels are the gold ribbon board and rail (render_backdrops.py checks the art).
-        fun scaled(rgb: Int, f: Float): Int {
-            fun ch(shift: Int) = kotlin.math.ceil(((rgb shr shift) and 0xFF) * f.toDouble() - 1e-9).toInt().coerceIn(0, 255)
-            return (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    @Test fun gameDayScrimsKeepSevenToOneOverTheirArtsBrightest() {
+        // Team-coloured scrims (navy, scarlet) at the usual 25%: the hero text over the art's brightest element, the
+        // team colour at full strength (gold ribbon and rail; scarlet haze), composited as the app draws it.
+        for (team in tvhome.core.feeds.Teams.ALL) {
+            val px = GlanceTokens.composite(team.primary, team.scrim)
+            assertSeven(GlanceTokens.HERO_TEXT, px, "${team.key} text over its ${team.primary.toString(16)} art")
+            assertSeven(GlanceTokens.HERO_SECONDARY, px, "${team.key} secondary over its ${team.primary.toString(16)} art")
+            assertSeven(GlanceTokens.HERO_SECONDARY, GlanceTokens.composite(0, team.scrim), "${team.key} over a black pixel")
         }
-        val gold = scaled(0xFFB81C, GlanceTokens.ARENA_BRIGHTNESS)
-        assertSeven(GlanceTokens.HERO_TEXT, gold, "hero text over gold at the arena scrim")
-        assertSeven(GlanceTokens.HERO_SECONDARY, gold, "hero secondary over gold at the arena scrim")
-        assertEquals(GlanceTokens.SCRIM_ALPHA, GlanceTokens.scrimAlpha(HeroMotif.GAME), 1e-6f)
-        assertEquals(0.67f, GlanceTokens.scrimAlpha(HeroMotif.ARENA), 1e-6f)
-        for (m in HeroMotif.values()) if (m != HeroMotif.ARENA) {
-            assertEquals(GlanceTokens.BACKDROP_BRIGHTNESS, GlanceTokens.backdropBrightness(m), "$m keeps the 25% cap")
+        assertEquals(0x404040, GlanceTokens.composite(0xFFFFFF, 0)) // black scrim: the usual white-pixel case
+    }
+
+    @Test fun gameDayScreenBackgroundKeepsTheHomeTextReadable() {
+        for (team in tvhome.core.feeds.Teams.ALL) {
+            val bg = team.screen ?: continue
+            assertSeven(Tokens.TEXT, bg, "${team.key} tile labels on the screen background")
+            assertSeven(Tokens.SECONDARY, bg, "${team.key} brief line on the screen background")
         }
     }
 }

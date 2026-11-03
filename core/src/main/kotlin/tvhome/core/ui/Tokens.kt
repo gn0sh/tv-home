@@ -78,17 +78,18 @@ object GlanceTokens {
     val SCRIM_ALPHA: Float get() = 1f - BACKDROP_BRIGHTNESS
 
     /**
-     * R3 exception for the indoor arena (Predators game day): its art has no near-white pixel (its brightest is the
-     * gold ribbon board, about the team gold), so it is scrimmed to 33% instead of 25% and its navy and gold read
-     * through. 7:1 still holds: the test checks the hero text over pure team gold at this brightness, and
-     * tools/art/render_backdrops.py fails the render if the art's 99.9th-percentile pixel at 33% breaks 7:1.
+     * One composited backdrop pixel: [art] at [BACKDROP_BRIGHTNESS] over a [scrim]-coloured scrim (sRGB, as Compose
+     * blends). On game days the scrim is the team colour, so a white art pixel can break 7:1; the game art has none
+     * (tools/art/render_backdrops.py checks the art's 99.9th-percentile pixel composited like this).
      */
-    const val ARENA_BRIGHTNESS = 0.33f
-
-    /** The backdrop brightness after the scrim for one motif: [BACKDROP_BRIGHTNESS], or [ARENA_BRIGHTNESS]. */
-    fun backdropBrightness(motif: HeroMotif): Float = if (motif == HeroMotif.ARENA) ARENA_BRIGHTNESS else BACKDROP_BRIGHTNESS
-
-    fun scrimAlpha(motif: HeroMotif): Float = 1f - backdropBrightness(motif)
+    fun composite(art: Int, scrim: Int): Int {
+        fun ch(shift: Int): Int {
+            val a = (art shr shift) and 0xFF
+            val s = (scrim shr shift) and 0xFF
+            return kotlin.math.round(a * BACKDROP_BRIGHTNESS + s * SCRIM_ALPHA).toInt().coerceIn(0, 255)
+        }
+        return (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
 
     /** Hero text colours: the [HeroTheme] defaults, here so the test names them. */
     const val HERO_TEXT = 0xF4F1EA

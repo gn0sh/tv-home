@@ -30,6 +30,12 @@ data class TeamConfig(
     /** The club's home time zone: the NHL dated URL uses the club's local date. */
     val zone: ZoneId,
     val venue: Venue = Venue.STADIUM,
+    /** The colour the hero's scrim is (instead of black), so the whole hero reads in the team colour through it. */
+    val scrim: Int = 0x000000,
+    /** The screen background behind the tiles and dock on this team's game day, or null for the usual one. */
+    val screen: Int? = null,
+    /** A thin full-strength accent line along the hero's bottom edge (under no text), or null for none. */
+    val edge: Int? = null,
 ) {
     /**
      * NHL: `week/YYYY-MM-DD` for today in [zone]. The `week/now` form answers HTTP 307 to the dated URL, and
@@ -66,6 +72,7 @@ object Teams {
         primary = 0xFFB81C, secondary = 0x041E42,
         backdropTop = 0x041E42, backdropBottom = 0x0B3169, accent = 0xFFB81C,
         zone = ZoneId.of("America/Chicago"), venue = Venue.ARENA,
+        scrim = 0x041E42, screen = 0x06204A, edge = 0xFFB81C,
     )
 
     /** Scarlet #BB0000 and gray #666666. Gray is too dark for text on the dark backdrop, so the accent is a lighter gray. */
@@ -74,6 +81,7 @@ object Teams {
         primary = 0xBB0000, secondary = 0x666666,
         backdropTop = 0x2A0707, backdropBottom = 0x8A0000, accent = 0xC4C4C4,
         zone = ZoneId.of("America/New_York"), venue = Venue.STADIUM,
+        scrim = 0x2A0707, edge = 0xBB0000,
     )
 
     val ALL: List<TeamConfig> = listOf(PREDATORS, OHIO_STATE)

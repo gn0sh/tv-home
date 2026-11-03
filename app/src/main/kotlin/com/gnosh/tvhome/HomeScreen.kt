@@ -272,6 +272,8 @@ fun HomeScreen(
     val idleState = idle.state.value
     // M7-F5: the Watch pill's target, reported by the hero (homeGlance owns the rule); null hides the pill.
     var watch by remember { mutableStateOf<WatchTarget?>(null) }
+    // The hero's game-day screen colour (Predators navy), or null: the home theme's background (preds-arena).
+    var screenTint by remember { mutableStateOf<Int?>(null) }
     val watchPill = remember { FocusRequester() }
     val quietPill = remember { FocusRequester() }
     // watch-pill-focus-loss: the pill can vanish while focused (the game ended); focus moves on to Quiet, else Ask.
@@ -292,7 +294,7 @@ fun HomeScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(color(theme.background))
+            .background(color(screenTint ?: theme.background))
             // Test tags (the hero's idle state) show as uiautomator resource-ids for the emulator QA; not read aloud.
             .onGloballyPositioned { canvasTop.floatValue = it.positionInRoot().y }
             .semantics { testTagsAsResourceId = true }
@@ -307,7 +309,7 @@ fun HomeScreen(
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
         if (heroReady) HeroLayer(
-            idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, briefColor = shown.secondaryText, appsTop = appsTop,
+            idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, onScreen = { screenTint = it }, briefColor = shown.secondaryText, appsTop = appsTop,
         )
         CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(

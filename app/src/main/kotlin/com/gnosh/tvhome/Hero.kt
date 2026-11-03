@@ -166,6 +166,8 @@ fun HeroLayer(
     drift: State<DriftOffset>,
     quiet: Boolean,
     onWatch: (WatchTarget?) -> Unit,
+    /** The screen background the hero's theme asks for (a team colour on game day), or null for the home theme's. */
+    onScreen: (Int?) -> Unit = {},
     briefColor: Int,
     modifier: Modifier = Modifier,
     /** Top of the apps row in design dp (null until measured): the hero text ends above it ([HeroZones.layout]). */
@@ -269,6 +271,7 @@ fun HeroLayer(
             .also { if (game == null) lastScene.theme = it }
     }
     val sun = rememberUpdatedState(remember(sky, resolved.motif) { heroSun(sky, resolved.motif) })
+    LaunchedEffect(resolved.screen) { onScreen(resolved.screen) }
     val dim = idle.value == IdleState.DIM
     val ink = HeroInk(
         text = if (dim) OledTokens.DIM_TEXT else resolved.text,
@@ -280,7 +283,7 @@ fun HeroLayer(
             resolved, weather?.precipNow,
             settled = settings.loaded,
             sun = { sun.value },
-            scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.scrimAlpha(resolved.motif) },
+            scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
             modifier = Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION),
         )
         val drifting = Modifier.graphicsLayer {
@@ -289,6 +292,16 @@ fun HeroLayer(
             translationY = o.dy.dp.toPx()
         }
         val zones = HeroZones.layout(appsTop.value)
+        // Game day accent (preds-arena): a thin full-strength team-colour line just under the hero text, in the gap
+        // above the apps row where no text sits, so the team colour reads at full strength. Not in DIM.
+        resolved.edge?.let { edge ->
+            if (!dim) Box(
+                Modifier
+                    .offset(HeroZones.SAFE_X.dp, (zones.left.bottom + EDGE_GAP_DP).dp)
+                    .size((HeroZones.SCREEN_W - 2 * HeroZones.SAFE_X).dp, EDGE_DP.dp)
+                    .background(rgb(edge)),
+            )
+        }
         HeroTopStrip(glance, resolved, ink, dim, drifting, zones.top)
         HeroNowNext(glance.nowNext, ink, drifting, zones.left)
         HeroCard(glance.card, ink, drifting, zones.right)
@@ -329,6 +342,10 @@ private val BRIEF_TEXT_DP: Int = BRIEF_ROW_DP - 2 * Drift.MAX_Y_DP.toInt()
 const val DOCK_BRIEF_TAG = "dock_brief"
 
 private const val FEEDS_START_DELAY_MS = 1500L
+
+/** The game-day edge line: 3 dp, 2 dp under the text zones, so it stays inside [HeroZones.APPS_GAP] (8 dp). */
+private const val EDGE_DP = 3
+private const val EDGE_GAP_DP = 2
 
 /** The theme shown last minute, outside game day: the dead band's memory (written in a remember block only). */
 private class SceneMemo(var theme: HeroTheme? = null)
@@ -554,7 +571,9 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  * - Until [settled] (the hero's settings read once, so whether a location is set is known), only the screen background
  *   is drawn and nothing is decoded: no clock scene that the real sky then replaces.
  * - The rain and snow particles are drawn on top of the image.
- * - A black scrim ([scrimAlpha], read in the draw phase) goes over everything but the bottom fade (M7, R3).
+ * - A scrim ([scrimAlpha], read in the draw phase) goes over everything but the bottom fade (M7, R3): black, or the
+ *   theme's [HeroTheme.scrim] team colour on game days (navy, scarlet) so the whole hero reads in it; in DIM, black.
+ *   The bottom fade goes to the theme's screen colour ([HeroTheme.screen]) so it meets the tinted screen.
  * - Only Christmas animates (slow snowfall), plus the rain or snow overlay while it is falling now. The loop ticks about 15 times a second with a delay, not every vsync, and
  *   does not run at all when the system animator scale is 0 (snow-uiautomator-idle: QA sets that so uiautomator can
  *   reach an idle state; it also honours the user's "remove animations" choice).
@@ -609,7 +628,10 @@ private fun HeroBackdrop(
                 val h = size.height
                 val base = Brush.verticalGradient(listOf(rgb(theme.backdropTop), rgb(theme.backdropBottom)))
                 // Fade into the screen background so the tile row sits on a calm base.
-                val fade = Brush.verticalGradient(listOf(Color.Transparent, rgb(Tokens.BACKGROUND)), startY = h * 0.6f, endY = h)
+                val fade = Brush.verticalGradient(
+                    listOf(Color.Transparent, rgb(theme.screen ?: Tokens.BACKGROUND)), startY = h * 0.6f, endY = h,
+                )
+                val scrimColour = rgb(theme.scrim)
                 val hill = if (theme.motif == HeroMotif.SNOW) hillPath(w, h) else null
                 val moon = if (theme.motif == HeroMotif.STARS) moonPath(w, h) else null
                 val tint = if (theme.backdropTop != renderedTop(theme.motif)) base else null
@@ -659,7 +681,8 @@ private fun HeroBackdrop(
                     }
                     // R3: the scrim caps the brightest backdrop pixel at 25% (15% in DIM), so hero text keeps 7:1 over
                     // any art. Under the fade, so the backdrop still meets the screen background without a seam.
-                    drawRect(Color.Black, alpha = scrimAlpha())
+                    val sa = scrimAlpha()
+                    drawRect(if (sa > GlanceTokens.SCRIM_ALPHA) Color.Black else scrimColour, alpha = sa) // DIM: black
                     drawRect(fade)
                 }
             },

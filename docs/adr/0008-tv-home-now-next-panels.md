@@ -80,11 +80,15 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   clock 40 sp (60 px), alert 40 sp. The backdrop is dimmed with a black scrim to **25%** (spec "about 35%"): 25% is
   the value at which both hero text colours keep 7:1 even over a pure-white pixel (`#F4F1EA` 9.2:1, `#D5DCE8`
   7.5:1; at 35% they are 6.2:1 and 5.1:1), so the test needs no knowledge of the art.
-  **Exception (2026-11-03, preds-arena):** the indoor arena (Predators game day, `HeroMotif.ARENA`) is scrimmed to
-  **33%** (`GlanceTokens.ARENA_BRIGHTNESS`) so its navy and gold read through, as Brian asked. Its art has no
-  near-white pixel; 7:1 is kept against the art instead of a white pixel: `GlanceTokensTest` checks both text colours
-  over pure team gold at 33% (`#D5DCE8` 7.5:1), and `render_backdrops.py` fails the render if the art's
-  99.9th-percentile pixel at 33% drops below 7:1 (it measures 8.6:1 and 7.1:1). Every other motif keeps 25%.
+  **Game-day scrims (2026-11-03, preds-arena):** the art stays at 25% for every theme, but on a game day the scrim is
+  the team colour instead of black (`HeroTheme.scrim`: Predators navy `#041E42`, Ohio State `#2A0707`), so the
+  whole hero reads navy or scarlet. A team-coloured scrim breaks the white-pixel guarantee (white at 25% over navy is
+  5.4:1), so 7:1 is checked over the composited art instead: `GlanceTokensTest` composites each team's brightest art
+  colour (gold, scarlet) over its scrim, and `render_backdrops.py` fails the render if the art's 99.9th-percentile
+  pixel, composited the same way, drops below 7:1 (arena 8.8 / 7.2, stadium 10.4 / 8.5); the game art has no white.
+  Full-strength team colour goes only where no text sits: a 3 dp accent line in the gap under the hero text
+  (`HeroTheme.edge`, gold or scarlet), and on Predators game days the screen background behind the tiles is navy
+  `#06204A` (tile labels 7:1 or more, tested). DIM keeps the black scrim. No brightness exception.
 
 ### 4. OLED profile (LG vs Vizio, drift, idle dim)
 - **Profile.** `TvProfile.LG_OLED` (drift on, dim at 10 min, near-black at 30 min) and `TvProfile.VIZIO_LED` (drift
