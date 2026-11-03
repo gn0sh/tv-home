@@ -35,10 +35,11 @@ data class HeroTheme(
          * Game day beats holiday beats time of day (M2f). [game] is the followed game that owns the hero, if any (see
          * [GameDay.select]); a live game is chosen over a scheduled one there, so it wins over everything. Weather never
          * changes the theme: it is a chip and a motif overlay in the app. [sun] is the real sun now, when a location is
-         * set (see [at]).
+         * set (see [at]); [previous] is the theme shown the minute before, for the sky's dead band.
          */
-        fun resolve(date: LocalDate, time: LocalTime, game: TeamGame?, sun: SunPosition? = null): HeroTheme =
-            if (game != null) forGame(game) else at(date, time, sun)
+        fun resolve(
+            date: LocalDate, time: LocalTime, game: TeamGame?, sun: SunPosition? = null, previous: HeroTheme? = null,
+        ): HeroTheme = if (game != null) forGame(game) else at(date, time, sun, previous)
 
         fun forGame(game: TeamGame): HeroTheme {
             val t = game.team
@@ -50,9 +51,14 @@ data class HeroTheme(
          * the sun is more than 6 degrees down (civil dusk to civil dawn), the dawn or sunset scene in the twilight and
          * golden-hour band up to 6 degrees above the horizon (dawn before the sun crosses the meridian, sunset after),
          * day above it. Without a location, the clock: morning 5-11, day 11-17, evening 17-21, night 21-5.
+         *
+         * Dead band (scene-boundary-hysteresis): with the [previous] minute's theme, the scene changes only once the
+         * elevation is [DEAD_BAND] past the -6 or +6 line, so a day whose noon peaks at 6 degrees (or a summer night whose
+         * midnight dips to -6) does not flip back and forth. Dawn turns into sunset, without a dead band, only at the
+         * transit (and sunset into dawn at solar midnight): that happens once, on days spent wholly in the golden band.
          */
-        fun at(date: LocalDate, time: LocalTime, sun: SunPosition? = null): HeroTheme =
-            holiday(date) ?: if (sun != null) bySky(sun) else timeOfDay(time)
+        fun at(date: LocalDate, time: LocalTime, sun: SunPosition? = null, previous: HeroTheme? = null): HeroTheme =
+            holiday(date) ?: if (sun != null) bySky(sun, previous) else timeOfDay(time)
 
         /** Degrees: civil twilight's end. Below it the scene is night. */
         const val NIGHT_BELOW = -6.0
@@ -60,10 +66,25 @@ data class HeroTheme(
         /** Degrees: the golden hour's top. From [NIGHT_BELOW] up to it the scene is dawn or sunset. */
         const val GOLDEN_BELOW = 6.0
 
-        private fun bySky(sun: SunPosition): HeroTheme = when {
-            sun.elevation < NIGHT_BELOW -> NIGHT
-            sun.elevation < GOLDEN_BELOW -> if (sun.morning) MORNING else EVENING
-            else -> DAY
+        /** Degrees the elevation must pass a scene line by before the scene changes from [at]'s `previous`. */
+        const val DEAD_BAND = 0.5
+
+        private fun bySky(sun: SunPosition, previous: HeroTheme?): HeroTheme {
+            val e = sun.elevation
+            val twilight = if (sun.morning) MORNING else EVENING
+            val fresh = when {
+                e < NIGHT_BELOW -> NIGHT
+                e < GOLDEN_BELOW -> twilight
+                else -> DAY
+            }
+            val keep = when {
+                previous === NIGHT -> e < NIGHT_BELOW + DEAD_BAND
+                previous === DAY -> e >= GOLDEN_BELOW - DEAD_BAND
+                previous === MORNING || previous === EVENING ->
+                    previous === twilight && e >= NIGHT_BELOW - DEAD_BAND && e < GOLDEN_BELOW + DEAD_BAND
+                else -> false // a holiday or game theme, or nothing: no scene to hold
+            }
+            return if (keep) previous!! else fresh
         }
 
         private val HALLOWEEN = HeroTheme(0x120A1E, 0x3A1A12, 0xFF9A3C, HeroMotif.MOON_BATS, "HALLOWEEN")

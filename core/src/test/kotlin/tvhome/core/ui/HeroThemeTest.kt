@@ -163,4 +163,42 @@ class HeroThemeTest {
             assertTrue(HeroTheme.ALL.any { it === HeroTheme.at(d, noon, SunPosition(e, 0.0, mo)) })
         }
     }
+
+    @Test fun deadBandHoldsTheSceneAtTheLines() {
+        val d = LocalDate.of(2026, 3, 10)
+        fun m(e: Double, morning: Boolean, prev: HeroTheme?) = HeroTheme.at(d, noon, SunPosition(e, 0.0, morning), prev)
+        val day = m(30.0, false, null)
+        val evening = m(3.0, false, null)
+        val night = m(-20.0, false, null)
+        val morning = m(3.0, true, null)
+        // A noon that peaks right at +6: day stays day down to 5.5, and sunset stays sunset up to 6.5.
+        assertEquals(HeroMotif.DAY, m(5.6, false, day).motif)
+        assertEquals(HeroMotif.SUNSET, m(5.4, false, day).motif)
+        assertEquals(HeroMotif.DAWN, m(6.4, true, morning).motif)
+        assertEquals(HeroMotif.DAY, m(6.6, true, morning).motif)
+        // A summer midnight that dips right to -6: night holds to -5.5, twilight to -6.5.
+        assertEquals(HeroMotif.STARS, m(-5.6, true, night).motif)
+        assertEquals(HeroMotif.DAWN, m(-5.4, true, night).motif)
+        assertEquals(HeroMotif.SUNSET, m(-6.4, false, evening).motif)
+        assertEquals(HeroMotif.STARS, m(-6.6, false, evening).motif)
+        // Dawn and sunset swap at the transit or solar midnight only (no dead band on the morning flag).
+        assertEquals(HeroMotif.SUNSET, m(4.0, false, morning).motif)
+        assertEquals(HeroMotif.DAWN, m(-5.9, true, evening).motif)
+        // A holiday as the previous theme holds nothing.
+        val halloween = HeroTheme.at(LocalDate.of(2026, 10, 31), noon)
+        assertEquals(HeroMotif.DAY, m(6.1, false, halloween).motif)
+    }
+
+    @Test fun deadBandWalkThroughAPeakAtSixDoesNotFlicker() {
+        // Elevation wobbling 5.8..6.2 around a noon peak: one scene, whichever it started in.
+        val d = LocalDate.of(2026, 3, 10)
+        var prev: HeroTheme? = null
+        val seen = mutableSetOf<HeroMotif>()
+        for (i in 0 until 40) {
+            val e = 6.0 + 0.2 * kotlin.math.sin(i.toDouble())
+            prev = HeroTheme.at(d, noon, SunPosition(e, 0.0, i < 20), prev)
+            if (i > 0) seen += prev.motif
+        }
+        assertTrue(seen.size == 1, "$seen")
+    }
 }
