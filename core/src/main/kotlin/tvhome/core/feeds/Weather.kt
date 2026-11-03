@@ -42,6 +42,8 @@ data class WeatherNow(
     val highHour: Int? = null,
     /** Lowest hourly temperature of the coming (or current) night, 7 PM to 7 AM; null when the hours are not all there. */
     val overnightLowF: Int? = null,
+    /** The daily forecast from today (Board: up to [WeatherFeed.FORECAST_DAYS]); empty when the document has none. */
+    val days: List<DayForecast> = emptyList(),
 ) {
     val chip: String
         get() {
@@ -53,7 +55,15 @@ data class WeatherNow(
         }
 }
 
+/**
+ * One forecast day. [condition] is the fixed label for the day's WMO code ("" when unknown); [precipChance] is the
+ * day's maximum precipitation probability in percent, null when missing.
+ */
+data class DayForecast(val date: java.time.LocalDate, val highF: Int, val lowF: Int, val condition: String, val precipChance: Int?)
+
 object WeatherFeed {
+    /** Days asked for: today and the six after it (Board's 7-day forecast). */
+    const val FORECAST_DAYS = 7
     private val json = Json { ignoreUnknownKeys = true }
     private val HOUR_FORMAT = DateTimeFormatter.ofPattern("h a", Locale.US)
     private const val WINDOW_HOURS = 12L
@@ -62,8 +72,8 @@ object WeatherFeed {
         ("https://api.open-meteo.com/v1/forecast" +
             "?latitude=${"%.2f".format(Locale.ROOT, loc.lat)}&longitude=${"%.2f".format(Locale.ROOT, loc.lon)}" +
             "&current=temperature_2m,weather_code&hourly=weather_code,temperature_2m" +
-            "&daily=temperature_2m_max,temperature_2m_min" +
-            "&temperature_unit=fahrenheit&forecast_days=2&timezone=auto").toHttpUrl()
+            "&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max" +
+            "&temperature_unit=fahrenheit&forecast_days=$FORECAST_DAYS&timezone=auto").toHttpUrl()
 
     /** Any missing or malformed required field is null ("no weather"), never an exception. */
     fun parse(raw: String): WeatherNow? = runCatching { parseUnsafe(raw) }.getOrNull()
@@ -95,8 +105,37 @@ object WeatherFeed {
             }
         }
         val extra = timeOfDayFields(root, now)
-        return WeatherNow(temp.roundToInt(), describe(code), precipNow, next, extra.high, extra.low, extra.highHour, extra.overnightLow)
+        return WeatherNow(
+            temp.roundToInt(), describe(code), precipNow, next, extra.high, extra.low, extra.highHour, extra.overnightLow,
+            dailyForecast(root, now.toLocalDate()),
+        )
     }
+
+    /**
+     * Days from [today] on, at most [FORECAST_DAYS], in order. A day missing its high or low is dropped (never drawn with
+     * a made-up value); a missing code or precipitation chance is just left out. Never fails the whole document.
+     */
+    private fun dailyForecast(root: JsonObject, today: java.time.LocalDate): List<DayForecast> = runCatching {
+        val daily = root["daily"] as? JsonObject ?: return@runCatching emptyList()
+        val days = daily["time"] as? JsonArray ?: return@runCatching emptyList()
+        val highs = daily["temperature_2m_max"] as? JsonArray
+        val lows = daily["temperature_2m_min"] as? JsonArray
+        val codes = daily["weather_code"] as? JsonArray
+        val chances = daily["precipitation_probability_max"] as? JsonArray
+        val out = ArrayList<DayForecast>()
+        for (i in 0 until minOf(days.size, MAX_DAYS)) {
+            val date = (days[i] as? JsonPrimitive)?.contentOrNull?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() } ?: continue
+            if (date.isBefore(today) || out.any { it.date == date }) continue
+            val high = temp(highs?.getOrNull(i)) ?: continue
+            val low = temp(lows?.getOrNull(i)) ?: continue
+            val code = (codes?.getOrNull(i) as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull
+            val chance = (chances?.getOrNull(i) as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
+                ?.takeIf { it in 0.0..100.0 }?.roundToInt()
+            out += DayForecast(date, high, low, code?.let(::describe).orEmpty(), chance)
+            if (out.size >= FORECAST_DAYS) break
+        }
+        out.sortedBy { it.date }
+    }.getOrDefault(emptyList())
 
     private class Extra(val high: Int?, val low: Int?, val highHour: Int?, val overnightLow: Int?)
 

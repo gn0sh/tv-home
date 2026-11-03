@@ -98,7 +98,8 @@ class WeatherFeedTest {
     @Test fun urlAsksForHourlyTemperatureAndDailyMinMax() {
         val u = WeatherFeed.url(Location(36.53, -87.36))
         assertEquals("weather_code,temperature_2m", u.queryParameter("hourly"))
-        assertEquals("temperature_2m_max,temperature_2m_min", u.queryParameter("daily"))
+        assertEquals("temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max", u.queryParameter("daily"))
+        assertEquals("7", u.queryParameter("forecast_days"))
         assertEquals("api.open-meteo.com", u.host)
         assertTrue(HttpFeedFetcher.isAllowed(u))
     }
