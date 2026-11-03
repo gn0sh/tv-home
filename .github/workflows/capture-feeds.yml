@@ -1,0 +1,49 @@
+# M7-D1: capture one real response from each public feed so the parsers can be tested against real shapes.
+# Manual only (workflow_dispatch); no secrets; public data. Logs status codes and top-level keys only; the bodies go
+# to a short-lived artifact that the manager trims and commits under core/src/test/resources/feeds/.
+name: capture-feeds
+
+on:
+  workflow_dispatch:
+    inputs:
+      alert_area:
+        description: "A US state with active NWS alerts right now (two letters), for a non-empty alerts sample"
+        required: false
+        default: "TX"
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NWS_UA: "tvhome/1 (+https://github.com/gn0sh/tv-home)"
+      AREA: ${{ inputs.alert_area }}
+    steps:
+      - name: Fetch feeds
+        shell: bash
+        run: |
+          set -u
+          [[ "$AREA" =~ ^[A-Z]{2}$ ]] || { echo "::error::alert_area must be two capital letters"; exit 1; }
+          mkdir -p feeds
+          get() { # name url [nws]
+            local name=$1 url=$2 ua="tvhome-hero/1" accept="*/*"
+            if [[ "${3:-}" == nws ]]; then ua=$NWS_UA; accept="application/geo+json"; fi
+            code=$(curl -sS --max-time 20 --max-filesize 2000000 -A "$ua" -H "Accept: $accept" \
+              -o "feeds/$name.json" -w '%{http_code}' "$url" || echo 000)
+            keys=$(jq -r 'if type=="object" then (keys|join(",")) else type end' "feeds/$name.json" 2>/dev/null || echo unparsed)
+            echo "$name: HTTP $code, top-level: $keys"
+          }
+          get nws-alerts-point "https://api.weather.gov/alerts/active?point=36.53,-87.36" nws
+          get nws-alerts-area "https://api.weather.gov/alerts/active?area=$AREA" nws
+          get nhl-week "https://api-web.nhle.com/v1/club-schedule/NSH/week/now"
+          get nhl-season "https://api-web.nhle.com/v1/club-schedule-season/NSH/now"
+          get espn-team-194 "https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/194/schedule"
+          get espn-cfb-scoreboard "https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: feed-captures
+          path: feeds/
+          retention-days: 7

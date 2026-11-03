@@ -13,7 +13,17 @@ data class AgendaDay(val date: LocalDate, val items: List<AgendaItem>) {
     override fun toString(): String = "AgendaDay($date, ${items.size} items)"
 }
 
-data class AgendaItem(val title: String, val label: TimeLabel) {
+/**
+ * One row of a day. [startsAt] and [endsAt] are set for timed events (M7 Now/Next countdown and "now, until 5:30");
+ * [endsAt] is null when the event has no usable end. Both are null for all-day events. Derived from the cached
+ * [EventInstance]s, so the cache format is unchanged.
+ */
+data class AgendaItem(
+    val title: String,
+    val label: TimeLabel,
+    val startsAt: Instant? = null,
+    val endsAt: Instant? = null,
+) {
     override fun toString(): String = "AgendaItem(title=${title.length} chars, $label)"
 }
 
@@ -53,7 +63,14 @@ fun buildAgenda(events: List<EventInstance>, now: Instant, zone: ZoneId): Pair<A
     return dayOf(events, today, zone) to dayOf(events, today.plusDays(1), zone)
 }
 
-private class Entry(val title: String, val label: TimeLabel, val allDay: Boolean, val sortStart: Instant)
+private class Entry(
+    val title: String,
+    val label: TimeLabel,
+    val allDay: Boolean,
+    val sortStart: Instant,
+    val startsAt: Instant? = null,
+    val endsAt: Instant? = null,
+)
 
 private fun dayOf(events: List<EventInstance>, date: LocalDate, zone: ZoneId): AgendaDay {
     val dayStart = date.atStartOfDay(zone).toInstant()
@@ -81,7 +98,7 @@ private fun dayOf(events: List<EventInstance>, date: LocalDate, zone: ZoneId): A
                     } else {
                         TimeLabel.Continues
                     }
-                    entries += Entry(e.title, label, false, s.instant)
+                    entries += Entry(e.title, label, false, s.instant, s.instant, end)
                 }
             }
         }
@@ -89,5 +106,5 @@ private fun dayOf(events: List<EventInstance>, date: LocalDate, zone: ZoneId): A
     val sorted = entries.sortedWith(
         compareByDescending<Entry> { it.allDay }.thenBy { it.sortStart }.thenBy { it.title },
     )
-    return AgendaDay(date, sorted.map { AgendaItem(it.title, it.label) })
+    return AgendaDay(date, sorted.map { AgendaItem(it.title, it.label, it.startsAt, it.endsAt) })
 }

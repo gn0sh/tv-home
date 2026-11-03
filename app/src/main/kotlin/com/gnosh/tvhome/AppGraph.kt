@@ -15,6 +15,7 @@ import tvhome.core.calendar.IcsFetcher
 import tvhome.core.calendar.IcsParse
 import tvhome.core.feeds.HttpFeedFetcher
 import tvhome.core.feeds.LiveFeeds
+import tvhome.core.feeds.PanelCacheCodec
 import tvhome.core.secrets.SecretKey
 import tvhome.core.secrets.SecretStore
 import tvhome.core.state.AgendaRefresher
@@ -46,10 +47,20 @@ class AppGraph(app: Application) {
     )
 
     /**
-     * Hero live feeds (M2f): weather and game schedules, in memory only. Nothing runs until the hero starts [LiveFeeds.run]
-     * after its first frame. The location comes from [FeedSettings] (set over adb, never in source).
+     * Hero live feeds (M2f, M7): weather, NWS alerts and game schedules. Nothing runs until the hero starts
+     * [LiveFeeds.run] after its first frame. The location and the per-panel switches come from [FeedSettings] (set over
+     * adb, never in source; read on the feeds' own threads). Last-good values are cached one file per panel in
+     * no-backup storage, read with the 64 KiB cap. Lazy (AC8): the hero first touches it after the first frame, so the
+     * feed classes and the panel cache serializers are not loaded and built on the main thread in AgendaActivity.onCreate.
      */
-    val feeds = LiveFeeds(HttpFeedFetcher(), location = { FeedSettings.location(app) })
+    val feeds: LiveFeeds by lazy {
+        LiveFeeds(
+        HttpFeedFetcher(),
+        location = { FeedSettings.location(app) },
+        switches = { FeedSettings.switches(app) },
+        caches = { id -> JvmCacheFile(File(app.noBackupFilesDir, "panels/$id.json"), PanelCacheCodec.MAX_BYTES) },
+        )
+    }
 
     /**
      * Ask Claude (M1b lean). The key is read from [secrets] per call and goes only into the request header. The daily

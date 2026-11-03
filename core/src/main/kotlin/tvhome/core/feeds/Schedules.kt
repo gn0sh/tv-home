@@ -30,7 +30,7 @@ object Schedules {
         }
     }.getOrNull()
 
-    // --- NHL: api-web.nhle.com/v1/club-schedule/{abbrev}/week/now -> {"games":[{...}]} -----------------------------
+    // --- NHL: api-web.nhle.com/v1/club-schedule/{abbrev}/week/{YYYY-MM-DD} -> {"games":[{...}]} -----------------------------
 
     private fun nhl(team: TeamConfig, root: JsonObject, now: Instant): List<GameInfo>? {
         val games = root["games"] as? JsonArray ?: return null

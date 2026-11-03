@@ -30,28 +30,29 @@ class LiveFeedsTest {
         val f = Fake(mutableMapOf("api.open-meteo.com" to weatherDoc, "api-web.nhle.com" to nhlDoc, "site.api.espn.com" to """{"events":[]}"""))
         val lf = feeds(f)
         assertTrue(runSuspend { lf.refreshWeather() }); assertTrue(runSuspend { lf.refreshSchedules() })
-        assertEquals(50, lf.snapshot.value.weather!!.tempF)
-        assertEquals(1, lf.snapshot.value.games.size)
+        assertEquals(50, lf.snapshot.value.weather!!.value.tempF)
+        assertEquals(now, lf.snapshot.value.weather!!.at)
+        assertEquals(1, lf.snapshot.value.games!!.value.size)
         f.replies.clear()
         assertFalse(runSuspend { lf.refreshWeather() }); assertFalse(runSuspend { lf.refreshSchedules() })
-        assertEquals(50, lf.snapshot.value.weather!!.tempF, "kept after one failure")
-        assertEquals(1, lf.snapshot.value.games.size)
+        assertEquals(50, lf.snapshot.value.weather!!.value.tempF, "kept after one failure")
+        assertEquals(1, lf.snapshot.value.games!!.value.size)
         now = now.plus(Duration.ofHours(3))
         runSuspend { lf.refreshWeather() }
-        assertNull(lf.snapshot.value.weather, "weather older than 2 h is dropped")
+        assertEquals(PanelView.NoData, view(lf.snapshot.value.weather, PanelPolicies.WEATHER, true, now), "weather older than 2 h is hidden")
     }
 
     @Test fun garbageIsNoData() {
         val f = Fake(mutableMapOf("api.open-meteo.com" to "<html>", "api-web.nhle.com" to "{", "site.api.espn.com" to "null"))
         val lf = feeds(f)
         assertFalse(runSuspend { lf.refreshWeather() }); assertFalse(runSuspend { lf.refreshSchedules() })
-        assertNull(lf.snapshot.value.weather); assertTrue(lf.snapshot.value.games.isEmpty())
+        assertNull(lf.snapshot.value.weather); assertNull(lf.snapshot.value.games)
     }
 
-    @Test fun requestsOnlyGoToTheThreeHosts() {
+    @Test fun requestsOnlyGoToTheFourHosts() {
         val f = Fake(); val lf = feeds(f)
-        runSuspend { lf.refreshWeather(); lf.refreshSchedules() }
-        assertEquals(setOf("api.open-meteo.com", "api-web.nhle.com", "site.api.espn.com"), f.asked.map { it.host }.toSet())
+        runSuspend { lf.refreshWeather(); lf.refreshSchedules(); lf.refreshAlerts() }
+        assertEquals(HttpFeedFetcher.HOSTS, f.asked.map { it.host }.toSet())
         assertTrue(f.asked.all { HttpFeedFetcher.isAllowed(it) })
     }
 

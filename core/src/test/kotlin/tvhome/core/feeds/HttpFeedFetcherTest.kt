@@ -1,6 +1,7 @@
 package tvhome.core.feeds
 
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -32,6 +33,7 @@ class HttpFeedFetcherTest {
     @AfterEach fun tearDown() { runCatching { server.shutdown() } }
 
     private fun fetcher(timeoutMs: Long = 2_000, allowed: (HttpUrl) -> Boolean = { it.isHttps }) = HttpFeedFetcher(allowed, timeoutMs, trust)
+    private val nwsUrl = "https://api.weather.gov/alerts/active?point=36.53,-87.36".toHttpUrl()
     private fun get(f: HttpFeedFetcher, path: String = "/x") = runSuspend { f.fetch(server.url(path)) }
 
     @Test fun okBodyAndOnlyAPlainUserAgentIsSent() {
@@ -75,11 +77,49 @@ class HttpFeedFetcherTest {
         assertFalse(real.isAllowed(okhttp3.HttpUrl.Builder().scheme("https").host("evil.example").build()))
         assertFalse(real.isAllowed(okhttp3.HttpUrl.Builder().scheme("https").host("api-web.nhle.com.evil.example").build()))
         assertFalse(real.isAllowed(okhttp3.HttpUrl.Builder().scheme("https").host("api-web.nhle.com").port(8443).build()))
-        assertEquals(setOf("api.open-meteo.com", "api-web.nhle.com", "site.api.espn.com"), HttpFeedFetcher.HOSTS)
+        assertFalse(real.isAllowed(okhttp3.HttpUrl.Builder().scheme("http").host("api.weather.gov").build()))
+        assertFalse(real.isAllowed(okhttp3.HttpUrl.Builder().scheme("https").host("api.weather.gov").port(8443).build()))
+        assertFalse(real.isAllowed(okhttp3.HttpUrl.Builder().scheme("https").host("weather.gov").build()))
+        assertFalse(real.isAllowed(okhttp3.HttpUrl.Builder().scheme("https").host("api.weather.gov.evil.example").build()))
+        assertTrue(real.isAllowed(nwsUrl))
+        assertEquals(setOf("api.open-meteo.com", "api-web.nhle.com", "site.api.espn.com", "api.weather.gov"), HttpFeedFetcher.HOSTS)
+    }
+
+    @Test fun nwsGetsItsUserAgentAndGeoJsonAccept() {
+        server.enqueue(MockResponse().setBody("{}"))
+        val f = HttpFeedFetcher({ it.isHttps }, 2_000, trust) { HttpFeedFetcher.headersFor(nwsUrl) }
+        assertEquals("{}", runSuspend { f.fetch(server.url("/alerts/active")) })
+        val req = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("tvhome/1 (+https://github.com/gn0sh/tv-home)", req.getHeader("User-Agent"))
+        assertEquals("application/geo+json", req.getHeader("Accept"))
+        for (h in listOf("Authorization", "Cookie", "x-api-key", "Referer")) assertNull(req.getHeader(h), h)
+    }
+
+    @Test fun headersAreConstantsPerHost() {
+        assertEquals(mapOf("User-Agent" to HttpFeedFetcher.NWS_USER_AGENT, "Accept" to "application/geo+json"), HttpFeedFetcher.headersFor(nwsUrl))
+        for (h in listOf("api.open-meteo.com", "api-web.nhle.com", "site.api.espn.com", "evil.example")) {
+            val u = okhttp3.HttpUrl.Builder().scheme("https").host(h).build()
+            assertEquals(mapOf("User-Agent" to "tvhome-hero/1"), HttpFeedFetcher.headersFor(u), h)
+        }
+        // The query or path never changes the headers.
+        assertEquals(HttpFeedFetcher.headersFor(nwsUrl), HttpFeedFetcher.headersFor("https://api.weather.gov/x?User-Agent=evil".toHttpUrl()))
+        // No personal data: no email, digits beyond the version, or location.
+        assertFalse(HttpFeedFetcher.NWS_USER_AGENT.contains("@"))
+    }
+
+    @Test fun nwsRedirectIsRefused() {
+        server.enqueue(MockResponse().setResponseCode(301).setHeader("Location", "https://evil.example/").setBody("moved"))
+        val f = HttpFeedFetcher({ it.isHttps }, 2_000, trust) { HttpFeedFetcher.headersFor(nwsUrl) }
+        assertNull(runSuspend { f.fetch(server.url("/alerts/active")) })
+        assertEquals(1, server.requestCount)
     }
 
     @Test fun configuredTeamUrlsAreAllowlisted() {
-        for (t in Teams.ALL) assertTrue(HttpFeedFetcher.isAllowed(t.scheduleUrl()), t.key)
-        assertEquals("https://api-web.nhle.com/v1/club-schedule/NSH/week/now", Teams.PREDATORS.scheduleUrl().toString())
+        val now = java.time.Instant.parse("2026-11-03T04:30:00Z") // 10:30 PM Mon 2 Nov in Nashville, Tue in UTC
+        for (t in Teams.ALL) assertTrue(HttpFeedFetcher.isAllowed(t.scheduleUrl(now)), t.key)
+        // Dated, never "now" (which redirects, and redirects are refused); the club's local date, not UTC.
+        assertEquals("https://api-web.nhle.com/v1/club-schedule/NSH/week/2026-11-02", Teams.PREDATORS.scheduleUrl(now).toString())
+        assertEquals("https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/194/schedule", Teams.OHIO_STATE.scheduleUrl(now).toString())
+        for (t in Teams.ALL) assertFalse(t.scheduleUrl(now).encodedPath.endsWith("/now"), t.key)
     }
 }

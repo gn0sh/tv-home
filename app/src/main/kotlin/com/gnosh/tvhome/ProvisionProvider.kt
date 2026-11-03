@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import tvhome.core.feeds.SettingsValidator
 import tvhome.core.secrets.Provision
 import tvhome.core.secrets.ProvisionCommand
 import tvhome.core.secrets.ProvisionOutcome
@@ -23,7 +24,9 @@ import java.io.FileNotFoundException
  * - write: reads at most 1 KiB, strict UTF-8, trims, re-checks the regex, stores. The caller gets no text back.
  * - query: one row, column `configured` (0/1) and `last` (a fixed outcome name such as SAVED_CALENDAR). Never the value.
  * - delete: clears that secret. insert/update of a secret: refused (their values would travel as command-line arguments).
- * - Not a secret: `/location` (insert sets, delete clears the weather location).
+ * - Not a secret: `/location` (insert sets, delete clears the weather location), and the M7 settings `/panel`,
+ *   `/tv_profile`, `/travel`, and `/idle_test` for emulator QA (insert sets or adds, delete clears). Each is validated in `:core` ([SettingsValidator]):
+ *   exact keys, exact types, and a refused value stores nothing.
  */
 class ProvisionProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
@@ -60,7 +63,14 @@ class ProvisionProvider : ContentProvider() {
 
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
         enforceShell()
-        if (uri.pathSegments == listOf("location")) { FeedSettings.clearLocation(context!!.applicationContext); return 1 }
+        val ctx = context!!.applicationContext
+        when (uri.pathSegments) {
+            listOf("location") -> { FeedSettings.clearLocation(ctx); return 1 }
+            listOf("panel") -> { FeedSettings.clearPanels(ctx); return 1 }
+            listOf("tv_profile") -> { FeedSettings.clearTvProfile(ctx); return 1 }
+            listOf("travel") -> { FeedSettings.clearTravelRules(ctx); return 1 }
+            listOf("idle_test") -> { FeedSettings.clearIdleTestSeconds(ctx); return 1 }
+        }
         val key = keyOf(uri) ?: throw FileNotFoundException()
         last[key] = Provision.apply(secrets(), ProvisionCommand.Clear(key))
         return 1
@@ -72,11 +82,37 @@ class ProvisionProvider : ContentProvider() {
      */
     override fun insert(uri: Uri, values: ContentValues?): Uri? {
         enforceShell()
+        val ctx = context!!.applicationContext
+        val bound: Map<String, Any?> = values?.keySet()?.associateWith { values.get(it) }.orEmpty()
+        when (uri.pathSegments) {
+            // `--bind id:s:alerts --bind on:b:false`
+            listOf("panel") -> {
+                val (id, on) = SettingsValidator.panel(bound) ?: throw IllegalArgumentException("panel")
+                FeedSettings.setPanel(ctx, id, on)
+                return uri
+            }
+            // `--bind value:s:lg` (or vizio)
+            listOf("tv_profile") -> {
+                FeedSettings.setTvProfile(ctx, SettingsValidator.tvProfile(bound) ?: throw IllegalArgumentException("tv_profile"))
+                return uri
+            }
+            // `--bind seconds:i:20`: emulator QA only (scripts/ci/emulator-qa.sh), idle thresholds in seconds
+            listOf("idle_test") -> {
+                FeedSettings.setIdleTestSeconds(ctx, SettingsValidator.idleTest(bound) ?: throw IllegalArgumentException("idle_test"))
+                return uri
+            }
+            // `--bind keyword:s:Dentist --bind minutes:i:20` (adds, or replaces the same keyword; at most 10)
+            listOf("travel") -> {
+                val rule = SettingsValidator.travelRule(bound) ?: throw IllegalArgumentException("travel")
+                if (!FeedSettings.addTravelRule(ctx, rule)) throw IllegalArgumentException("full")
+                return uri
+            }
+        }
         if (uri.pathSegments != listOf("location")) throw UnsupportedOperationException()
         val v = values ?: throw IllegalArgumentException("values")
         val lat = v.getAsDouble("lat") ?: throw IllegalArgumentException("lat")
         val lon = v.getAsDouble("lon") ?: throw IllegalArgumentException("lon")
-        if (!FeedSettings.setLocation(context!!.applicationContext, lat, lon)) throw IllegalArgumentException("range")
+        if (!FeedSettings.setLocation(ctx, lat, lon)) throw IllegalArgumentException("range")
         return uri
     }
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int =

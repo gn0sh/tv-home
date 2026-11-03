@@ -19,6 +19,8 @@ MAIN="$PKG/.AgendaActivity"
 PROVISION_ACT="$PKG/.ProvisionActivity"
 URI="content://$PKG.provision/calendar_url"
 MAX_COLD_MS=${MAX_COLD_MS:-2000}   # AC8
+MAX_REGRESSION_MS=${MAX_REGRESSION_MS:-300}   # AC8 baseline: PR median may exceed the merge base's by at most this
+BASE_APK=${BASE_APK:-}   # merge base's APK, same throwaway signer (pull requests); empty or missing = no comparison
 # Fake value that passes the validator. Built from parts so the full string is not in this file's text either.
 DUMMY_TOKEN="private-$(printf 'f%.0s' $(seq 1 32))"
 DUMMY_URL="https://calendar.google.com/calendar/ical/x%40example.com/$DUMMY_TOKEN/basic.ics"
@@ -34,6 +36,12 @@ warn() { echo "::warning::$*"; }
 fail() { echo "::error::$*"; exit 1; }
 a() { timeout 90 adb "$@"; }
 sh_() { timeout 90 adb shell "$@"; }
+
+# Emulator only: later steps run adb root and plant fake caches. Refuse any real device (for example Brian's TV).
+# API 31+ emulators set ro.boot.qemu=1 and may leave ro.kernel.qemu empty, so either one counts.
+qemu_k=$(sh_ getprop ro.kernel.qemu | tr -d '\r'); qemu_b=$(sh_ getprop ro.boot.qemu | tr -d '\r')
+[[ $qemu_k == 1 || $qemu_b == 1 ]] || {
+  echo "::error::emulator-qa.sh runs only on an emulator (ro.kernel.qemu='$qemu_k' ro.boot.qemu='$qemu_b')"; exit 1; }
 
 pid_of() { sh_ pidof "$PKG" 2>/dev/null | tr -d '\r' || true; }
 resumed() { sh_ dumpsys activity activities | tr -d '\r' | grep -E 'topResumedActivity=|ResumedActivity:' || true; }
@@ -91,22 +99,39 @@ network() { # on|off
   pass "network off: $PKG is denied all networking (OEM_DENY_3)"
 }
 
-cold_start() { # $1 = label; prints the TotalTime of each of 3 cold starts and checks the median against AC8
-  local out t times=()
-  for _ in 1 2 3; do
-    sh_ am force-stop "$PKG"; sleep 1
-    out=$(sh_ am start -W -n "$MAIN" | tr -d '\r')
-    grep -q '^Status: ok' <<<"$out" || { echo "$out"; fail "$1: am start -W did not report Status: ok"; }
+# AC8: one uncounted warm-up cold start (the first launch after install or pm clear pays one-time costs: dex
+# verification, profile and prefs file creation), then 5 counted cold starts (force-stop each time) and their median.
+# Each prints TotalTime and WaitTime. The limit (MAX_COLD_MS) is unchanged; 5 samples make the median robust to the
+# swiftshader runner's noise (same code measured 979-4180 ms across runs with 3 samples).
+COLD_RUNS=5
+COLD_MEDIAN=""; COLD_TIMES=()
+median_of() { sort -n | awk '{a[NR]=$1} END {if (NR % 2) print a[(NR+1)/2]; else print int((a[NR/2]+a[NR/2+1])/2)}'; }
+COLD_FAILED=""
+cold_start() { # $1 = label, $2 = "nolimit" to skip the MAX_COLD_MS check, $3 = "soft": a launch failure warns, sets
+  # COLD_FAILED and returns 0 instead of failing the job (the baseline APK: its failure means "not compared"). Always
+  # called outside a conditional, so set -e stays on inside it (ac8-errexit-off). Sets COLD_MEDIAN.
+  local out t w times=() i soft=${3:-}
+  COLD_FAILED=""
+  cs_fail() { if [[ $soft == soft ]]; then warn "$1"; COLD_FAILED=1; return 0; fi; fail "$1"; }
+  for ((i = 0; i <= COLD_RUNS; i++)); do
+    sh_ am force-stop "$PKG" || true; sleep 1
+    # || true: a failed or hung launch is judged by the Status check below (soft for the base, a fail for the PR).
+    out=$(sh_ am start -W -n "$MAIN" | tr -d '\r' || true)
+    grep -q '^Status: ok' <<<"$out" || { echo "$out"; cs_fail "$1: am start -W did not report Status: ok"; return 0; }
     t=$(sed -n 's/^TotalTime: *\([0-9]*\).*/\1/p' <<<"$out")
-    [[ -n $t ]] || { echo "$out"; fail "$1: no TotalTime in am start -W output"; }
-    times+=("$t")
+    w=$(sed -n 's/^WaitTime: *\([0-9]*\).*/\1/p' <<<"$out")
+    [[ -n $t ]] || { echo "$out"; cs_fail "$1: no TotalTime in am start -W output"; return 0; }
+    if (( i == 0 )); then echo "$1 warm-up (not counted): TotalTime=$t WaitTime=${w:-?}"
+    else echo "$1 run $i: TotalTime=$t WaitTime=${w:-?}"; times+=("$t"); fi
     sleep 2
-    [[ -n $(pid_of) ]] || fail "$1: process died after launch"
-    in_front || fail "$1: AgendaActivity is not in front after launch"
+    [[ -n $(pid_of) ]] || { cs_fail "$1: process died after launch"; return 0; }
+    in_front || { cs_fail "$1: AgendaActivity is not in front after launch"; return 0; }
   done
-  local median; median=$(printf '%s\n' "${times[@]}" | sort -n | sed -n 2p)
+  local median; median=$(printf '%s\n' "${times[@]}" | sort -n | sed -n "$(( (COLD_RUNS + 1) / 2 ))p")
   echo "$1 cold start TotalTime ms: ${times[*]} (median $median, limit $MAX_COLD_MS)"
   echo "$1 ${times[*]} median=$median" >> "$OUT/cold-start.txt"
+  COLD_MEDIAN=$median; COLD_TIMES=("${times[@]}")
+  [[ ${2:-} == nolimit ]] && return 0
   (( median < MAX_COLD_MS )) || fail "$1: median cold start ${median} ms is not under ${MAX_COLD_MS} ms (AC8)"
   if [[ $OFFLINE_VERIFIED == yes ]]; then pass "$1: cold start median ${median} ms, app offline (AC8-offline VERIFIED)"
   else warn "$1: cold start median ${median} ms, but the app was NOT offline (AC8-offline NOT VERIFIED)"; fi
@@ -137,7 +162,9 @@ final_scan() {
   [[ $rc -eq 0 ]] && pass "no secret pattern and no dummy value in captured logs, dropbox or dumpsys"
   return $rc
 }
-on_exit() { local rc=$?; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
+# idle-test-sticky: never leave the idle_test override on the device, whatever failed (the TV also expires it at 60 min).
+idle_cleanup() { timeout 30 adb shell content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true; }
+on_exit() { local rc=$?; idle_cleanup; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
 trap on_exit EXIT
 
 step "device"
@@ -167,6 +194,77 @@ step "AC8 cold start, network off, no cache, not set up"
 sh_ pm clear "$PKG" >/dev/null || true
 network off
 cold_start "offline-not-set-up"
+# AC8 before/after (spec M7-1.5): the merge base's APK, same state (pm clear, network off), same method. Blocks are
+# interleaved PR, base, PR, base (the PR block above is the first), and the pooled 10-run medians are compared, so
+# emulator drift during the job hits both sides. The PR goes first in each pair (strict). If the gate trips, one more
+# PR/base pair is measured and pooled before failing. Every number is printed.
+pr_times=("${COLD_TIMES[@]}"); base_times=()
+use_apk() { # $1 = apk, $2 = label; a failed base install sets AC8_STATUS ("not compared"), a failed PR install fails
+  local out; out=$(a install --no-incremental -r -g "$1" 2>&1 | tr -d '\r' || true)
+  if ! grep -q Success <<<"$out"; then
+    if [[ $2 == base ]]; then warn "AC8 baseline: installing the base APK failed"; AC8_STATUS=not_compared; return 0; fi
+    fail "AC8 baseline: installing the $2 APK failed"
+  fi
+  sh_ pm clear "$PKG" >/dev/null || true
+  network off
+}
+# ac8-clear-hides-pr-crash: the crash buffer is checked (hard) for PR crashes right before the base is installed, so
+# anything in it after the base block was written by the base: saved, judged soft, then cleared.
+base_crash_check() { # $1 = round
+  local c; c=$(a logcat -d -b crash | tr -d '\r' | grep -c "$PKG" || true)
+  if [[ $c -gt 0 ]]; then
+    a logcat -d -b crash > "$OUT/crash-base-baseline-$1.txt" 2>/dev/null || true
+    warn "AC8 baseline: the base APK wrote $c crash line(s) in round $1"
+    AC8_STATUS=not_compared
+  fi
+  a logcat -b crash -c >/dev/null 2>&1 || true
+}
+ac8_pair() { # $1 = round; a PR block then a base block (the first round's PR block is the one above). No return codes:
+  # the soft result is AC8_STATUS, so this is never called inside a conditional (ac8-errexit-off).
+  [[ $AC8_STATUS == ok ]] || return 0
+  if (( $1 > 1 )); then use_apk "$APK" PR; cold_start "pr-offline-not-set-up-$1" nolimit; pr_times+=("${COLD_TIMES[@]}"); fi
+  no_app_crash_yet "AC8 PR block $1"
+  use_apk "$BASE_APK" base
+  [[ $AC8_STATUS == ok ]] || return 0
+  cold_start "base-offline-not-set-up-$1" nolimit soft
+  [[ -z $COLD_FAILED ]] || AC8_STATUS=not_compared
+  base_crash_check "$1"
+  [[ $AC8_STATUS == ok ]] || return 0
+  base_times+=("${COLD_TIMES[@]}")
+}
+ac8_compare() { # sets delta; prints everything
+  pr_pooled=$(printf '%s\n' "${pr_times[@]}" | median_of); base_pooled=$(printf '%s\n' "${base_times[@]}" | median_of)
+  delta=$(( pr_pooled - base_pooled ))
+  echo "AC8 before/after: PR runs ${pr_times[*]} (median $pr_pooled); base runs ${base_times[*]} (median $base_pooled); delta ${delta} ms (max +${MAX_REGRESSION_MS})"
+  echo "baseline pr=[${pr_times[*]}] base=[${base_times[*]}] pr_median=$pr_pooled base_median=$base_pooled delta=$delta" >> "$OUT/cold-start.txt"
+}
+if [[ -n $BASE_APK && -f $BASE_APK ]]; then
+  AC8_STATUS=ok
+  ac8_pair 1
+  ac8_pair 2
+  if [[ $AC8_STATUS == ok ]]; then
+    ac8_compare
+    if (( delta > MAX_REGRESSION_MS )); then
+      warn "AC8: delta ${delta} ms over ${MAX_REGRESSION_MS}; measuring one more PR/base pair before deciding"
+      ac8_pair 3
+      if [[ $AC8_STATUS == ok ]]; then ac8_compare
+      else  # ac8-round3-escape: rounds 1-2 were already over budget, so a base failure now cannot excuse it
+        use_apk "$APK" PR
+        fail "AC8: PR cold start was ${delta} ms over the base after rounds 1-2 (max ${MAX_REGRESSION_MS}), and the round-3 base run failed"
+      fi
+    fi
+  fi
+  use_apk "$APK" PR
+  if [[ $AC8_STATUS == ok ]]; then
+    (( delta <= MAX_REGRESSION_MS )) || fail "AC8: PR cold start median ${pr_pooled} ms is ${delta} ms over the base's ${base_pooled} ms (max ${MAX_REGRESSION_MS})"
+    pass "AC8: PR cold start within ${MAX_REGRESSION_MS} ms of the merge base (delta ${delta} ms)"
+  else
+    warn "AC8 baseline NOT COMPARED: the base APK failed during the baseline (base-crash-fails-pr)"
+  fi
+  sh_ am start -W -n "$MAIN" >/dev/null; sleep 3   # the screen checks below expect the PR app up
+else
+  note "AC8 baseline NOT COMPARED: no base APK (not a PR against main, or the base did not build)"
+fi
 expect_text "offline-not-set-up" "Calendar not set up"
 a exec-out screencap -p > "$SHOT_DIR/tv-home-home.png"
 sig=$(head -c 8 "$SHOT_DIR/tv-home-home.png" | od -An -tx1 | tr -d ' \n')
@@ -477,9 +575,6 @@ else
   no_app_crash_yet "row re-entry"
 fi
 
-hero_text() { # the "Hero title: <label>" description in the UI dump (also defined as hero_title for the Hero step)
-  ui_text | grep -oE 'content-desc="Hero title: [^"]*"' | head -1 | sed -E 's/^content-desc="Hero title: (.*)"$/\1/' || true
-}
 step "Row edit (M2g): long-press OK opens the menu, Move right reorders, Hide hides, the Hidden tile restores"
 # The tile menu (a dialog) opens with focus on its first entry, Cancel; Move left is one Down from there, Move right
 # two, Hide four. The menu entries are plain text nodes, so they are checked with expect_text, and chosen by key count.
@@ -521,9 +616,7 @@ else
   on_screen "$cur" || fail "row-edit: the moved tile is off screen ($cur)"
   key DPAD_LEFT; cur=$(focus_after row-edit)
   [[ ${cur%%|*} == "$second_name" ]] || fail "row-edit: Left of the moved tile is '${cur%%|*}', expected '$second_name' (now first)"
-  # The hero title follows the focused tile.
-  [[ $(hero_text) == "$second_name" ]] || fail "row-edit: hero title is '$(hero_text)', expected '$second_name'"
-  pass "row-edit: Move right put '$first_name' after '$second_name', focus followed, hero title updated"
+  pass "row-edit: Move right put '$first_name' after '$second_name', focus followed"
   # Restore the order: Right back onto the moved tile, long-press, Move left (one Down from Cancel).
   key DPAD_RIGHT; long_press_ok; key DPAD_DOWN; key DPAD_CENTER; sleep 1
   cur=$(focus_after row-edit)
@@ -563,30 +656,64 @@ else
   no_app_crash_yet "row edit"
 fi
 
-step "Hero (M2e): the hero title matches the focused tile after Right x2"
-# The hero title carries the content description "Hero title: <label>"; the focused app tile's description is its label.
-hero_title() {
-  local xml; xml=$(ui_text)
-  if [[ -z $xml ]]; then echo "::error::UI dump failed: uiautomator gave no hierarchy after its retries, so the hero title cannot be read" >&2; exit 1; fi
-  grep -oE 'content-desc="Hero title: [^"]*"' <<<"$xml" | head -1 | sed -E 's/^content-desc="Hero title: (.*)"$/\1/' || true
-}
-if (( napps < 3 )); then
-  warn "Hero title check NOT VERIFIED: $napps other TV app(s) on this image, Right x2 has nowhere to go"
+step "Hero (M7): no focusable hero; focus starts on the apps row; one Back leaves"
+# M7 removed the M2e focused-tile title (each tile labels itself); the hero is non-focusable text (home-back-twice).
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+in_front || fail "hero: home screen not in front"
+# (The hero-nodes-not-focusable check is in the M7 Q1 step, where the hero has content.)
+cur=$(focus_after hero)
+if (( napps >= 1 )); then
+  case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) fail "hero: focus on launch is '${cur%%|*}', not an app tile (R1)" ;; esac
+  pass "hero: focus on launch is on the apps row ('${cur%%|*}')"
 else
-  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
-  in_front || fail "hero: home screen not in front"
-  key DPAD_RIGHT; key DPAD_RIGHT
-  cur=$(focused_node); want=${cur%%|*}
-  [[ -n $want ]] || fail "hero: no focused tile after Right x2"
-  got=$(hero_title)
-  [[ -n $got ]] || fail "hero: no node with a 'Hero title: ...' description in the UI dump"
-  [[ $got == "$want" ]] || fail "hero: title is '$got' but the focused tile is '$want'"
-  pass "hero: after Right x2 the title '$got' matches the focused tile"
-  sh_ input keyevent KEYCODE_BACK; sleep 2
-  in_front && fail "hero: one Back with the hero showing does not leave the app (home-back-twice)"
-  pass "hero: one Back leaves the app"
-  no_app_crash_yet "hero"
+  warn "hero: no other TV apps on this image; first focus on the apps row NOT VERIFIED here"
 fi
+sh_ input keyevent KEYCODE_BACK; sleep 2
+in_front && fail "hero: one Back with the M7 hero showing does not leave the app (home-back-twice)"
+pass "hero: one Back leaves the app"
+no_app_crash_yet "hero"
+
+step "M7 F4 idle with a fake clock (idle_test 30 s: DIM at 30 s, NEAR_BLACK at 60 s); any key restores"
+# The provider's /idle_test override (emulator QA only) scales the LG thresholds; it is removed after the M3 checks.
+idle_of() { ui_text | grep -oE 'resource-id="hero_idle_[A-Z_]+"' | head -1 | sed -E 's/.*hero_idle_([A-Z_]+)"$/\1/' || true; }
+black_shown() { ui_text | grep -qF 'content-desc="Screen resting"'; }   # NEAR_BLACK_DESC in IdleLayer.kt
+since() { echo $(( $(date +%s) - $1 )); }
+sleep_until() { local n=$(( $1 + $2 - $(date +%s) )); (( n > 0 )) && sleep "$n"; return 0; }  # $1 = t0, $2 = seconds after it
+sh_ content insert --uri "content://$PKG.provision/idle_test" --bind seconds:i:30 || fail "f4: idle_test insert refused"
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; t0=$(date +%s); sleep 4
+in_front || fail "f4: home screen not in front"
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "f4: idle state at start is '$st', expected ACTIVE"
+sleep_until "$t0" 36
+st=$(idle_of); [[ $st == DIM ]] || fail "f4: after $(since "$t0") s the idle state is '$st', expected DIM"
+pass "f4: DIM reached ($(since "$t0") s idle)"
+before=$(focus_after f4)
+key DPAD_RIGHT; t0=$(date +%s)
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "f4: a key in DIM did not restore (state '$st')"
+if (( napps >= 2 )); then
+  cur=$(focus_after f4)
+  [[ ${cur%%|*} != "${before%%|*}" ]] || fail "f4: the key in DIM was swallowed (focus stayed on '${before%%|*}'); DIM must pass keys through"
+  pass "f4: a key in DIM restores and passes through (focus moved to '${cur%%|*}')"
+else
+  pass "f4: a key in DIM restores (pass-through NOT VERIFIED: fewer than 2 other apps)"
+fi
+sleep_until "$t0" 66
+black_shown || fail "f4: after $(since "$t0") s the near-black layer ('Screen resting') is not shown"
+st=$(idle_of); [[ $st == NEAR_BLACK ]] || fail "f4: near-black layer shown but the idle state is '$st'"
+pass "f4: NEAR_BLACK reached ($(since "$t0") s idle) with only the resting clock"
+before=$(focus_after f4)
+key DPAD_RIGHT
+black_shown && fail "f4: a key in NEAR_BLACK did not wake the screen"
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "f4: after the waking key the idle state is '$st'"
+cur=$(focus_after f4)
+[[ ${cur%%|*} == "${before%%|*}" ]] || fail "f4: the first key in NEAR_BLACK moved focus ('${before%%|*}' -> '${cur%%|*}'); it must only wake"
+pass "f4: the first key in NEAR_BLACK only wakes the screen (focus stayed on '${cur%%|*}')"
+key DPAD_LEFT
+cur=$(focus_after f4)
+if (( napps >= 2 )); then
+  [[ ${cur%%|*} != "${before%%|*}" ]] || fail "f4: the key after the waking one was swallowed (idle-swallow-stale)"
+  pass "f4: the next key after waking passes through"
+fi
+no_app_crash_yet "f4 idle"
 
 step "M3 Home: off as installed; turning on the Home watch makes Home open the dashboard; rollback restores"
 # The same adb commands scripts/tv-home-takeover.ps1 runs on Brian's TV. Google TV's launcher holds HOME at priority 2
@@ -626,6 +753,21 @@ if ! in_front; then
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
 fi
 pass "m3: Home from another app opens the dashboard"
+# F4: the Home redirect works from DIM and from NEAR_BLACK, and comes back awake (idle_test 30 s still set).
+m3t=$(date +%s); sleep_until "$m3t" 36
+st=$(idle_of); [[ $st == DIM ]] || fail "m3-idle: DIM not reached before the Home check (state '$st')"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3-idle: Home from DIM did not bring the dashboard back ($(resumed | head -1))"
+st=$(idle_of); [[ $st == ACTIVE ]] || fail "m3-idle: after Home from DIM the state is '$st', expected ACTIVE"
+pass "m3-idle: Home from DIM redirects and wakes the screen"
+m3t=$(date +%s); sleep_until "$m3t" 66
+black_shown || fail "m3-idle: NEAR_BLACK not reached before the Home check"
+sh_ input keyevent KEYCODE_HOME; sleep 3
+in_front || fail "m3-idle: Home from NEAR_BLACK did not bring the dashboard back ($(resumed | head -1))"
+black_shown && fail "m3-idle: after Home from NEAR_BLACK the screen is still black"
+pass "m3-idle: Home from NEAR_BLACK redirects and wakes the screen"
+sh_ content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true
+sleep 4   # outside the double-press window before the next check
 # The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
 # Settings, until another app comes up (HomeRedirect in :core has the timing cases).
 # A fresh redirect, then Home again about a second later (inside the 2.5 s window).
@@ -693,6 +835,78 @@ network off
 cold_start "offline-configured"
 expect_text "offline-configured" "reach calendar"
 no_app_crash_yet "offline configured"
+
+m7_relog() { # restart the background logcat stream (appending) after adbd restarts
+  [[ -n $LOGCAT_PID ]] && kill "$LOGCAT_PID" 2>/dev/null || true
+  adb logcat -b main,system,crash,events -v threadtime >> "$OUT/logcat-stream.txt" 2>/dev/null &
+  LOGCAT_PID=$!
+}
+step "M7 Q1: hero shows the next event with a countdown and a severe-alert override (planted caches, network off)"
+# Release APK, so no run-as: the caches are planted as root, which only some emulator images allow. Without root this
+# step is NOT VERIFIED and the JVM tests (NowNextTest, HomeGlanceTest) stand in.
+m7_root=""
+if a root 2>&1 | tr -d '\r' | grep -qiE 'restarting|already running as root'; then
+  a wait-for-device; sleep 2
+  [[ $(sh_ id -u | tr -d '\r') == 0 ]] && m7_root=1
+  m7_relog   # adbd restarted, which ends the logcat stream
+fi
+if [[ -z $m7_root ]]; then
+  warn "M7 hero countdown and alert override NOT VERIFIED on the emulator: adb root is not available on this image"
+else
+  sh_ content insert --uri "content://$PKG.provision/location" --bind lat:d:36.53 --bind lon:d:-87.36 \
+    || fail "m7: location insert refused"
+  sh_ am force-stop "$PKG"
+  iso() { date -u -d "$1" +%Y-%m-%dT%H:%M:%SZ; }
+  # qa-midnight-flake: an event 42 min out that lands on tomorrow in the emulator's zone shows as tomorrow's first,
+  # with no countdown. Then the countdown check is skipped (the alert check still runs).
+  etz=$(sh_ getprop persist.sys.timezone | tr -d '\r'); etz=${etz:-UTC}
+  same_day=""; [[ $(TZ=$etz date -d '+50 minutes' +%F) == $(TZ=$etz date +%F) ]] && same_day=1
+  now=$(iso now); ev=$(iso '+42 minutes'); evend=$(iso '+102 minutes'); until=$(iso '+90 minutes')
+  ws=$(iso '-2 days'); we=$(iso '+3 days')
+  data=/data/user/0/$PKG/no_backup
+  uid=$(sh_ stat -c %u "/data/user/0/$PKG" | tr -d '\r')
+  [[ $uid =~ ^[0-9]+$ ]] || fail "m7: could not read the app's uid ($uid)"
+  agenda='{"v":1,"fetchedAt":"'$now'","windowStart":"'$ws'","windowEnd":"'$we'","events":[{"uid":"qa-1","title":"QA Dentist","start":{"kind":"at","value":"'$ev'"},"end":{"kind":"at","value":"'$evend'"}}]}'
+  alerts='{"v":1,"at":"'$now'","data":{"alerts":[{"event":"Tornado Warning","severity":"Extreme","kind":"OVERRIDE","until":"'$until'"}]}}'
+  sh_ mkdir -p "$data/panels"
+  printf '%s' "$agenda" | a shell "cat > $data/agenda-cache.json"
+  printf '%s' "$alerts" | a shell "cat > $data/panels/alerts.json"
+  sh_ chown -R "$uid:$uid" "$data"; sh_ chmod -R u+rwX,go-rwx "$data"; sh_ restorecon -R "$data" >/dev/null 2>&1 || true
+  network off
+  sh_ am start -W -n "$MAIN" >/dev/null; sleep 8   # first frame, 1.5 s settle, cache load
+  ui=$(ui_text); [[ -n $ui ]] || fail "m7: uiautomator dump failed"
+  printf '%s\n' "$ui" > "$OUT/ui-m7-hero.xml"
+  a exec-out screencap -p > "$SHOT_DIR/tv-home-m7-hero.png" || true
+  for n in "Hero now: " "Hero card: "; do
+    grep -qF "content-desc=\"$n" <<<"$ui" || fail "m7: no '$n...' node in the hero (planted caches not shown)"
+  done
+  grep -oE '<node [^>]*(content-desc="Hero (now|card): [^"]*"|resource-id="hero_idle_[A-Z_]+")[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
+    && fail "m7: a hero node is focusable (home-back-twice)"
+  pass "m7: the hero's Now and card nodes are shown and none is focusable"
+  if [[ -n $same_day ]]; then
+    grep -qE 'content-desc="Hero now: [^"]*in (4[0-2]|3[0-9]) min"' <<<"$ui" \
+      || fail "m7: the hero does not show the next event with an 'in N min' countdown"
+    pass "m7: the hero shows the next event with a countdown"
+  else
+    warn "m7: countdown check skipped: the planted event would fall after midnight in $etz (qa-midnight-flake)"
+  fi
+  grep -qE 'content-desc="Hero card: Tornado Warning until [^"]+"' <<<"$ui" \
+    || fail "m7: an active Tornado Warning does not take the context card"
+  pass "m7: a severe alert overrides the context card"
+  cur=$(focus_after m7)
+  if (( napps >= 1 )); then
+    case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) fail "m7: with the hero full, first focus is '${cur%%|*}', not the apps row (R1)" ;; esac
+    pass "m7: with the hero full, focus starts on the apps row ('${cur%%|*}')"
+  fi
+  sh_ input keyevent KEYCODE_BACK; sleep 2
+  in_front && fail "m7: one Back with the M7 hero full does not leave the app (home-back-twice)"
+  pass "m7: one Back returns home (leaves the app)"
+  no_app_crash_yet "m7 hero"
+  sh_ rm -f "$data/agenda-cache.json" "$data/panels/alerts.json"
+  sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
+  network on
+  a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
+fi
 
 step "fetch attempt with network on (dummy URL fails; error paths must not log it)"
 network on
