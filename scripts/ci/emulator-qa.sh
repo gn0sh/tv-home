@@ -1109,7 +1109,8 @@ fi
     warn "M7 Watch pill check skipped: a game 90 min out would fall after midnight in $etz"
   else
     q2_restart() { sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 8; }
-    watch_shown() { ui_text | grep -qF 'content-desc="Watch the game on YouTube"'; }
+    # The description may end ", opens <app>" when the pill names the app (watch-desc-mismatch).
+    watch_shown() { ui_text | grep -qE 'content-desc="Watch the game on YouTube(, opens [^"]*)?"'; }
     sh_ content insert --uri "content://$PKG.provision/watch" --bind networks:s:"YouTube=$yt" --bind defaults:s:predators=YouTube \
       || fail "q2: watch map insert refused"
     # No game: no pill, even with the map set.
