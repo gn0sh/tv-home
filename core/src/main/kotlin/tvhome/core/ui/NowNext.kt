@@ -3,6 +3,7 @@ package tvhome.core.ui
 import tvhome.core.agenda.AgendaDay
 import tvhome.core.agenda.AgendaItem
 import tvhome.core.agenda.TimeLabel
+import tvhome.core.agenda.titlesMatch
 import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelView
 import tvhome.core.feeds.Stamped
@@ -56,6 +57,10 @@ object NowNextCopy {
     fun then(title: String, time: String) = "Then $title at $time"
     fun notUpdatedSince(time: String) = "Calendar not updated since $time"
 }
+
+/** The same appointment twice, by the merge step's own rule ([titlesMatch]; these are timed items with no uid). */
+private fun sameItem(a: AgendaItem, b: AgendaItem): Boolean =
+    a.startsAt == b.startsAt && a.endsAt == b.endsAt && titlesMatch(a.title, b.title, allDay = a.label == TimeLabel.AllDay)
 
 /** Countdown and "Leave by" apply from this far ahead (inclusive). */
 val COUNTDOWN_WINDOW: Duration = Duration.ofMinutes(60)
@@ -145,7 +150,8 @@ fun nowNext(
     }
     val second: String? = when {
         first === soon && current != null -> whenText(current)
-        else -> next.firstOrNull { it !== first }?.let { NowNextCopy.then(shown(it), time(it.startsAt!!)) }
+        // Never the headline's event again (calendar-dedupe): a copy with the same times and a matching title is skipped.
+        else -> next.firstOrNull { it !== first && !sameItem(it, first) }?.let { NowNextCopy.then(shown(it), time(it.startsAt!!)) }
     } ?: allDay?.let { NowNextCopy.today(shown(it)) }
     return NowNext(whenText(first), second, age)
 }
