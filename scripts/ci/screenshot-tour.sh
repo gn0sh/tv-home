@@ -336,10 +336,12 @@ focus_pill() {
   key DPAD_DOWN; key DPAD_RIGHT; key DPAD_RIGHT; key DPAD_RIGHT
   look
   # Every focused node (the Compose host View reports focused too), and the node that carries the pill's description.
-  { grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | sed -E 's/ (bounds|index|package|checkable|checked|enabled|scrollable|long-clickable|password|selected)="[^"]*"//g; s/^/tour: focused: /'; } || true
+  { grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | sed -E 's/ (index|package|checkable|checked|enabled|scrollable|long-clickable|password|selected)="[^"]*"//g; s/^/tour: focused: /'; } || true
   { grep -oE '<node[^>]*content-desc="Watch the game on [^>]*>' <<<"$UI" | sed -E 's/ (index|package|checkable|checked|enabled|scrollable|long-clickable|password|selected)="[^"]*"//g; s/^/tour: pill node: /'; } || true
   FOCUSED=$({ grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | grep -oE 'content-desc="Watch the game on [^"]*"' | head -1 | sed 's/^content-desc="//; s/"$//'; } || true)
   echo "tour: focused pill description: '$FOCUSED'"
+  # The dock row's nodes around the pills, so a parent/child split shows in the log (Compose's dump nests them).
+  { grep -oE '<node[^>]*bounds="\[[0-9]+,7[0-9]{2}\]\[[0-9]+,8[0-9]{2}\]"[^>]*>' <<<"$UI" | sed -E 's/ (index|package|checkable|checked|enabled|scrollable|long-clickable|password|selected|text|resource-id|class)="[^"]*"//g; s/^/tour: row: /'; } || true
   echo "tour: Ask node: $({ grep -oE '<node[^>]*content-desc="Ask Claude[^>]*>' <<<"$UI" | head -1 | grep -oE '(content-desc|clickable|focusable|focused|bounds)="[^"]*"' | tr '\n' ' '; } || true)"
   echo "tour: Quiet node: $({ grep -oE '<node[^>]*content-desc="Quiet mode[^>]*>' <<<"$UI" | head -1 | grep -oE '(content-desc|clickable|focusable|focused|bounds)="[^"]*"' | tr '\n' ' '; } || true)"
 }
