@@ -44,17 +44,18 @@ class AgendaRefresherTest {
         val c = CachedAgenda.load(s.cache)!!
         assertEquals(listOf(ev), c.events)
         assertEquals(now, c.fetchedAt)
-        assertEquals(agendaWindowOf(now), c.window)
+        assertEquals(fetchWindowOf(now), c.window)
     }
 
     private fun agendaWindowOf(t: Instant) = tvhome.core.agenda.agendaWindow(t, zone)
+    private fun fetchWindowOf(t: Instant) = tvhome.core.agenda.fetchWindow(t, zone)
 
-    /** The source is asked for the agenda window of "now" in the injected zone. */
+    /** The source is asked for the fetch window of "now" in the injected zone (the Board's week, wider than the agenda window). */
     @Test fun fetchesTheAgendaWindow(@TempDir dir: File) {
         var seen: InstantRange? = null
         val s = setup(dir, CalendarSource { w -> seen = w; ok() })
         runSuspend { s.refresher.refresh() }
-        assertEquals(agendaWindowOf(now), seen)
+        assertEquals(fetchWindowOf(now), seen)
     }
 
     /** N2 / R1: every non-Ok result leaves the earlier cache byte-identical. */
