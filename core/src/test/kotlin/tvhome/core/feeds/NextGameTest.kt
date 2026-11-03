@@ -59,3 +59,13 @@ class NextGameTest {
         assertEquals("Predators at Avalanche · Tomorrow 8:30 PM · TV: ESPN+, HULU, Disney+", GameDay.nextLine(after, n.game.start.plus(Duration.ofHours(5)), zone))
     }
 }
+
+class NextGame24hTest {
+    @Test fun whenTextFollowsTheClockSetting() {
+        val zone = ZoneId.of("America/Chicago")
+        val now = Instant.parse("2026-11-03T15:00:00Z")
+        val start = Instant.parse("2026-11-06T01:00:00Z") // Thu 7:00 PM local
+        assertEquals("Thu 7:00 PM", GameDay.whenText(start, now, zone))
+        assertEquals("Thu 19:00", GameDay.whenText(start, now, zone, is24h = true))
+    }
+}

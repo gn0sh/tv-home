@@ -134,7 +134,7 @@ private fun gameCell(team: TeamConfig, i: BoardInputs): BoardCell {
     val vs = if (g.home) "vs" else "at"
     val first = if (g.phase == GamePhase.LIVE) GameDay.line(next, i.now, i.zone) else "$vs ${g.opponent}"
     val second = if (g.phase == GamePhase.LIVE) "Live · ${GameDay.tvText(g)}"
-    else "${GameDay.whenText(g.start, i.now, i.zone)} · ${GameDay.tvText(g)}"
+    else "${GameDay.whenText(g.start, i.now, i.zone, i.is24h)} · ${GameDay.tvText(g)}"
     return BoardCell(team.name, listOfNotNull(first, second, shown.ageText), warn = shown.stale)
 }
 

@@ -422,7 +422,8 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier, zone: He
             lineHeight = (GlanceTokens.HERO_SP + 6).sp,
             fontFamily = FontFamily.SansSerif,
             fontWeight = FontWeight.Bold,
-            maxLines = 2,
+            // One line when a large font scale leaves no room for two (board-fontscale).
+            maxLines = HeroZones.nowNextLine1Max(zone.h, LocalDensity.current.fontScale),
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.semantics { contentDescription = HERO_NOW_DESC_PREFIX + nn.line1 },
         )

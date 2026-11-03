@@ -46,6 +46,17 @@ object HeroZones {
     /** Space kept between the hero text and the top of the apps row (its focus-scale room is inside the row). */
     const val APPS_GAP = 8
 
+    /**
+     * How many lines Now/Next line 1 may take in a left zone [zoneH] dp tall at [fontScale] (board-fontscale): 2 when two
+     * lines of it (44 sp on a 50 sp line), line 2 (28 sp, ~34) and the age line (22 sp, ~28) with their 8 dp gaps fit,
+     * else 1 (the zone clips anything that still does not fit).
+     */
+    fun nowNextLine1Max(zoneH: Int, fontScale: Float): Int {
+        val k = fontScale.coerceAtLeast(1f)
+        val need = 2 * 50 * k + 34 * k + 28 * k + 16
+        return if (zoneH >= need) 2 else 1
+    }
+
     /** The three zones for one frame. */
     data class Layout(val top: Zone, val left: Zone, val right: Zone) {
         val all get() = listOf(top, left, right)

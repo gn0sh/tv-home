@@ -89,6 +89,22 @@ object BlockText {
         return ((heightDp - 2 * PAD_DP) / (LINE_DP * k)).toInt().coerceIn(0, 4)
     }
 
+    /** Gap between lanes and around a block, dp. */
+    const val BLOCK_GAP_DP = 4f
+
+    /** A block's drawn width in a day column whose inner width (inside its own padding) is [innerColDp]. */
+    fun blockWidth(innerColDp: Float, lanes: Int): Float = innerColDp / lanes.coerceAtLeast(1) - BLOCK_GAP_DP
+
+    /** A block's drawn height for [hourDp] per hour. */
+    fun blockHeight(b: GridBlock, hourDp: Float): Float = (b.endMin - b.startMin) / 60f * hourDp
+
+    /**
+     * Blocks of [c] too small for any text at this size (board-hidden-count-width): the column's "N more" count, by the
+     * same widths and heights the column draws with.
+     */
+    fun hiddenCount(c: GridColumn, hourDp: Float, innerColDp: Float, fontScale: Float = 1f): Int =
+        c.blocks.count { lines(blockHeight(it, hourDp), blockWidth(innerColDp, it.lanes), fontScale) == 0 }
+
     /** An hour label's height (one 22 sp line) at font scale 1. */
     const val LABEL_DP = 28f
 

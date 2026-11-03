@@ -44,8 +44,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -115,6 +117,11 @@ fun BoardFullScreen(theme: HomeTheme, quiet: Boolean, onClose: () -> Unit) {
     }
     val emptyFeeds = remember { MutableStateFlow(FeedsSnapshot()) }
     val snap by (feeds?.snapshot ?: emptyFeeds).collectAsState()
+    // board-first-frame-unknown: the feed cells say "unknown" only once the feeds had their chance to load the disk
+    // caches (LiveFeeds publishes them first), never on the first frames while nothing has been read yet.
+    var feedsSettled by remember { mutableStateOf(false) }
+    LaunchedEffect(feeds) { if (feeds != null) { delay(BOARD_FEEDS_DELAY_MS + FEEDS_SETTLE_MS); feedsSettled = true } }
+    val feedsReady = feeds != null && (snap != FeedsSnapshot() || feedsSettled)
     val agenda by graph.session.state.collectAsState()
     val settings by produceState(BoardSettings(PanelSwitches(), false), now) {
         value = withContext(Dispatchers.IO) {
@@ -159,7 +166,7 @@ fun BoardFullScreen(theme: HomeTheme, quiet: Boolean, onClose: () -> Unit) {
             ) {
                 StatusRows(model, shown)
                 WeekView(model, shown, columnFocus, onFocusColumn = { focusedColumn = it }, onOpen = { i -> openDay = i }, modifier = Modifier.weight(1f))
-                BottomStrip(model, shown)
+                if (feedsReady) BottomStrip(model, shown) else Spacer(Modifier.fillMaxWidth().height(bottomStripDp().dp))
             }
             LaunchedEffect(Unit) {
                 // On open, and back from a day list: focus the column it came from (today at first).
@@ -172,11 +179,20 @@ fun BoardFullScreen(theme: HomeTheme, quiet: Boolean, onClose: () -> Unit) {
 }
 
 private const val BOARD_FEEDS_DELAY_MS = 300L
+private const val FEEDS_SETTLE_MS = 2_000L
 private const val BOARD_GAP_DP = 8
 private const val GUTTER_DP = 72
+private const val COLUMN_PAD_DP = 2
 private const val LINE_SP = GlanceTokens.MIN_SP // 22 sp: 33 px at 1080p
 private const val LINE_DP = 28
 private const val MAX_ALL_DAY_ROWS = 2
+
+/** A 22 sp line's height at the user's font scale (board-fontscale): fixed rows grow with the text. */
+@Composable
+private fun lineDp(): Float = LINE_DP * LocalDensity.current.fontScale.coerceAtLeast(1f)
+
+@Composable
+private fun bottomStripDp(): Float = 3 * lineDp()
 
 private val BLOCK_FILL = Color(0xFF2B4C7E)
 private val TODAY_FILL = Color(0xFF18202A)
@@ -232,8 +248,10 @@ private fun WeekView(
                 grid.columns.forEach { c -> AllDayCell(c, allDayRows, theme) }
             }
         }
+        val moreRowDp = lineDp()
+        val fontScale = LocalDensity.current.fontScale
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(top = 6.dp)) {
-            val bodyDp = maxHeight.value - LINE_DP // the "more" row under the grid
+            val bodyDp = maxHeight.value - moreRowDp // the "more" row under the grid
             val hourDp = bodyDp / grid.hours
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().height(bodyDp.dp)) {
@@ -243,15 +261,14 @@ private fun WeekView(
                             message = if (i == 0) model.calendarMessage else null)
                     }
                 }
-                Row(Modifier.fillMaxWidth().height(LINE_DP.dp)) {
+                Row(Modifier.fillMaxWidth().height(moreRowDp.dp)) {
                     Spacer(Modifier.width(GUTTER_DP.dp))
                     BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                         val colDp = maxWidth.value / grid.columns.size
                         Row(Modifier.fillMaxSize()) {
                             grid.columns.forEach { c ->
-                                val hidden = c.blocks.count { b ->
-                                    BlockText.lines((b.endMin - b.startMin) / 60f * hourDp, colDp / b.lanes - 4) == 0
-                                }
+                                // Same sizes as DayColumn draws: the column's inner width (less its 2 dp padding each side).
+                                val hidden = BlockText.hiddenCount(c, hourDp, colDp - 2 * COLUMN_PAD_DP, fontScale)
                                 Box(Modifier.width(colDp.dp).fillMaxHeight().padding(horizontal = 4.dp), contentAlignment = Alignment.CenterStart) {
                                     if (hidden > 0) {
                                         Text("$hidden more · OK", color = color(theme.secondaryText), fontSize = LINE_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -288,18 +305,18 @@ private fun RowScope.AllDayCell(c: GridColumn, rows: Int, theme: HomeTheme) {
         val shownTitles = if (c.allDay.size > rows) c.allDay.take(rows - 1) else c.allDay
         for (t in shownTitles) {
             Text(t, color = color(theme.text), fontSize = LINE_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().height(LINE_DP.dp).background(color(theme.tile), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp))
+                modifier = Modifier.fillMaxWidth().height(lineDp().dp).background(color(theme.tile), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp))
         }
         if (c.allDay.size > rows) {
             Text("+${c.allDay.size - shownTitles.size} more", color = color(theme.secondaryText), fontSize = LINE_SP.sp, maxLines = 1,
-                modifier = Modifier.height(LINE_DP.dp).padding(horizontal = 6.dp))
+                modifier = Modifier.height(lineDp().dp).padding(horizontal = 6.dp))
         }
     }
 }
 
 @Composable
 private fun HourAxis(grid: WeekGrid, hourDp: Float, theme: HomeTheme) {
-    val step = BlockText.labelStep(hourDp)
+    val step = BlockText.labelStep(hourDp, LocalDensity.current.fontScale)
     val is24h = DateFormat.is24HourFormat(LocalContext.current)
     Box(Modifier.width(GUTTER_DP.dp).fillMaxHeight().clipToBounds().clearAndSetSemantics { }) {
         for (h in grid.startHour until grid.endHour step step) {
@@ -331,16 +348,21 @@ private fun RowScope.DayColumn(
         Modifier
             .weight(1f)
             .fillMaxHeight()
-            .padding(horizontal = 2.dp)
+            .padding(horizontal = COLUMN_PAD_DP.dp)
             .background(if (c.isToday) TODAY_FILL else Color.Transparent, shape)
             .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
             .focusRequester(requester)
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() }
             .clickable(onClick = onOpen)
-            .clearAndSetSemantics { contentDescription = c.description }
+            // One sentence per day, and OK's action kept for TalkBack (opens the day list).
+            .clearAndSetSemantics {
+                contentDescription = c.description
+                onClick(label = "Open the day's list") { onOpen(); true }
+            }
             .clipToBounds(),
     ) {
         val colDp = maxWidth.value
+        val fontScale = LocalDensity.current.fontScale
         val top = grid.startHour * 60
         if (!c.known) {
             Text(message ?: tvhome.core.board.BoardCopy.NOT_LOADED, color = color(theme.secondaryText), fontSize = LINE_SP.sp,
@@ -348,10 +370,10 @@ private fun RowScope.DayColumn(
         }
         for (b in c.blocks) {
             val y = (b.startMin - top) / 60f * hourDp
-            val h = (b.endMin - b.startMin) / 60f * hourDp
+            val h = BlockText.blockHeight(b, hourDp)
             val laneW = colDp / b.lanes
-            val w = laneW - 4
-            val lines = BlockText.lines(h, w)
+            val w = BlockText.blockWidth(colDp, b.lanes)
+            val lines = BlockText.lines(h, w, fontScale)
             Box(
                 Modifier
                     .offset(x = (laneW * b.lane + 2).dp, y = (y + 1).dp)
@@ -380,7 +402,7 @@ private fun RowScope.DayColumn(
 /** Next Predators game, next Ohio State game, today's weather: three boxes side by side. */
 @Composable
 private fun BottomStrip(model: Board, theme: HomeTheme) {
-    Row(Modifier.fillMaxWidth().heightIn(min = (3 * LINE_DP).dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+    Row(Modifier.fillMaxWidth().heightIn(min = bottomStripDp().dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         for (cell in model.games) CellBox(cell, theme)
         CellBox(model.weather, theme)
     }

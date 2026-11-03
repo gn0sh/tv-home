@@ -87,3 +87,12 @@ class TileRangeTest {
         assertTrue(HomeLayout.map(HomeTheme.TILE_HEIGHT_DP.last + 12).heroLeft.h < HomeLayout.HERO_MIN_DP)
     }
 }
+
+class NowNextFontScaleTest {
+    @Test fun line1DropsToOneLineWhenLargeTextNoLongerFits() {
+        val h = HomeLayout.map(108).heroLeft.h // 188
+        assertEquals(2, HeroZones.nowNextLine1Max(h, 1f))
+        assertEquals(1, HeroZones.nowNextLine1Max(h, 1.3f))
+        assertEquals(1, HeroZones.nowNextLine1Max(150, 1f))
+    }
+}

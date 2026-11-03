@@ -153,6 +153,17 @@ class WeekGridTest {
         }
     }
 
+    /** board-hidden-count-width: the count uses the lane width the column draws (inner width / lanes - gap). */
+    @Test fun hiddenCountUsesTheDrawnSizes() {
+        val items = listOf(timed("A", 0, 9, 0, 10), timed("B", 0, 9, 0, 10), timed("C", 0, 9, 0, 10), timed("D", 0, 12, 0, 12, 30))
+        val c = weekGrid(week(items), true, now, zone, false, false).columns[0]
+        // 150 dp inner column, 30 dp per hour: three lanes of 46 dp fit one line; the 30-min block (15 dp) does not.
+        assertEquals(1, BlockText.hiddenCount(c, 30f, 150f))
+        // 130 dp: lanes of about 39 dp are too narrow for text.
+        assertEquals(4, BlockText.hiddenCount(c, 30f, 130f))
+        assertEquals(46f, BlockText.blockWidth(150f, 3))
+    }
+
     @Test fun twentyFourHourTimes() {
         val b = weekGrid(week(listOf(timed("A", 0, 13, 5, 14))), true, now, zone, true, false).columns[0].blocks.single()
         assertEquals("13:05", b.time)
