@@ -501,4 +501,28 @@ class BriefTest {
         assertEquals("Rain, Quixotic Therapy With at 5:30", briefLine(raw, f, false))
         for (t in secretTitles) assertFalse(briefLine(raw, f, true)!!.contains(t))
     }
+
+    // --- delta review (PR #24) -------------------------------------------------------------------------------------------
+
+    @Test fun theSwitchIsReadAtEachLoadSoOffHidesTheLineAtTheNextRead() {
+        val cache = Mem()
+        runSuspend { engine(Counting { reply("Rain after 3 PM", "rain") }, Mem(), cache).refreshIfDue(facts()) }
+        var on = true
+        val e = BriefEngine(Counting { reply("") }, BriefLedger(Mem("x"), { now }, { zone }), cache, { now }, { on }, { true })
+        assertEquals("Rain after 3 PM", e.line(facts(), false))
+        on = false
+        assertNull(e.load(facts()), "same facts, switch off: nothing at the next read (the hero re-reads it each minute)")
+        on = true
+        assertEquals("Rain after 3 PM", e.line(facts(), false))
+    }
+
+    @Test fun thePromptAsksForALineThatFitsTheRow() {
+        assertTrue(SYSTEM_PROMPT.contains("At most $PROMPT_CHARS characters, counting each {E1}, {E2} or {E3} as ${BriefConfig.TITLE_CUT} characters"))
+        assertFalse(SYSTEM_PROMPT.contains("80 characters"))
+        assertTrue(PROMPT_CHARS <= 55, "the dock row fits about 60-65 characters at 24 sp")
+        val budget = PROMPT_EXAMPLE.replace(Regex("""\{E[1-3]\}"""), "x".repeat(BriefConfig.TITLE_CUT)).length
+        assertTrue(budget <= PROMPT_CHARS, "the example obeys its own rule: $budget")
+        assertTrue(SYSTEM_PROMPT.contains(PROMPT_EXAMPLE))
+        assertTrue(briefRequestBody(facts()).contains("At most $PROMPT_CHARS characters"))
+    }
 }

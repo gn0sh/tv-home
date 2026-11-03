@@ -164,10 +164,21 @@ private fun briefEvents(state: AgendaState, now: Instant, zone: ZoneId, is24h: B
 
 // --- request -------------------------------------------------------------------------------------------------------
 
-private const val SYSTEM_PROMPT = "You write one short line summing up the day for a TV home screen, from the facts in the user message. " +
-    "At most 80 characters, plain text, no markdown, no links, no emoji. Use only the facts given; invent nothing. " +
-    "Events have no titles: write {E1}, {E2} or {E3} where an event goes (for example \"Rain after 4, Preds 7 on ESPN+, " +
-    "{E1} tomorrow 9am\"); each is replaced on the TV by a title of up to 24 characters, so leave room. Never write any " +
+/**
+ * Length the prompt asks for, counting each placeholder as a full [BriefConfig.TITLE_CUT] title (brief-prompt-width):
+ * the dock row fits about 60-65 characters at 24 sp, so a reply this long fits with room to spare and a paid call is
+ * not thrown away by the fit check.
+ */
+internal const val PROMPT_CHARS = 50
+
+/** The example in the prompt; within [PROMPT_CHARS] when each placeholder counts as a full title (tested). */
+internal const val PROMPT_EXAMPLE = "Rain after 4, {E1} at 9am"
+
+internal const val SYSTEM_PROMPT = "You write one short line summing up the day for a TV home screen, from the facts in the user message. " +
+    "At most $PROMPT_CHARS characters, counting each {E1}, {E2} or {E3} as ${BriefConfig.TITLE_CUT} characters. Plain text, " +
+    "no markdown, no links, no emoji. Use only the facts given; invent nothing. " +
+    "Events have no titles: write {E1}, {E2} or {E3} where an event goes (for example \"$PROMPT_EXAMPLE\"); each is " +
+    "replaced on the TV by a title of up to ${BriefConfig.TITLE_CUT} characters. Prefer one or two facts. Never write any " +
     "other braces. In \"uses\" list every fact you relied on."
 
 /** The brief's schema: the line, and which facts it names (the fingerprint covers exactly those). */

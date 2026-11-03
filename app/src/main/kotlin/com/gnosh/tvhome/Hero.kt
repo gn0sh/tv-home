@@ -204,8 +204,9 @@ fun HeroLayer(
     var briefRefreshed by remember { mutableIntStateOf(0) }
     val facts = remember(inputs) { briefFacts(inputs) }
     // The switch and the cache file, read on IO (never on the main thread; the hero is composed after the first frame,
-    // AC8). The source holds no title (placeholders only), so holding it across a Quiet change is safe.
-    val briefSource by produceState<BriefSource?>(null, facts, briefRefreshed) {
+    // AC8). The source holds no title (placeholders only), so holding it across a Quiet change is safe. Keyed on the
+    // switch too (settings are re-read each minute), so switching the brief off hides it within a minute (brief-off-lag).
+    val briefSource by produceState<BriefSource?>(null, facts, briefRefreshed, settings.switches.brief) {
         value = withContext(Dispatchers.IO) { runCatching { graph.brief.load(facts) }.getOrNull() }
     }
     // On each minute tick: at most one request per slot (BriefLedger), off the main thread. Its own scope, so a feed
