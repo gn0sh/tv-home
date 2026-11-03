@@ -14,9 +14,9 @@ $ErrorActionPreference = 'Stop'
 # Child PowerShells on this throwaway runner run the repo's own scripts under RemoteSigned (not Bypass).
 $env:PSExecutionPolicyPreference = 'RemoteSigned'
 
-$repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$install = Join-Path $repo 'scripts\install-tv-home.ps1'
-$cmd = Join-Path $repo 'scripts\Install TV Home.cmd'
+$checkout = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$install = Join-Path $checkout 'scripts\install-tv-home.ps1'
+$cmd = Join-Path $checkout 'scripts\Install TV Home.cmd'
 $failures = @()
 function Check([string]$name, [bool]$ok, [string]$detail = '') {
     if ($ok) { Write-Host "PASS  $name" } else { Write-Host "FAIL  $name $detail" -ForegroundColor Red; $script:failures += $name }
@@ -64,7 +64,7 @@ $r = Invoke-Install @() $exp
 Check '0 empty folder is refused' ($r.Code -eq 1 -and $r.Text -match 'No APK') $r.Text
 
 # 5: parse and lint
-foreach ($f in @($install, $PSCommandPath, (Join-Path $repo 'scripts\update-tv-remote.ps1'), (Join-Path $repo 'scripts\install-remote-shortcut.ps1'))) {
+foreach ($f in @($install, $PSCommandPath, (Join-Path $checkout 'scripts\update-tv-remote.ps1'), (Join-Path $checkout 'scripts\install-remote-shortcut.ps1'))) {
     $errs = $null; $tok = $null
     [void][Management.Automation.Language.Parser]::ParseFile($f, [ref]$tok, [ref]$errs)
     Check "5 parses: $(Split-Path $f -Leaf)" ($errs.Count -eq 0) (($errs | ForEach-Object { $_.Message }) -join '; ')

@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Stop'
 $PinnedSha256 = '18:E2:7C:A1:DF:5A:EA:B8:4C:E4:65:8E:0E:A3:94:02:67:77:1F:71:DE:9C:4B:49:07:96:F2:7C:2C:4B:64:2A'
 if ($DryRun -and $DryRunPin) { $PinnedSha256 = $DryRunPin }
 $Package = 'com.gnosh.tvhome'
-$Repo = 'gn0sh/tv-home'
+$GhRepo = 'gn0sh/tv-home'
 $Workflow = 'android.yml'
 $ArtifactName = 'tv-home-release-apk'
 $DefaultSerial = '192.168.68.71:5555'   # same default as tv-home-takeover.ps1
@@ -228,13 +228,13 @@ function Get-LatestMainApk {
     $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $gh) {
         Fail ("No APK in $Incoming and the GitHub CLI (gh) is not on this PC.`n" +
-              "By hand: open https://github.com/$Repo/actions/workflows/$Workflow , open the newest green run on main,`n" +
+              "By hand: open https://github.com/$GhRepo/actions/workflows/$Workflow , open the newest green run on main,`n" +
               "download the '$ArtifactName' file, unzip it, put the single .apk in $Incoming , then double-click Install TV Home again.")
     }
     if ((Invoke-Tool $gh.Source @('auth', 'status')).Code -ne 0) {
-        Fail "gh is not signed in to GitHub. In PowerShell, run: gh auth login (once). Or download by hand: https://github.com/$Repo/actions/workflows/$Workflow"
+        Fail "gh is not signed in to GitHub. In PowerShell, run: gh auth login (once). Or download by hand: https://github.com/$GhRepo/actions/workflows/$Workflow"
     }
-    $list = Invoke-Tool $gh.Source @('run', 'list', '--repo', $Repo, '--workflow', $Workflow, '--branch', 'main', '--event', 'push',
+    $list = Invoke-Tool $gh.Source @('run', 'list', '--repo', $GhRepo, '--workflow', $Workflow, '--branch', 'main', '--event', 'push',
         '--status', 'success', '--limit', '1', '--json', 'databaseId,headBranch,headSha,event,conclusion')
     if ($list.Code -ne 0) { Fail 'gh could not list the build runs.' }
     $runs = @($list.Text | ConvertFrom-Json)
@@ -253,7 +253,7 @@ function Get-LatestMainApk {
     Write-Host "Getting the APK from build $id (main $($run.headSha.Substring(0, 7)))..."
     $tmp = Join-Path $Tools ('fetch-' + $id)
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-    $dl = Invoke-Tool $gh.Source @('run', 'download', $id, '--repo', $Repo, '--name', $ArtifactName, '--dir', $tmp)
+    $dl = Invoke-Tool $gh.Source @('run', 'download', $id, '--repo', $GhRepo, '--name', $ArtifactName, '--dir', $tmp)
     if ($dl.Code -ne 0) { Fail 'gh could not download the APK (builds are kept 7 days; push a new build if this one is older).' }
     $found = @(Get-ChildItem $tmp -Recurse -File | Where-Object { $_.Extension -ieq '.apk' })
     if ($found.Count -ne 1) { Remove-Item $tmp -Recurse -Force; Fail "The build held $($found.Count) APK files, expected exactly one." }
@@ -268,8 +268,8 @@ if ($LibraryOnly) { return }
 $fetchedRun = $null
 try {
     New-Item -ItemType Directory -Force -Path $Incoming | Out-Null
-    $apks = Get-IncomingApks
-    if ($apks.Count -eq 0 -and $Fetch) { $fetchedRun = Get-LatestMainApk; $apks = Get-IncomingApks }
+    $apks = @(Get-IncomingApks)   # @() keeps an empty or single result an array (strict mode rejects .Count on $null)
+    if ($apks.Count -eq 0 -and $Fetch) { $fetchedRun = Get-LatestMainApk; $apks = @(Get-IncomingApks) }
     if ($apks.Count -eq 0) { Fail "No APK in $Incoming . Double-click Install TV Home (it fetches the newest one), or put the single .apk there." }
     if ($apks.Count -gt 1) { Fail "$($apks.Count) APK files are in $Incoming ; there must be exactly one. Nothing was installed. Tell the team which is the right one." }
     $apk = $apks[0].FullName
@@ -330,5 +330,6 @@ try {
     Write-Host 'DONE. TV Home is installed on the TV. On the TV, open TV Home (or press Home if you turned that on): it is the new version, and your calendar and settings are still there.' -ForegroundColor Green
     exit 0
 } catch {
+    if ($DryRun) { Write-Host ('DRY RUN detail: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message + ' at line ' + $_.InvocationInfo.ScriptLineNumber) }
     Fail 'Something unexpected stopped the install before anything was changed on the TV (the APK could not be read as an APK, or a file could not be used). Tell the team.'
 }
