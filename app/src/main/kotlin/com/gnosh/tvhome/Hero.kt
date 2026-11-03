@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
@@ -57,6 +58,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -140,6 +142,8 @@ fun HeroLayer(
     quiet: Boolean,
     onWatch: (WatchTarget?) -> Unit,
     modifier: Modifier = Modifier,
+    /** Top of the apps row in design dp (null until measured): the hero text ends above it ([HeroZones.layout]). */
+    appsTop: State<Int?> = remember { mutableStateOf(null) },
 ) {
     val context = LocalContext.current
     val now by rememberMinuteClock()
@@ -197,9 +201,10 @@ fun HeroLayer(
             translationX = o.dx.dp.toPx()
             translationY = o.dy.dp.toPx()
         }
-        HeroTopStrip(glance, resolved, ink, dim, drifting)
-        HeroNowNext(glance.nowNext, ink, drifting)
-        HeroCard(glance.card, ink, drifting)
+        val zones = HeroZones.layout(appsTop.value)
+        HeroTopStrip(glance, resolved, ink, dim, drifting, zones.top)
+        HeroNowNext(glance.nowNext, ink, drifting, zones.left)
+        HeroCard(glance.card, ink, drifting, zones.right)
     }
 }
 
@@ -230,7 +235,7 @@ private data class HeroSettings(
 }
 
 /** Places a composable on one of the fixed [HeroZones] (dp at 1280x720). */
-private fun Modifier.zone(z: HeroZones.Zone): Modifier = offset(z.x.dp, z.y.dp).size(z.w.dp, z.h.dp)
+private fun Modifier.zone(z: HeroZones.Zone): Modifier = offset(z.x.dp, z.y.dp).size(z.w.dp, z.h.dp).clipToBounds()
 
 /**
  * The current local time. Driven by the system's minute tick and by time and time-zone changes (no `delay`), so it stays
@@ -260,13 +265,14 @@ internal fun rememberMinuteClock(): State<LocalDateTime> {
 
 /** Top strip: clock (40 sp) and date left, holiday badge after them; weather chip with any alert suffix right. */
 @Composable
-private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boolean, drifting: Modifier) {
+private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boolean, drifting: Modifier, zone: HeroZones.Zone) {
+    // The clock, date, Quiet and badge are measured first at their full width (never clipped: "LIV" in the emulator
+    // tour); the chip takes what is left, right-aligned, and ellipsizes inside the safe area.
     Row(
-        Modifier.zone(HeroZones.TOP_STRIP).then(drifting),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        drifting.zone(zone),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             Text(g.clock, color = rgb(ink.text), fontSize = GlanceTokens.CLOCK_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(g.date, color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, maxLines = 1)
             if (g.quiet) {
@@ -299,7 +305,7 @@ private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boo
         if (chip != null) {
             Text(
                 chip, color = rgb(ink.secondary), fontSize = GlanceTokens.CHIP_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 24.dp),
+                textAlign = TextAlign.End, modifier = Modifier.weight(1f).padding(start = 24.dp),
             )
         }
     }
@@ -307,9 +313,10 @@ private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boo
 
 /** Hero left 60%: Now/Next line 1 (44 sp), line 2 (28 sp), the data-age line (22 sp). Nothing when hidden. */
 @Composable
-private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier) {
+private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier, zone: HeroZones.Zone) {
     nn ?: return
-    Column(Modifier.zone(HeroZones.HERO_LEFT).then(drifting), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (zone.h <= 0) return
+    Column(drifting.zone(zone), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             nn.line1,
             color = rgb(ink.text),
@@ -332,9 +339,10 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier) {
 
 /** Hero right 40%: a severe alert on an opaque red card (40 sp), or today's game line. Nothing when there is neither. */
 @Composable
-private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier) {
+private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier, zone: HeroZones.Zone) {
     card ?: return
-    Box(Modifier.zone(HeroZones.HERO_RIGHT).then(drifting), contentAlignment = Alignment.TopStart) {
+    if (zone.h <= 0) return
+    Box(drifting.zone(zone), contentAlignment = Alignment.TopStart) {
         when (card) {
             is ContextCard.Alert -> Column(
                 Modifier

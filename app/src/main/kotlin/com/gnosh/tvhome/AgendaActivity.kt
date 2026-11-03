@@ -104,7 +104,9 @@ class AgendaActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch { quiet = withContext(Dispatchers.IO) { FeedSettings.quiet(applicationContext) } }
                 launch {
-                    val density = resources.displayMetrics.density
+                    // Tiles are drawn on the design canvas (DesignCanvasBox), so size their bitmaps at its density.
+                    val dm = resources.displayMetrics
+                    val density = tvhome.core.ui.DesignCanvas.density(dm.widthPixels, dm.heightPixels)
                     val w = (theme.tileWidthDp * density).toInt()
                     val h = (theme.tileHeightDp * density).toInt()
                     val loaded = withContext(Dispatchers.IO) { runCatching { installed.load(applicationContext, w, h) }.getOrNull() }
@@ -135,6 +137,7 @@ class AgendaActivity : ComponentActivity() {
             val hideTitles = quiet != false
             val model = remember(state, is24h, minute, hideTitles) { screenModel(state, Instant.now(), ZoneId.systemDefault(), is24h, hideTitles) }
             val tile = remember(state, is24h, minute, hideTitles) { calendarTile(state, Instant.now(), ZoneId.systemDefault(), is24h, hideTitles) }
+            DesignCanvasBox {
             HomeScreen(
                 apps = apps,
                 theme = theme,
@@ -161,6 +164,7 @@ class AgendaActivity : ComponentActivity() {
                     runCatching { layoutStore.save(next) }
                 },
             )
+            }
         }
     }
 

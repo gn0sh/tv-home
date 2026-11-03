@@ -37,6 +37,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,7 +61,10 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
@@ -158,6 +162,7 @@ fun HomeScreen(
     fun close() { returningTo = open; open = null }
     when (open) {
         DOCK_CALENDAR -> { CalendarFullScreen(agenda, theme, onClose = ::close); return }
+        DOCK_BOARD -> { BoardFullScreen(theme, quiet = quiet != false, onClose = ::close); return }
         DOCK_ASK -> { key(askSession) { AskFullScreen(ask, theme, onClose = ::close) }; return }
     }
     // Everything installed (default order), then the user's order and hidden set applied (M2g, AppLayout in :core).
@@ -227,6 +232,7 @@ fun HomeScreen(
         pendingFocus = null
     }
     val calendar = remember { FocusRequester() }
+    val boardTile = remember { FocusRequester() }
     val askTile = remember { FocusRequester() }
     // Initial focus is settled once it reached the first app, the user pressed a key, or we came back from a full
     // screen (focus belongs on that dock tile then). Until then it may move from the Calendar tile (placed there while
@@ -235,7 +241,7 @@ fun HomeScreen(
     LaunchedEffect(Unit) {
         val back = returningTo ?: return@LaunchedEffect
         returningTo = null
-        focusSoon(if (back == DOCK_ASK) askTile else calendar)
+        focusSoon(when (back) { DOCK_ASK -> askTile; DOCK_BOARD -> boardTile; else -> calendar })
     }
     LaunchedEffect(hasApps) {
         if (settled) return@LaunchedEffect
@@ -276,12 +282,17 @@ fun HomeScreen(
         }
     }
     val context = LocalContext.current
+    // Top of the apps row in design dp, so the hero text never runs behind it (emulator tour 2026-11-03).
+    val appsTop = remember { mutableStateOf<Int?>(null) }
+    val canvasTop = remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
     val shown = if (idleState == IdleState.DIM) theme.dimmed() else theme
     Box(
         Modifier
             .fillMaxSize()
             .background(color(theme.background))
             // Test tags (the hero's idle state) show as uiautomator resource-ids for the emulator QA; not read aloud.
+            .onGloballyPositioned { canvasTop.floatValue = it.positionInRoot().y }
             .semantics { testTagsAsResourceId = true }
             // Key handlers are not focus targets, so this does not reintroduce home-back-twice. In NEAR_BLACK the
             // first key only wakes the screen (consumed); otherwise every key passes through.
@@ -293,49 +304,54 @@ fun HomeScreen(
         // the second would reach the activity.
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
-        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it })
+        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, appsTop = appsTop)
         CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
         ) {
             Spacer(Modifier.weight(1f))
-            AppRow(
-                apps, appList, hiddenList.size, rowKeys, shown, rowState, appFocus, onLaunch,
-                onMenu = { menuFor = it }, onOpenHidden = { hiddenOpen = true },
-            )
-            Dock(shown) {
-                CalendarTileView(tile, shown, calendar, down = askTile, onClick = { open = DOCK_CALENDAR })
-            }
-        }
-        // Bottom centre, in the dock's band (beside the Calendar tile) so the hero gets the room: the pill is centred on
-        // the tile's box, inside the safe-area margins.
-        Box(
-            Modifier.fillMaxSize().padding(bottom = (Tokens.MARGIN_V_DP + dockPillInset(theme)).dp),
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            AskButton(shown, askTile, up = calendar, onFocused = {}, onClick = { open = DOCK_ASK })
-        }
-        // R1 focus order in the dock band: Calendar > Ask > Watch (game day only) > Quiet (last). Right of the Ask pill,
-        // right-aligned in the same band; Up from either returns to the Calendar tile, like Ask.
-        Box(
-            Modifier.fillMaxSize().padding(end = Tokens.MARGIN_H_DP.dp, bottom = (Tokens.MARGIN_V_DP + dockPillInset(theme)).dp),
-            contentAlignment = Alignment.BottomEnd,
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(PILL_GAP_DP.dp), verticalAlignment = Alignment.CenterVertically) {
-                watch?.let { w ->
-                    DockPill(
-                        shown, label = "Watch ${w.network}", description = WATCH_DESC_PREFIX + w.network,
-                        requester = watchPill, up = calendar, maxWidthDp = WATCH_PILL_MAX_DP, active = false,
-                        // The focus loss that comes with the pill's removal (watch already null) must not clear the flag.
-                        onFocus = { f -> if (f) watchFocused = true else if (watch != null) watchFocused = false },
-                    ) { InstalledApps.launchPackage(context, w.packageName) }
-                }
-                val on = quiet == true
-                DockPill(
-                    shown, label = if (on) "Quiet on" else "Quiet", description = if (on) QUIET_DESC_ON else QUIET_DESC_OFF,
-                    requester = quietPill, up = calendar, maxWidthDp = QUIET_PILL_MAX_DP, active = on,
-                    onClick = onQuietToggle,
+            Box(Modifier.onGloballyPositioned { c ->
+                // Relative to the screen's own root Box (the design canvas may be letterboxed inside the window).
+                val top = with(density) { (c.positionInRoot().y - canvasTop.floatValue).toDp().value.toInt() }
+                if (appsTop.value != top) appsTop.value = top
+            }) {
+                AppRow(
+                    apps, appList, hiddenList.size, rowKeys, shown, rowState, appFocus, onLaunch,
+                    onMenu = { menuFor = it }, onOpenHidden = { hiddenOpen = true },
                 )
+            }
+            // The dock band, one Row so nothing in it can overlap (emulator tour: Watch over Ask): the Calendar and Board
+            // tiles left, then the pills right-aligned and centred on the tiles' box. R1 focus order: Calendar > Board >
+            // Ask > Watch (game day only) > Quiet (last). Up from a pill returns to the Calendar tile. The label band
+            // under the pills stays free (the daily brief line, m7-brief).
+            Row(
+                Modifier.fillMaxWidth().padding(rowPadding(theme)),
+                horizontalArrangement = Arrangement.spacedBy(TILE_GAP_DP.dp),
+            ) {
+                CalendarTileView(tile, shown, calendar, down = askTile, onClick = { open = DOCK_CALENDAR })
+                BoardTileView(shown, boardTile, down = askTile, onClick = { open = DOCK_BOARD })
+                // The pills get the rest of the row, right-aligned, so they can never push past the safe area.
+                Row(
+                    Modifier.weight(1f).height(theme.tileHeightDp.dp),
+                    horizontalArrangement = Arrangement.spacedBy(PILL_GAP_DP.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AskButton(shown, askTile, up = calendar, onFocused = {}, onClick = { open = DOCK_ASK })
+                    watch?.let { w ->
+                        DockPill(
+                            shown, label = "Watch ${w.network}", description = WATCH_DESC_PREFIX + w.network,
+                            requester = watchPill, up = calendar, maxWidthDp = WATCH_PILL_MAX_DP, active = false,
+                            // The focus loss that comes with the pill's removal (watch already null) must not clear the flag.
+                            onFocus = { f -> if (f) watchFocused = true else if (watch != null) watchFocused = false },
+                        ) { InstalledApps.launchPackage(context, w.packageName) }
+                    }
+                    val on = quiet == true
+                    DockPill(
+                        shown, label = if (on) "Quiet on" else "Quiet", description = if (on) QUIET_DESC_ON else QUIET_DESC_OFF,
+                        requester = quietPill, up = calendar, maxWidthDp = QUIET_PILL_MAX_DP, active = on,
+                        onClick = onQuietToggle,
+                    )
+                }
             }
         }
         }
@@ -368,10 +384,6 @@ fun HomeScreen(
 
 /** Tile images' alpha: 1, or [OledTokens.DIM_IMAGE_ALPHA] while the screen is dimmed. */
 private val LocalImageAlpha = compositionLocalOf { 1f }
-
-/** Distance from the dock band's bottom to the bottom of a pill that is centred on the Calendar tile's box. */
-private fun dockPillInset(theme: HomeTheme): Int =
-    rowPadding(theme).calculateBottomPadding().value.toInt() + TILE_LABEL_DP + (theme.tileHeightDp - ASK_BUTTON_H_DP) / 2
 
 /**
  * Requests focus after the next frame (the target may not be composed yet), retrying once. True when the request was
@@ -494,18 +506,6 @@ private fun AppRow(
             }
         }
     }
-}
-
-/**
- * The dock: dashboard tiles under the app row, left-aligned with the first app tile. A plain (non-lazy, non-clipping,
- * non-focusable) Row, so more tiles can be added as further children.
- */
-@Composable
-private fun Dock(theme: HomeTheme, tiles: @Composable () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(rowPadding(theme)),
-        horizontalArrangement = Arrangement.spacedBy(TILE_GAP_DP.dp),
-    ) { tiles() }
 }
 
 private const val TILE_GAP_DP = 28
@@ -646,6 +646,26 @@ private fun CalendarTileView(
 }
 
 /**
+ * The Board tile: opens the full-screen Board (week grid, next games, weather). Its face says what is inside, nothing
+ * else; the label under it names it.
+ */
+@Composable
+private fun BoardTileView(theme: HomeTheme, requester: FocusRequester, down: FocusRequester, onClick: () -> Unit) {
+    TileFrame(theme, BOARD_TILE_LABEL, BOARD_TILE_DESC, requester, onClick, down = down) {
+        val k = theme.tileHeightDp / 135f
+        Column(Modifier.fillMaxSize().clearAndSetSemantics { }.padding(horizontal = (14 * k).dp, vertical = (10 * k).dp)) {
+            Text("Week", color = color(theme.text), fontSize = (28 * k).sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Spacer(Modifier.height((6 * k).dp))
+            Text("Games · Weather", color = color(theme.secondaryText), fontSize = (18 * k).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** The Board tile's label and TalkBack description (also read by the emulator QA / screenshot tour). */
+const val BOARD_TILE_LABEL = "Board"
+const val BOARD_TILE_DESC = "Board. This week's calendar, next games and weather."
+
+/**
  * The Ask Claude pill: small (about 250 x 56 dp), "✦ Ask Claude", the tiles' focus treatment (scale, fill, ring) in the
  * theme's colours. Up goes to the Calendar tile (explicit, so it never jumps to an app tile). It shows no state, so it
  * never waits on Claude. A single focus target with no focusable parent (home-back-twice).
@@ -731,17 +751,21 @@ const val QUIET_DESC_OFF = "Quiet mode, off. Turn on to hide event titles."
 
 private const val PILL_GAP_DP = 16
 private const val PILL_MIN_DP = 140
-private const val WATCH_PILL_MAX_DP = 240
+private const val WATCH_PILL_MAX_DP = 200
 private const val QUIET_PILL_MAX_DP = 170
 
 private const val ASK_BUTTON_W_DP = 250
 private const val ASK_BUTTON_H_DP = 56
 
 private const val DOCK_CALENDAR = "calendar"
+private const val DOCK_BOARD = "board"
 
 /** A request from outside the screen (M3): [seq] counts them; [target] null shows the home row, [ASK] opens Ask Claude. */
 data class HomeEntry(val seq: Int, val target: String?) {
-    companion object { const val ASK = DOCK_ASK }
+    companion object {
+        const val ASK = DOCK_ASK
+        const val BOARD = DOCK_BOARD
+    }
 }
 private const val DOCK_ASK = "ask"
 

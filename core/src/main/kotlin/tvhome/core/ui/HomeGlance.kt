@@ -38,6 +38,45 @@ object HeroZones {
     val HERO_LEFT = Zone(64, 112, 680, 270)
     val HERO_RIGHT = Zone(768, 112, 448, 270)
     val ALL = listOf(TOP_STRIP, HERO_LEFT, HERO_RIGHT)
+
+    /** Overscan safe area: 5% of the design canvas on every side (64 x 36 dp at 1280x720). */
+    const val SAFE_X = SCREEN_W / 20
+    const val SAFE_Y = SCREEN_H / 20
+
+    /** Space kept between the hero text and the top of the apps row (its focus-scale room is inside the row). */
+    const val APPS_GAP = 8
+
+    /** The three zones for one frame. */
+    data class Layout(val top: Zone, val left: Zone, val right: Zone) {
+        val all get() = listOf(top, left, right)
+    }
+
+    /**
+     * The zones when the apps row starts at [appsTop] (dp on the design canvas; null before it is measured): the hero
+     * text zones end [APPS_GAP] above it, so no hero line is ever drawn behind a tile (emulator tour, 2026-11-03). Never
+     * taller than the design zones, never negative, always inside the safe area.
+     */
+    fun layout(appsTop: Int?): Layout {
+        val limit = minOf(appsTop ?: SCREEN_H, SCREEN_H - SAFE_Y) - APPS_GAP
+        fun fit(z: Zone) = z.copy(h = (limit - z.y).coerceIn(0, z.h))
+        return Layout(TOP_STRIP, fit(HERO_LEFT), fit(HERO_RIGHT))
+    }
+}
+
+/**
+ * The design canvas (1280 x 720 dp): the app draws on it at any screen size by scaling dp, so a 1080p screen at 2.0
+ * density (960 x 540 dp, the TV emulator) lays out exactly like one at 1.5 (emulator tour 2026-11-03: the hero card ran
+ * off the right edge at 2.0). Physical sizes stay what the design asked for: 1 sp is 1.5 px at 1080p either way.
+ */
+object DesignCanvas {
+    const val WIDTH_DP = HeroZones.SCREEN_W
+    const val HEIGHT_DP = HeroZones.SCREEN_H
+
+    /** Pixels per design dp for a screen of [widthPx] x [heightPx]: the canvas fits inside, never cropped. */
+    fun density(widthPx: Int, heightPx: Int): Float {
+        if (widthPx <= 0 || heightPx <= 0) return 1f
+        return minOf(widthPx.toFloat() / WIDTH_DP, heightPx.toFloat() / HEIGHT_DP)
+    }
 }
 
 object GlanceCopy {
