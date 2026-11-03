@@ -79,3 +79,5 @@ if (Get-Module -ListAvailable -Name PSScriptAnalyzer) {
 
 if ($failures.Count -gt 0) { Write-Host "$($failures.Count) check(s) failed." -ForegroundColor Red; exit 1 }
 Write-Host 'All checks passed.'
+# Exit explicitly: the runner exits with the last native command's code otherwise.
+exit 0
