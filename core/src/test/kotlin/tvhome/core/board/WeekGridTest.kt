@@ -208,7 +208,7 @@ class WeekGridTest {
         assertReadable(g)
         // The early gym is pinned to the top, still labelled with its own time; the day list has it in full.
         val gym = g.columns[0].blocks.first { it.title == "Gym" }
-        assertEquals(g.startHour * 60, gym.startMin); assertEquals("6:30", gym.time)
+        assertEquals(g.startHour * 60, gym.startMin); assertEquals("↑ 6:30 AM", gym.time); assertEquals(-1, gym.pinned)
         // Most columns need no "more" row: blocks are lifted to one line, and only the busy day's 3-wide overlaps may hide.
         assertEquals(0, g.columns[0].hidden); assertEquals(0, g.columns[1].hidden)
         assertEquals(g.columns.any { it.hidden > 0 }, g.moreRow)
@@ -263,5 +263,20 @@ class WeekGridTest {
         assertEquals("Nothing scheduled", g.columns[1].emptyText)
         assertFalse(g.columns[2].known)
         assertEquals(BoardCopy.NOT_LOADED, g.columns[2].emptyText)
+    }
+
+    /** pinned-block-ampm: blocks moved to an edge say which way, with AM/PM (or 24 h); blocks inside the hours do not. */
+    @Test fun pinnedBlocksSayDirectionAndHalfOfDay() {
+        val items = listOf(timed("Early", 0, 6, 0, 6, 30), timed("Mid", 0, 12, 0, 13), timed("Late", 0, 22, 0, 23))
+        val raw12 = weekGrid(week(items), true, now, zone, false, false)
+        val g = raw12.fit(GridFit(200f, 150f, 28f)) // 6 hours fit: noon is kept, both ends are pinned
+        val (early, mid, late) = g.columns[0].blocks
+        assertEquals("↑ 6:00 AM", early.time); assertEquals(-1, early.pinned)
+        assertEquals("12:00", mid.time); assertEquals(0, mid.pinned)
+        assertEquals("↓ 10:00 PM", late.time); assertEquals(1, late.pinned)
+        val g24 = weekGrid(week(items), true, now, zone, true, false).fit(GridFit(200f, 150f, 28f))
+        assertEquals(listOf("↑ 06:00", "12:00", "↓ 22:00"), g24.columns[0].blocks.map { it.time })
+        // Nothing pinned when the hours fit.
+        assertTrue(raw12.fit(GridFit(900f, 150f, 28f)).columns[0].blocks.all { it.pinned == 0 && !it.time.startsWith("↑") })
     }
 }

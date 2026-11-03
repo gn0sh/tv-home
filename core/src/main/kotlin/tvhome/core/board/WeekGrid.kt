@@ -34,6 +34,10 @@ data class GridBlock(
     val spanEnd: Int = endMin,
     /** Started the day before (drawn from midnight); never widens the range. */
     val continues: Boolean = false,
+    /** The start with AM/PM ("6:00 AM") or 24 h ("06:00"): what a block pinned to the grid's edge says ([pinned]). */
+    val fullTime: String = time,
+    /** Set by [fit]: -1 starts above the shown hours (pinned to the top, "↑ 6:00 AM"), 1 below them ("↓ 10:00 PM"), else 0. */
+    val pinned: Int = 0,
 ) {
     override fun toString(): String = "GridBlock($startMin-$endMin, lane $lane/$lanes, title=${title.length} chars)"
 }
@@ -185,7 +189,8 @@ fun weekGrid(week: List<AgendaDay>, known: Boolean, now: Instant, zone: ZoneId, 
         val blocks = drawn.mapIndexed { i, (s, a, b) ->
             val title = QuietMode.title(s.item.title, quiet, max = MAX_TITLE)
             val time = if (s.continues) Copy.CONTINUES else shortTime(s.start, is24h)
-            GridBlock(a, b, lanes[i].first, lanes[i].second, time, title, "$time, $title", s.start, s.end, s.continues)
+            val full = if (s.continues) Copy.CONTINUES else fullTime(s.start, is24h)
+            GridBlock(a, b, lanes[i].first, lanes[i].second, time, title, "$time, $title", s.start, s.end, s.continues, full)
         }
         val rows = day.items.map { rowOf(it, zone, is24h, quiet) }
         val count = rows.size
@@ -252,6 +257,9 @@ fun packLanes(intervals: List<Pair<Int, Int>>): List<Pair<Int, Int>> {
     return intervals.indices.map { lane[it] to lanes[it] }
 }
 
+/** "6:00 AM" (12 h) or "06:00" (24 h). */
+private fun fullTime(min: Int, is24h: Boolean): String = formatTime(java.time.LocalTime.of((min / 60) % 24, min % 60), is24h)
+
 /** "9:00" / "12:30" (12 h, the axis gives AM/PM) or "09:00" (24 h). */
 private fun shortTime(min: Int, is24h: Boolean): String {
     val t = java.time.LocalTime.of((min / 60) % 24, min % 60)
@@ -314,7 +322,16 @@ private fun WeekGrid.fitTo(bodyDp: Float, f: GridFit): WeekGrid {
         }
         val lanes = packLanes(slots)
         val blocks = kept.mapIndexed { i, b ->
-            b.copy(startMin = slots[i].first, endMin = slots[i].second, lane = lanes[i].first, lanes = lanes[i].second)
+            // pinned-block-ampm: a block moved to an edge says which way and carries AM/PM, so "6:00" by the 2 PM label
+            // never reads as 6 PM.
+            val pin = when {
+                b.continues -> 0
+                b.spanStart < lo -> -1
+                b.spanStart >= hi -> 1
+                else -> 0
+            }
+            val time = when (pin) { -1 -> "↑ ${b.fullTime}"; 1 -> "↓ ${b.fullTime}"; else -> b.time }
+            b.copy(startMin = slots[i].first, endMin = slots[i].second, lane = lanes[i].first, lanes = lanes[i].second, time = time, pinned = pin)
         }
         val placed = c.copy(blocks = blocks)
         placed.copy(hidden = BlockText.hiddenCount(placed, hourDp, f.innerColDp, f.fontScale))

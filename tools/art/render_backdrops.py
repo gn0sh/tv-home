@@ -41,6 +41,14 @@ TAN_V = TAN_H * H / W
 # Screen height (fraction from the top) of the horizon; the hill crests and sky stops are set relative to it.
 HZ = 0.5 + math.tan(PITCH) / (2 * TAN_V)
 
+# The sun scenes (DAWN, DAY, SUNSET) render without the sun disc and its glows: the app draws the sun where the real sun
+# is (tvhome.core.ui.SunArc) and clips it to the sky above the hills, using the skyline this script exports from a mask
+# render (SKYLINE_KT). --baked-sun brings the old fixed sun back, for comparison only.
+BAKED_SUN = False
+SUN_MOTIFS = ("DAWN", "DAY", "SUNSET")
+SKYLINE_STEP = 10  # pixels between skyline samples: 193 per motif
+SKYLINE_KT = "core/src/main/kotlin/tvhome/core/ui/BackdropSkyline.kt"
+
 
 def lin(c):
     """0xRRGGBB (sRGB) to a linear RGBA tuple for Blender."""
@@ -574,10 +582,10 @@ def scene_dawn():
     sx, sy = 0.74, HZ - 0.10
     world([(0.0, mixc(top, lin(0x0C1830), 0.5)), (0.30, top), (HZ - 0.10, lin(0x34466E)), (HZ, lin(0x56608A)),
            (1.0, lin(0x56608A))],
-          glows=[(sx, sy + 0.06, lin(0xE89A6A), 30, 0.85, 8.0), (sx, sy, lin(0xFFD9A0), 350, 0.6, 1.0),
-                 (sx, sy, accent, 900, 0.9, 1.0)])
+          glows=[(sx, sy + 0.06, lin(0xE89A6A), 30, 0.85, 8.0)] if BAKED_SUN else [])
     sun_lamp(direction(sx, sy + 0.04), 2.5, lin(0xFFD9A0), 4)
-    disc("sun", sx, sy, 3000, 0.05, emission_material("sun", lin(0xFFF0C8), 3.0))
+    if BAKED_SUN:
+        disc("sun", sx, sy, 3000, 0.05, emission_material("sun", lin(0xFFF0C8), 3.0))
     haze = lin(0xA88A88)
     layers = [(2400, -0.06, 0.040, 0x40445F, 0.42), (1300, -0.02, 0.050, 0x2A304C, 0.30),
               (650, 0.04, 0.060, 0x1C2238, 0.30), (260, 0.12, 0.060, 0x0E1220, 0.08)]
@@ -592,10 +600,11 @@ def scene_day():
     sx, sy = 0.72, 0.36
     world([(0.0, mixc(top, lin(0x0E2A56), 0.6)), (0.35, top), (HZ - 0.06, bottom), (HZ + 0.02, lin(0x4A78A8)),
            (1.0, lin(0x4A78A8))],
-          glows=[(sx, sy, lin(0xFFF0C8), 300, 0.35, 1.0), (sx, sy, accent, 2500, 0.9, 1.0)],
+          glows=[(sx, sy, lin(0xFFF0C8), 300, 0.35, 1.0), (sx, sy, accent, 2500, 0.9, 1.0)] if BAKED_SUN else [],
           clouds=(lin(0xB8CCE4), 0.42, 0.7))
     sun_lamp(direction(sx, sy), 3.5, lin(0xFFF4DC), 2)
-    disc("sun", sx, sy, 3000, 0.04, emission_material("sun", lin(0xFFF6D8), 2.5))
+    if BAKED_SUN:
+        disc("sun", sx, sy, 3000, 0.04, emission_material("sun", lin(0xFFF6D8), 2.5))
     haze = lin(0x4A74A4)
     layers = [(2400, -0.06, 0.040, 0x2E4E74, 0.50), (1200, -0.02, 0.050, 0x1E3C52, 0.38),
               (520, 0.04, 0.060, 0x163034, 0.28), (220, 0.12, 0.055, 0x0C1C1E, 0.08)]
@@ -611,10 +620,11 @@ def scene_sunset():
     world([(0.0, mixc(top, lin(0x120D26), 0.6)), (0.30, top), (HZ - 0.12, lin(0x4A2C4C)), (HZ, lin(0x6A3640)),
            (1.0, lin(0x6A3640))],
           glows=[(sx, sy + 0.05, lin(0xE07048), 20, 0.85, 8.0), (sx, sy, lin(0xFFB070), 260, 0.6, 1.0),
-                 (sx, sy, accent, 700, 0.9, 1.0)],
+                 (sx, sy, accent, 700, 0.9, 1.0)] if BAKED_SUN else [],
           clouds=(lin(0xC87060), 0.30, 0.35))
     sun_lamp(direction(sx, sy + 0.03), 2.0, lin(0xFFA060), 3)
-    disc("sun", sx, sy, 3000, 0.065, emission_material("sun", lin(0xFFD08A), 3.0))
+    if BAKED_SUN:
+        disc("sun", sx, sy, 3000, 0.065, emission_material("sun", lin(0xFFD08A), 3.0))
     haze = lin(0xB0605A)
     layers = [(2200, -0.05, 0.040, 0x4A2440, 0.65), (1100, -0.01, 0.050, 0x2E1830, 0.42),
               (450, 0.05, 0.060, 0x1A0F20, 0.18), (200, 0.13, 0.050, 0x0E0812, 0.04)]
@@ -911,6 +921,83 @@ def load_render(path):
     return np.where(px <= 0.0031308, px * 12.92, 1.055 * np.power(px, 1 / 2.4) - 0.055)
 
 
+def render_mask(path):
+    """Re-render the built scene with a transparent sky: alpha is 1 on land (hills, ground) and 0 on sky."""
+    s = bpy.context.scene
+    s.render.film_transparent = True
+    s.cycles.samples, s.cycles.use_denoising, s.cycles.use_adaptive_sampling = 4, False, False
+    s.render.image_settings.color_mode = "RGBA"
+    s.render.filepath = path
+    bpy.ops.render.render(write_still=True)
+
+
+def load_alpha(path):
+    im = bpy.data.images.load(path)
+    px = np.array(im.pixels[:], dtype=np.float32).reshape(im.size[1], im.size[0], 4)[::-1, :, 3]
+    bpy.data.images.remove(im)
+    return px
+
+
+def skyline(alpha):
+    """Per sample, the highest land pixel's row as a fraction of the image height (1.0 when no land), over the window of
+    columns within half a step either side, so a peak between two samples still clips the sun (skyline-sample-gap)."""
+    h, w = alpha.shape
+    land = alpha > 0.5
+    top = np.where(land.any(axis=0), land.argmax(axis=0), h)  # first land row per column
+    out = []
+    half = SKYLINE_STEP // 2
+    for x in range(0, w + 1, SKYLINE_STEP):
+        lo, hi = max(0, x - half), min(w, x + half + 1)
+        out.append(round(float(top[lo:hi].min()) / h, 4))
+    return out
+
+
+def write_skyline_kt(path, skylines, work):
+    """Write the Kotlin table, merging motifs rendered in earlier runs (kept as JSON in --work)."""
+    import json
+    store = os.path.join(work, "skylines.json")
+    data = json.load(open(store)) if os.path.exists(store) else {}
+    data.update(skylines)
+    json.dump(data, open(store, "w"))
+    missing = [m for m in SUN_MOTIFS if m not in data]
+    if missing:
+        print("skyline: not written, missing " + ", ".join(missing) + " (render them once)")
+        return
+    lines = [
+        "package tvhome.core.ui",
+        "",
+        "// Generated by tools/art/render_backdrops.py from a mask render of each sun scene. Do not edit by hand.",
+        "",
+        "/**",
+        " * The hills' top edge in each sun backdrop image (hero_dawn, hero_day, hero_sunset): for x = 0, 1/N .. 1 of the",
+        f" * image width ({SKYLINE_STEP} px steps of {W}), the highest land pixel within half a step either side, as a",
+        f" * fraction of the image height ({H} px) from the top. The sun sits on this line at elevation 0 and is clipped",
+        " * below it ([SunArc]).",
+        " */",
+        "object BackdropSkyline {",
+    ]
+    for m in SUN_MOTIFS:
+        vals = data[m]
+        lines.append(f"    val {m}: FloatArray = floatArrayOf(")
+        for i in range(0, len(vals), 12):
+            lines.append("        " + ", ".join(f"{v:.4f}f" for v in vals[i:i + 12]) + ",")
+        lines.append("    )")
+        lines.append("")
+    lines.append(f"    /** The art's flat horizon line (render_backdrops.py HZ), for a motif with no skyline. */")
+    lines.append(f"    const val HORIZON: Float = {HZ:.4f}f")
+    lines.append("")
+    lines.append("    fun of(motif: HeroMotif): FloatArray? = when (motif) {")
+    lines.append("        HeroMotif.DAWN -> DAWN")
+    lines.append("        HeroMotif.DAY -> DAY")
+    lines.append("        HeroMotif.SUNSET -> SUNSET")
+    lines.append("        else -> null")
+    lines.append("    }")
+    lines.append("}")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"skyline: wrote {path}")
+
+
 def contact_sheet(previews, path):
     cols, pad, label_h = 2, 16, 34
     pw, ph = previews[0][1].size
@@ -939,11 +1026,16 @@ def main(argv):
     # q90: at q80 the dim night sky showed WebP block banding; every image still stays far under the 120 KB budget.
     ap.add_argument("--quality", type=int, default=90)
     ap.add_argument("--reuse", action="store_true", help="skip rendering when the raw EXR is already in --work")
+    ap.add_argument("--baked-sun", action="store_true", help="old fixed sun in the sun scenes (comparison only)")
+    ap.add_argument("--skyline-out", default=SKYLINE_KT)
     args = ap.parse_args(argv)
+    global BAKED_SUN
+    BAKED_SUN = args.baked_sun
     os.makedirs(args.out, exist_ok=True)
     os.makedirs(args.work, exist_ok=True)
     names = args.only.split(",") if args.only else list(MOTIFS)
     previews, failed = [], []
+    skylines = {}
     for name in names:
         build, (top, _bottom) = MOTIFS[name]
         t0 = time.time()
@@ -953,6 +1045,11 @@ def main(argv):
             build()
             bpy.context.scene.render.filepath = raw
             bpy.ops.render.render(write_still=True)
+        if name in SUN_MOTIFS and not BAKED_SUN:
+            mask = os.path.join(args.work, f"{name.lower()}_mask.exr")
+            if not (args.reuse and os.path.exists(mask)):
+                render_mask(mask)
+            skylines[name] = skyline(load_alpha(mask))
         img = post(load_render(raw), top)
         if not contrast_check(name, img):
             failed.append(name)
@@ -968,6 +1065,8 @@ def main(argv):
         if args.preview:
             os.makedirs(args.preview, exist_ok=True)
             prev.save(os.path.join(args.preview, f"hero_{name.lower()}.png"))
+    if skylines:
+        write_skyline_kt(args.skyline_out, skylines, args.work)
     if args.preview and len(previews) > 1:
         contact_sheet(previews, os.path.join(args.preview, "contact.png"))
     if failed:

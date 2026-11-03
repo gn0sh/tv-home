@@ -28,6 +28,7 @@ import tvhome.core.ui.DesignCanvas
 @Composable
 fun DesignCanvasBox(content: @Composable () -> Unit) {
     val outer = LocalDensity.current
+    // Assumes window == screen: a full-screen launcher activity, no multi-window or freeform on the TV.
     val cfg = LocalConfiguration.current
     val scaled = remember(cfg.screenWidthDp, cfg.screenHeightDp, outer.density, outer.fontScale) {
         val w = (cfg.screenWidthDp * outer.density).toInt()
