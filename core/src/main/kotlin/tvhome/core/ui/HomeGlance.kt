@@ -91,8 +91,14 @@ object HomeLayout {
     // The dock row (app HomeScreen uses these): two dashboard tiles, then the pills at their widest.
     const val TILE_GAP_DP = 28
     const val PILL_GAP_DP = 16
-    const val ASK_PILL_DP = 250
-    const val WATCH_PILL_MAX_DP = 200
+    /** "✦ Ask Claude" needs about 160 dp; 210 leaves the Watch pill room (watch-pill-espn-fallback). */
+    const val ASK_PILL_DP = 210
+
+    /**
+     * Wide enough for "Watch on" plus a short app name at 24 sp (ESPN, Max, CDE, Hulu, Peacock: about 200 dp of text in
+     * 260 less 2 x 24 dp padding); the dock still fits at the widest tiles ([dockWidth], HeroLayoutTest).
+     */
+    const val WATCH_PILL_MAX_DP = 260
     const val QUIET_PILL_MAX_DP = 170
     const val DOCK_TILES = 2
 

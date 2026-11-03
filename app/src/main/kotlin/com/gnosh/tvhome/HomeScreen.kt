@@ -720,9 +720,11 @@ private fun AskButton(theme: HomeTheme, requester: FocusRequester, up: FocusRequ
             .focusRequester(requester)
             .focusProperties { this.up = up }
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
-            // watch-pill-a11y: the description sits on the clickable (focusable) node itself; the texts add nothing.
+            // watch-pill-a11y: clickable is the merging (focusable) semantics node. The description is a plain,
+            // non-merging semantics after it, so it merges INTO that node; a second mergeDescendants = true made a
+            // separate merged node that took the description away from the focusable one (tour 41727087775).
             .clickable(onClick = onClick)
-            .semantics(mergeDescendants = true) { contentDescription = "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}." },
+            .semantics { contentDescription = "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}." },
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -766,9 +768,10 @@ private fun DockPill(
             .focusRequester(requester)
             .focusProperties { this.up = up }
             .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
-            // watch-pill-a11y: the description goes on the clickable (focusable) node itself, after it in the chain.
+            // watch-pill-a11y: plain semantics after clickable, so the description merges into clickable's own
+            // (focusable) node; mergeDescendants = true here made a separate node (tour 41727087775).
             .clickable(onClick = onClick)
-            .semantics(mergeDescendants = true) { contentDescription = description }
+            .semantics { contentDescription = description }
             .padding(horizontal = PILL_PAD_H_DP.dp),
         contentAlignment = Alignment.Center,
     ) {

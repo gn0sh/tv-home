@@ -34,4 +34,10 @@ class WatchPillTest {
         assertEquals("Watch the game on SCRIPPS, opens CDE", WatchPill.description(p, "SCRIPPS", "Watch on CDE"))
         assertEquals("Watch the game on SCRIPPS", WatchPill.description(p, "SCRIPPS", "Watch"))
     }
+
+    /** watch-pill-espn-fallback: the pill's text width holds "Watch on Peacock" (about 200 dp at 24 sp). */
+    @Test fun watchPillHasRoomForShortAppNames() {
+        org.junit.jupiter.api.Assertions.assertTrue(HomeLayout.WATCH_PILL_MAX_DP - 2 * 24 >= 200)
+        org.junit.jupiter.api.Assertions.assertTrue(HomeLayout.dockWidth(HomeTheme.TILE_WIDTH_DP.last) <= HeroZones.SCREEN_W - 2 * HeroZones.SAFE_X)
+    }
 }

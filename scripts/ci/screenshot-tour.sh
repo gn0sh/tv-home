@@ -340,8 +340,8 @@ focus_pill() {
   { grep -oE '<node[^>]*content-desc="Watch the game on [^>]*>' <<<"$UI" | sed -E 's/ (index|package|checkable|checked|enabled|scrollable|long-clickable|password|selected)="[^"]*"//g; s/^/tour: pill node: /'; } || true
   FOCUSED=$({ grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | grep -oE 'content-desc="Watch the game on [^"]*"' | head -1 | sed 's/^content-desc="//; s/"$//'; } || true)
   echo "tour: focused pill description: '$FOCUSED'"
-  echo "tour: Ask node: $({ grep -oE 'content-desc="Ask Claude[^"]*"' <<<"$UI" | head -1; } || true)"
-  echo "tour: Quiet node: $({ grep -oE 'content-desc="Quiet mode[^"]*"' <<<"$UI" | head -1; } || true)"
+  echo "tour: Ask node: $({ grep -oE '<node[^>]*content-desc="Ask Claude[^>]*>' <<<"$UI" | head -1 | grep -oE '(content-desc|clickable|focusable|focused|bounds)="[^"]*"' | tr '\n' ' '; } || true)"
+  echo "tour: Quiet node: $({ grep -oE '<node[^>]*content-desc="Quiet mode[^>]*>' <<<"$UI" | head -1 | grep -oE '(content-desc|clickable|focusable|focused|bounds)="[^"]*"' | tr '\n' ' '; } || true)"
 }
 top_pkg() { { resumed | head -1 | grep -oE '[a-z][a-z0-9_.]+/' | head -1 | tr -d /; } || true; }
 # One pill case: $1 n, $2 name, $3 expected pill text ("" = no pill), $4 expected package, $5 network
@@ -356,14 +356,15 @@ pill_case() {
     shot "$n" "$name" "$v"
     return 0
   fi
-  [[ $txt == "$want" ]] || v="pill text '${txt:-none}', expected '$want'"
+  [[ -z $txt || $txt == "$want" ]] || v="pill text '$txt', expected '$want'"
+  [[ $got == *", opens "* ]] || v="${v:+$v; }description does not name the app (label fell back to plain Watch)"
   [[ $got == "Watch the game on $net"* ]] || v="${v:+$v; }description '${got:-none}'"
   shot "$n" "$name" "$v"
   v=""
   focus_pill
   [[ $FOCUSED == "Watch the game on $net"* ]] || v="focused node description '$FOCUSED'"
-  has 'content-desc="Ask Claude\. Talk or type a question\."' || v="${v:+$v; }Ask pill description missing"
-  has 'content-desc="Quiet mode, off\. Turn on to hide event titles\."' || v="${v:+$v; }Quiet pill description missing"
+  has 'content-desc="Ask Claude\. Talk or type a question\." clickable="true"[^>]* focusable="true"' || v="${v:+$v; }Ask description not on a clickable focusable node"
+  has 'content-desc="Quiet mode, off\. Turn on to hide event titles\." clickable="true"[^>]* focusable="true"' || v="${v:+$v; }Quiet description not on a clickable focusable node"
   shot "$((n + 1))" "$name-focused" "$v"
   v=""
   key DPAD_CENTER; sleep 3
