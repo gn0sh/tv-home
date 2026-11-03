@@ -63,6 +63,20 @@ class RealFeedsTest {
         assertEquals(GamePhase.UPCOMING, games.single().phase)
     }
 
+    /** espn-geo-filter: radio rows and the other side's local market are not where we watch. */
+    @Test fun espnGeoBroadcastsKeepTvAndStreamingForNationalOrOurSide() {
+        fun geo(name: String, type: String, market: String) =
+            """{"type":{"id":"1","shortName":"$type"},"market":{"id":"1","type":"$market"},"media":{"shortName":"$name"}}"""
+        val doc = """{"events":[{"date":"2026-11-07T17:00Z","competitions":[{"date":"2026-11-07T17:00Z",
+            "status":{"type":{"state":"pre"}},
+            "competitors":[{"homeAway":"home","team":{"id":"194","shortDisplayName":"Ohio State"}},
+                           {"homeAway":"away","team":{"id":"99","shortDisplayName":"Purdue"}}],
+            "geoBroadcasts":[${geo("FOX", "TV", "National")},${geo("WBNS Radio", "Radio", "National")},
+                             ${geo("Peacock", "Streaming", "National")},${geo("WOSU", "TV", "Home")},${geo("WLFI", "TV", "Away")}]}]}]}"""
+        val g = Schedules.parse(Teams.OHIO_STATE, doc, captured)!!.single()
+        assertEquals(listOf("FOX", "Peacock", "WOSU"), g.networks)
+    }
+
     @Test fun espnScoreboardWithoutOhioStateIsNoGamesNotAnError() {
         val games = Schedules.parse(Teams.OHIO_STATE, Fixtures.text("espn-cfb-scoreboard.json"), captured)
         assertNotNull(games)
