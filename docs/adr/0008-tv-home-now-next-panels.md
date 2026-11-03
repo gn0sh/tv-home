@@ -133,8 +133,10 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   reached, network or API error, refusal, or empty reply. No error text ever shows.
 - **Output handling.** One line, `Feeds.clean`-style control-character removal, URLs removed, at most 90 chars after
   filling, else the template. Display-only: no links, no actions.
-- **Off by default until Brian says yes** (hard stop 3, new recurring spend on his key): the brief's switch ships off
-  and the template line fills the slot at no cost.
+- **On by default since Brian approved it (2026-11-03)** (hard stop 3 cleared: recurring spend on his key, within the
+  cap above): the switch defaults on, and the engine still calls only when the Ask key is provisioned. It stays
+  provisionable off (`--bind id:s:brief --bind on:b:false`); off or without a key, the template line fills the slot
+  at no cost.
 
 ### 6. Quiet mode
 - `QuietMode` flag in SharedPreferences (survives restart), toggled by the Quiet pill (last in focus order) and over

@@ -185,8 +185,10 @@ not accept is refused and nothing is stored. The same list prints with `scripts/
 ```
 $P = "content://com.gnosh.tvhome.provision"
 ```
-- **Turn a panel off or on** (weather, alerts, games, brief; the brief ships off):
-  `adb shell content insert --uri $P/panel --bind id:s:alerts --bind on:b:false`.
+- **Turn a panel off or on** (weather, alerts, games, brief; all on by default. The brief line asks Claude at most
+  twice a day, and only once the Ask Claude key is set; off, a free local line shows instead):
+  `adb shell content insert --uri $P/panel --bind id:s:alerts --bind on:b:false` (brief off:
+  `--bind id:s:brief --bind on:b:false`).
   Back to the defaults: `adb shell content delete --uri $P/panel`.
 - **TV profile** (burn-in protection; LG is the default and the safer one):
   `adb shell content insert --uri $P/tv_profile --bind value:s:vizio` (or `lg`). Back to automatic:
