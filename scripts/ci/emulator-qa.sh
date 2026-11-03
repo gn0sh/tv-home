@@ -885,6 +885,61 @@ m7_rm() { # paths under no_backup
     if [[ $m7_mode == runas ]]; then sh_ "run-as $PKG rm -f no_backup/$f" || true; else sh_ rm -f "$data/$f" || true; fi
   done
 }
+# Offline for Q1/Q2 (qa-q1-live-overwrite): this image has no per-package networking command, so `network off` leaves
+# the app online, and the first alerts fetch (due at once) replaces the planted Tornado Warning with the real, empty NWS
+# answer, in memory and on disk (correct per ADR 0008; LiveFeedsPanelsTest.plantedQaAlertCacheShowsOffline...).
+# svc wifi/data and airplane mode do not take the wired default network down (first CI run), so Q1 uses a global
+# setting the shell may write: Private DNS in strict mode with a resolver host that cannot resolve, which fails every
+# hostname lookup for every app (the feeds use hostnames only). Confirmed below by lookups of each feed host from the
+# shell, and afterwards by the app itself: no weather fetch landed and the planted alerts file is unchanged.
+M7_FEED_HOSTS="api.weather.gov api.open-meteo.com api-web.nhle.com site.api.espn.com calendar.google.com"
+m7_dns_mode=""; m7_dns_spec=""; m7_offline_on=""
+m7_offline() { # on|off
+  local h out i ok
+  if [[ $1 == off ]]; then
+    [[ -n $m7_offline_on ]] || return 0
+    if [[ -z $m7_dns_spec || $m7_dns_spec == null ]]; then sh_ settings delete global private_dns_specifier >/dev/null 2>&1 || true
+    else sh_ settings put global private_dns_specifier "$m7_dns_spec"; fi
+    if [[ -z $m7_dns_mode || $m7_dns_mode == null ]]; then sh_ settings delete global private_dns_mode >/dev/null 2>&1 || true
+    else sh_ settings put global private_dns_mode "$m7_dns_mode"; fi
+    m7_offline_on=""
+    echo "m7 offline: Private DNS restored (mode=${m7_dns_mode:-default})"
+    return 0
+  fi
+  m7_dns_mode=$(sh_ settings get global private_dns_mode | tr -d '\r')
+  m7_dns_spec=$(sh_ settings get global private_dns_specifier | tr -d '\r')
+  sh_ settings put global private_dns_specifier qa-offline.invalid
+  sh_ settings put global private_dns_mode hostname
+  m7_offline_on=1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    ok=1
+    for h in $M7_FEED_HOSTS; do
+      out=$(sh_ ping -c 1 -W 2 "$h" 2>&1 | tr -d '\r' || true)
+      # A lookup failure must be shown, not inferred: a missing ping or a refused ICMP would also print no address.
+      grep -qiE 'unknown host|bad address|name or service not known|no address associated' <<<"$out" || { ok=""; break; }
+    done
+    [[ -n $ok ]] && break
+    sleep 2
+  done
+  [[ -n $ok ]] || fail "m7 offline: no lookup failure shown for $h with Private DNS strict to an unresolvable host ($out); Q1 cannot be offline"
+  pass "m7 offline: no feed host resolves (Private DNS strict, unresolvable resolver host)"
+}
+m7_ls() { # file names, sizes and stamps under no_backup; never file contents except the QA-planted alerts envelope
+  if [[ $m7_mode == runas ]]; then sh_ "run-as $PKG ls -l no_backup no_backup/panels" 2>&1 | tr -d '\r' || true
+  else sh_ ls -l "$data" "$data/panels" 2>&1 | tr -d '\r' || true; fi
+}
+m7_cat() { # $1 = path under no_backup
+  if [[ $m7_mode == runas ]]; then sh_ "run-as $PKG cat no_backup/$1" 2>/dev/null | tr -d '\r' || true
+  else sh_ cat "$data/$1" 2>/dev/null | tr -d '\r' || true; fi
+}
+m7_diag() { # on a hero failure: what the hero showed and what is on disk (QA data only; no secrets live in no_backup)
+  echo "---- m7 diagnostics: hero nodes in the dump"
+  grep -oE '(content-desc="Hero [^"]*"|resource-id="hero_[^"]*")' <<<"${ui:-}" || echo "(no hero nodes)"
+  echo "---- m7 diagnostics: run-as ls -l no_backup"; m7_ls
+  echo "---- m7 diagnostics: panels/alerts.json (QA-planted envelope or the app's rewrite)"; m7_cat panels/alerts.json | head -c 600; echo
+  echo "---- m7 diagnostics: private_dns_mode=$(sh_ settings get global private_dns_mode | tr -d '\r')"
+}
+m7_fail() { m7_diag; fail "$@"; }
 m7_swapped=""
 if [[ -z $DEBUG_APK || ! -f $DEBUG_APK ]]; then
   m7_why="no debug APK (DEBUG_APK='$DEBUG_APK')"
@@ -928,34 +983,39 @@ fi
   alerts='{"v":1,"at":"'$now'","data":{"alerts":[{"event":"Tornado Warning","severity":"Extreme","kind":"OVERRIDE","until":"'$until'"}]}}'
   printf '%s' "$agenda" | m7_put agenda-cache.json
   printf '%s' "$alerts" | m7_put panels/alerts.json
-  network off
+  network off   # no-op on images without per-package networking; m7_offline is what takes the app offline
+  m7_offline on
   sh_ am start -W -n "$MAIN" >/dev/null; sleep 8   # first frame, 1.5 s settle, cache load
-  ui=$(ui_text); [[ -n $ui ]] || fail "m7: uiautomator dump failed"
+  ui=$(ui_text); [[ -n $ui ]] || m7_fail "m7: uiautomator dump failed"
   printf '%s\n' "$ui" > "$OUT/ui-m7-hero.xml"
   a exec-out screencap -p > "$SHOT_DIR/tv-home-m7-hero.png" || true
   for n in "Hero now: " "Hero card: "; do
-    grep -qF "content-desc=\"$n" <<<"$ui" || fail "m7: no '$n...' node in the hero (planted caches not shown)"
+    grep -qF "content-desc=\"$n" <<<"$ui" || m7_fail "m7: no '$n...' node in the hero (planted caches not shown)"
   done
   grep -oE '<node [^>]*(content-desc="Hero (now|card): [^"]*"|resource-id="hero_idle_[A-Z_]+")[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
-    && fail "m7: a hero node is focusable (home-back-twice)"
+    && m7_fail "m7: a hero node is focusable (home-back-twice)"
   pass "m7: the hero's Now and card nodes are shown and none is focusable"
   if [[ -n $same_day ]]; then
     grep -qE 'content-desc="Hero now: [^"]*in (4[0-2]|3[0-9]) min"' <<<"$ui" \
-      || fail "m7: the hero does not show the next event with an 'in N min' countdown"
+      || m7_fail "m7: the hero does not show the next event with an 'in N min' countdown"
     pass "m7: the hero shows the next event with a countdown"
   else
     warn "m7: countdown check skipped: the planted event would fall after midnight in $etz (qa-midnight-flake)"
   fi
   grep -qE 'content-desc="Hero card: Tornado Warning until [^"]+"' <<<"$ui" \
-    || fail "m7: an active Tornado Warning does not take the context card"
+    || m7_fail "m7: an active Tornado Warning does not take the context card"
   pass "m7: a severe alert overrides the context card"
+  # The app could not fetch: weather (on, location set, due at once) wrote nothing, and the planted alerts are intact.
+  m7_cat panels/weather.json | grep -q . && m7_fail "m7: the app fetched weather during Q1, so it was not offline"
+  m7_cat panels/alerts.json | grep -qF '"at":"'"$now"'"' || m7_fail "m7: the planted alerts file was rewritten during Q1 (a fetch got through)"
+  pass "m7: the app could not fetch during Q1 (no weather cache written, planted alerts unchanged)"
   cur=$(focus_after m7)
   if (( napps >= 1 )); then
-    case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) fail "m7: with the hero full, first focus is '${cur%%|*}', not the apps row (R1)" ;; esac
+    case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) m7_fail "m7: with the hero full, first focus is '${cur%%|*}', not the apps row (R1)" ;; esac
     pass "m7: with the hero full, focus starts on the apps row ('${cur%%|*}')"
   fi
   sh_ input keyevent KEYCODE_BACK; sleep 2
-  in_front && fail "m7: one Back with the M7 hero full does not leave the app (home-back-twice)"
+  in_front && m7_fail "m7: one Back with the M7 hero full does not leave the app (home-back-twice)"
   pass "m7: one Back returns home (leaves the app)"
   no_app_crash_yet "m7 hero"
 
@@ -1047,13 +1107,23 @@ fi
   sh_ content insert --uri "content://$PKG.provision/quiet" --bind on:b:false >/dev/null 2>&1 || true
   m7_rm agenda-cache.json panels/alerts.json panels/games.json
   sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
+  m7_offline off
   network on
   if [[ $m7_mode == root ]]; then
     a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
   else
     m7_install "$APK" release || fail "m7: putting the release APK back after Q1 failed: $m7_why"
+    # runas-revoke-check: the package manager must report the installed app as not debuggable (pkgFlags), not just
+    # "run-as failed" (which any error would satisfy).
+    pk=$(sh_ dumpsys package "$PKG" | tr -d '\r')
+    grep -qE '^ *pkgFlags=\[' <<<"$pk" || fail "m7: dumpsys package $PKG shows no pkgFlags after the release reinstall"
+    grep -E '^ *(pkgFlags|flags)=\[' <<<"$pk" | grep -q 'DEBUGGABLE' && fail "m7: the reinstalled $PKG is still DEBUGGABLE"
     sh_ run-as "$PKG" true >/dev/null 2>&1 && fail "m7: run-as still works after reinstalling the release APK"
-    pass "m7: release APK reinstalled (not debuggable) with the dummy URL provisioned; later steps run on release"
+    # m7-reinstall-state: the later steps need only the release app, the dummy URL (fetch attempt, final scan) and
+    # networking on; ProvisionActivity and the forced crash need nothing else. Location, watch map, Quiet, idle test and
+    # the Home watch were wiped with the debug app and are not used after this point.
+    sh_ content query --uri "$URI" | tr -d '\r' | grep -q 'configured=1' || fail "m7: the dummy URL is not configured on the reinstalled release APK"
+    pass "m7: release APK reinstalled; dumpsys shows it not debuggable; dummy URL configured; later steps run on release"
   fi
 }
 
