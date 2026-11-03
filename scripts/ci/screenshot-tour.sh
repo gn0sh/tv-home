@@ -2,7 +2,7 @@
 # One-off screenshot tour of the home screen and the Board on the Android TV emulator (branch board-tour; never merged).
 # Brian could not reach his TV, so this shows him the home screen and the Board in several states, made-up data only.
 #
-# Usage: screenshot-tour.sh <qa-apk> <shot-dir>
+# Usage: screenshot-tour.sh <qa-apk> <shot-dir> <fake-app-dir>
 #   qa-apk:   the `qa` build (release + R8, debuggable), so run-as can plant the panel caches
 #   shot-dir: the full-size PNGs (uploaded as an artifact)
 # Each shot is also printed to the log as a base64 1280x720 JPEG between
@@ -10,14 +10,14 @@
 # followed by a line "TOUR <n> <name>: PRODUCED|NOT PRODUCED (<reason>)" from a uiautomator check of what is on screen.
 # A state that cannot be produced is reported as NOT PRODUCED, never faked.
 #
-# This run: the game-day skins of PR #29 (preds-arena).
+# This run: the Watch pill's built-in defaults of PR #30 (watch-defaults), with fake TV apps.
 #
 # Fake data only: invented events and games, the FakeSecrets dummy calendar URL, a fixed location. Helpers follow
 # scripts/ci/emulator-qa.sh (a, sh_, ui_text, the Private DNS offline switch from its M7 Q1 block).
 set -euo pipefail
 umask 077
 
-APK=${1:?qa-apk}; SHOT_DIR=${2:?shot-dir}
+APK=${1:?qa-apk}; SHOT_DIR=${2:?shot-dir}; FAKE=${3:?fake-app-dir}
 PKG=com.gnosh.tvhome
 MAIN="$PKG/.AgendaActivity"
 P="content://$PKG.provision"
@@ -116,13 +116,6 @@ grep -q Success <<<"$out" || fail "install of the qa APK failed ($out)"
 PROVISION_VALUE="$DUMMY_URL" scripts/provision.sh | tr -d '\r' | grep -q '^Saved\.$' || fail "provisioning the dummy calendar URL failed"
 sh_ content insert --uri "$P/location" --bind lat:d:36.53 --bind lon:d:-87.36 || fail "location insert refused"
 
-# An installed app for the ESPN+ mapping (the Watch pill needs a launchable package): YouTube if present.
-WATCH_PKG=com.google.android.youtube.tv
-if ! sh_ pm path "$WATCH_PKG" 2>/dev/null | grep -q '^package:'; then
-  WATCH_PKG=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER 2>/dev/null \
-    | tr -d '\r' | grep -oE '^ *[a-z][a-z0-9_.]+/' | tr -d ' /' | grep -v "^$PKG$" | head -1 || true)
-fi
-echo "tour: ESPN+ is mapped to ${WATCH_PKG:-nothing installed}"
 
 # ---- offline: Private DNS strict to an unresolvable host (as emulator-qa.sh Q1) ------------------------------------
 sh_ settings put global private_dns_specifier tour-offline.invalid
@@ -317,107 +310,86 @@ has() { grep -qE "$1" <<<"$UI"; }
 look() { UI=$(ui_text); }
 quiet() { sh_ content insert --uri "$P/quiet" --bind on:b:"$1"; }
 
-# Watch map: ESPN+ and FOX to an installed app. The whole remote command is one quoted string: adb shell joins its
-# arguments into a device shell command line, where the unquoted ';' in the old insert split it, so the device ran
-# `ohio-state=ESPN+` as a command and the insert exited non-zero ("watch map insert refused" in the last run).
-WATCH_OK=""
-if [[ -n $WATCH_PKG ]]; then
-  if sh_ "content insert --uri $P/watch --bind 'networks:s:ESPN+=$WATCH_PKG;FOX=$WATCH_PKG' --bind 'defaults:s:predators=ESPN+;ohio-state=FOX'"; then
-    WATCH_OK=1
-  else warn "tour: watch map insert refused"; fi
-fi
-quiet false >/dev/null 2>&1 || true
-
-# ---- game-day skins (PR #29 preds-arena) ---------------------------------------------------------------------------
-# Predators: indoor arena, navy screen, gold edge line, no weather overlay. Ohio State: scarlet stadium, outdoor, so
-# its snow is drawn. All shots at 1280x720 (JPEG in the log; full PNG in the artifact).
-set_local() { # $1 = "yyyy-mm-dd HH:MM" in the device zone
-  local tz target now; tz=$(dev_tz); target=$(TZ=$tz date -d "$1" +%s)
-  sh_ cmd alarm set-time "$((target * 1000))" >/dev/null 2>&1 || true
-  sleep 2; now=$(dev_now)
-  (( now - target < 120 && target - now < 120 )) || { warn "tour: could not set the clock to $1"; return 1; }
-  echo "tour: clock set to $(sh_ date | tr -d '\r')"
-}
-W_SNOW='"tempF":29,"condition":"Snow","precipNow":"SNOW","highF":33,"lowF":24,"highHour":14,"overnightLowF":22'
-preds_day() { # puck drop at 19:00 local today, now 17:00
-  plant_games "$(game predators "$(at_local 0 19:00)" Blues true '["ESPN+"]'),$(game predators "$(at_local 6 18:00)" Jets false '[]')" \
-    "$(game ohio-state "$(at_local 4 11:00)" Penn\ State true '["FOX"]')"
-}
-osu_day() { # kickoff 14:30 local today (a Saturday), now 11:00
-  plant_games "$(game predators "$(at_local 3 19:00)" Stars true '["ESPN+"]')" \
-    "$(game ohio-state "$(at_local 0 14:30)" Michigan true '["FOX"]'),$(game ohio-state "$(at_local 7 11:00)" Purdue false '["BTN"]')"
-}
-replant() { # $1 = weather fields
-  evening_agenda; plant_weather "$1"; plant_brief
-}
-back_capture() { # Back, then the screen at ~100, 300 and 800 ms after it, captured on the device (each screencap
-  # takes time itself, so the sleeps are the gaps to the next target, not the targets)
-  local t t0 t1 t2 t3
-  t=$(sh_ "rm -f /sdcard/tour-back-*.png; input keyevent KEYCODE_BACK; a=\$(date +%s%N); sleep 0.1; b=\$(date +%s%N); screencap -p /sdcard/tour-back-100.png; sleep 0.1; c=\$(date +%s%N); screencap -p /sdcard/tour-back-300.png; sleep 0.4; d=\$(date +%s%N); screencap -p /sdcard/tour-back-800.png; echo \$a \$b \$c \$d" | tr -d '\r' || true)
-  read -r t0 t1 t2 t3 <<<"$t" || true
-  [[ ${t3:-} =~ ^[0-9]+$ ]] && echo "tour: captures started at $(( (t1 - t0) / 1000000 )), $(( (t2 - t0) / 1000000 )), $(( (t3 - t0) / 1000000 )) ms after the Back key returned" || true
-}
+# ---- Watch pill defaults (PR #30 watch-defaults) -------------------------------------------------------------------
+# No adb watch map, so only the built-in defaults decide. Fake code-free TV apps (scripts/ci/tour-fake-apps.sh):
+# com.example.tourfake.cde "CDE", com.example.tourfake.cdetwo "CDE", com.example.tourfake.espn "ESPN".
+sh_ content delete --uri "$P/watch" >/dev/null 2>&1 || true
 quiet false >/dev/null 2>&1 || true
 rmc panels/alerts.json; no_games
+CDE_A=com.example.tourfake.cde; CDE_B=com.example.tourfake.cdetwo; ESPN_F=com.example.tourfake.espn
+for p_ in "$CDE_A" "$CDE_B" "$ESPN_F"; do a uninstall "$p_" >/dev/null 2>&1 || true; done
+fake_install() { # $1 = apk name in $FAKE
+  local o; o=$(a install -r "$FAKE/$1.apk" 2>&1 | tr -d '\r' || true)
+  grep -q Success <<<"$o" || { warn "tour: install of fake $1 failed ($o)"; return 1; }
+  echo "tour: installed fake $1"
+}
+preds_on() { # $1 = networks JSON list: Preds at 19:00 today (now 17:00)
+  plant_games "$(game predators "$(at_local 0 19:00)" Blues true "$1")" "$(game ohio-state "$(at_local 4 11:00)" Penn\ State true '["FOX"]')"
+}
+replant() { evening_agenda; plant_weather "$1"; plant_brief; }
+pill_desc() { { grep -oE 'content-desc="Watch the game on [^"]*"' <<<"$UI" | head -1 | sed 's/^content-desc="Watch the game on //; s/"$//'; } || true; }
+# Focus the pill: Down to the dock, then Right until the focused node is the pill (at most 6 steps).
+focus_pill() {
+  local _
+  key DPAD_DOWN
+  for _ in 1 2 3 4 5 6; do
+    look
+    grep -qE 'content-desc="Watch the game on [^"]*"[^>]* focused="true"' <<<"$UI" && return 0
+    grep -qE 'focused="true"[^>]* content-desc="Watch the game on ' <<<"$UI" && return 0
+    key DPAD_RIGHT
+  done
+  return 1
+}
+top_pkg() { { resumed | head -1 | grep -oE '[a-z][a-z0-9_.]+/' | head -1 | tr -d /; } || true; }
+# One pill case: $1 n, $2 name, $3 expected pill network ("" = no pill), $4 expected package
+pill_case() {
+  local n=$1 name=$2 want=$3 pkg=$4 v="" got top
+  home; look
+  got=$(pill_desc)
+  if [[ -z $want ]]; then
+    [[ -z $got ]] || v="a Watch pill shows (on $got)"
+    has 'content-desc="Hero card: Predators vs Blues' || v="${v:+$v; }no Predators game-day card"
+    shot "$n" "$name" "$v"
+    return 0
+  fi
+  [[ $got == "$want" ]] || v="pill is '${got:-none}', expected Watch on $want"
+  shot "$n" "$name" "$v"
+  v=""
+  if focus_pill; then
+    key DPAD_CENTER; sleep 3
+    top=$(top_pkg)
+    echo "tour: OK on the pill opened ${top:-nothing} (expected $pkg)"
+    [[ $top == "$pkg" ]] || v="OK opened '${top:-nothing}', expected $pkg"
+  else
+    v="could not focus the Watch pill with the remote"
+  fi
+  shot "$((n + 1))" "$name-launched" "$v"
+}
 
-# 1. Preds game day, two hours before puck drop.
 v=""
-local_clock 17 00 || v="the clock could not be set to 17:00"
-replant "$W_EVENING"; preds_day
-home; look
-has 'content-desc="Hero card: Predators vs Blues' || v="${v:+$v; }no Predators game-day card"
-[[ -n $WATCH_OK ]] && ! has 'content-desc="Watch the game on ESPN\+"' && v="${v:+$v; }no Watch pill"
-shot 1 preds-game-day "$v"
+local_clock 17 00 || warn "tour: clock not set to 17:00"
+replant "$W_EVENING"
 
-# 2. Calendar opened, Back, ~200 ms; then the Board, Back, ~200 ms.
-v=""
-key DPAD_DOWN; key DPAD_CENTER; sleep 3; look
-has 'content-desc="Calendar full screen"' || { key DPAD_DOWN; key DPAD_CENTER; sleep 3; look; }
-has 'content-desc="Calendar full screen"' || v="the calendar did not open"
-back_capture
-shot 2 back-from-calendar-100ms "$v" /sdcard/tour-back-100.png
-shot 2 back-from-calendar-300ms "$v" /sdcard/tour-back-300.png
-shot 2 back-from-calendar-800ms "$v" /sdcard/tour-back-800.png
-sleep 2
-v=""
-key DPAD_RIGHT; key DPAD_CENTER; sleep 3; look
-has 'content-desc="Board full screen"' || v="the Board did not open from the dock"
-back_capture
-shot 3 back-from-board-100ms "$v" /sdcard/tour-back-100.png
-shot 3 back-from-board-300ms "$v" /sdcard/tour-back-300.png
-shot 3 back-from-board-800ms "$v" /sdcard/tour-back-800.png
-sh_ "rm -f /sdcard/tour-back-*.png" || true
+# (a) broadcast/local network, one CDE app installed: Watch opens CDE.
+fake_install cde-a || true
+preds_on '["SCRIPPS"]'
+pill_case 1 watch-scripps-cde SCRIPPS "$CDE_A"
 
-# 4. Preds game day with snow falling: indoors, so no snow is drawn.
-v=""
-replant "$W_SNOW"; preds_day
-home; look
-has 'content-desc="Hero card: Predators vs Blues' || v="no Predators game-day card"
-shot 4 preds-snow "$v"
+# (b) streaming only (ESPN+), the ESPN app installed: Watch opens ESPN.
+fake_install espn || true
+replant "$W_EVENING"; preds_on '["ESPN+"]'
+pill_case 3 watch-espnplus-espn ESPN+ "$ESPN_F"
 
-# 5. Preds game day in DIM (idle_test 30 s): no navy tint, no gold line.
-v=""
-replant "$W_EVENING"; preds_day
-sh_ content insert --uri "$P/idle_test" --bind seconds:i:30 || warn "tour: idle_test insert refused"
-home; t0=$(date +%s)
-n=$(( t0 + 38 - $(date +%s) )); (( n > 0 )) && sleep "$n"
-look
-has 'resource-id="hero_idle_DIM"' || v="not in DIM"
-shot 5 preds-dim "$v"
-sh_ content delete --uri "$P/idle_test" >/dev/null 2>&1 || true
+# (c) a network the defaults do not know: no pill.
+replant "$W_EVENING"; preds_on '["Gnosh Sports Net"]'
+pill_case 5 watch-unknown-network "" ""
 
-# 6. Ohio State game day on Saturday 7 Nov 2026, 11:00 (kickoff 14:30). 7. The same with snow: drawn (outdoors).
-v=""
-set_local "2026-11-07 11:00" || v="the clock could not be set to Saturday 11:00"
-replant "$W_EVENING"; osu_day
-home; look
-has 'content-desc="Hero card: Ohio State vs Michigan' || v="${v:+$v; }no Ohio State game-day card"
-shot 6 osu-game-day "$v"
-v=""
-replant "$W_SNOW"; osu_day
-home; look
-has 'content-desc="Hero card: Ohio State vs Michigan' || v="no Ohio State game-day card"
-shot 7 osu-snow "$v"
+# (d) two apps labelled CDE: ambiguous, no pill.
+fake_install cde-b || true
+replant "$W_EVENING"; preds_on '["SCRIPPS"]'
+pill_case 6 watch-two-cde "" ""
+
+for p_ in "$CDE_A" "$CDE_B" "$ESPN_F"; do a uninstall "$p_" >/dev/null 2>&1 || true; done
 
 echo
 echo "== Tour summary"

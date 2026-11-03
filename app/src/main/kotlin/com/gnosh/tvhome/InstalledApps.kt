@@ -39,6 +39,7 @@ class InstalledApps {
             byKey[key(ai.packageName, ai.name)] = ai
             LauncherApp(ai.packageName, ai.name, ri.loadLabel(pm).toString().ifBlank { ai.packageName })
         }
+        known = apps // watch-apps-per-minute: the Watch defaults read this list instead of querying again
         val iconPx = minOf(tileW, tileH) * 3 / 5
         val out = AppOrder.order(apps, context.packageName).map { app ->
             val k = key(app.packageName, app.activityName)
@@ -75,6 +76,24 @@ class InstalledApps {
          */
         fun canLaunch(context: Context, pkg: String): Boolean =
             runCatching { context.packageManager.getLeanbackLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+
+        /** The last launcher list [load] (or [launcherApps]) read in this process. */
+        @Volatile private var known: List<LauncherApp>? = null
+
+        /**
+         * The launchable TV apps with their labels, no images (watch-defaults: the built-in Watch map looks for the CDE
+         * app and the streaming apps among these). watch-apps-per-minute: this is the tile row's own list, refreshed by
+         * [load] each time the home screen starts (installs and removals happen away from it, so they are picked up on
+         * the way back). Only before the first [load] does it query the package manager itself: off the main thread.
+         */
+        fun launcherApps(context: Context): List<LauncherApp> = known ?: runCatching {
+            val pm = context.packageManager
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(launcherIntent(), 0).mapNotNull { ri ->
+                val ai = ri.activityInfo ?: return@mapNotNull null
+                LauncherApp(ai.packageName, ai.name, runCatching { ri.loadLabel(pm).toString() }.getOrDefault(""))
+            }
+        }.getOrNull()?.also { known = it } ?: emptyList()
 
         /** The Watch pill: opens [pkg]'s TV launch intent in its own task (the tiles' path). False if gone or refused. */
         fun launchPackage(context: Context, pkg: String): Boolean = try {

@@ -1,6 +1,6 @@
 name: screenshot-tour
 
-# One-off (branch board-tour, never merged): builds the qa APK (release + R8, debuggable) and runs
+# One-off (branch board-tour, never merged): takes the PR run's qa APK (release + R8, debuggable) and runs
 # scripts/ci/screenshot-tour.sh on the same Android TV API 34 emulator as android.yml, with made-up data only.
 # No secrets are referenced. Actions are pinned to the same SHAs as android.yml.
 
@@ -24,15 +24,18 @@ jobs:
     name: screenshot tour (Android TV, API 34)
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read # to download the PR run's qa APK artifact
     env:
       TVHOME_BUILD_APP: "true"
+      # PR #30 (watch-defaults b88931e): the android.yml run whose qa APK this tour installs.
+      PR_RUN_ID: "41720350267"
+      PR_HEAD_SHA: b88931e78100f8166e5c2d23c52d9c0acbb270bb
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -44,20 +47,23 @@ jobs:
         with:
           packages: "platform-tools platforms;android-35 build-tools;35.0.0"
 
-      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
-        with:
-          cache-read-only: true
-
-      - name: Build qa APK
+      - name: Download the PR's qa APK
+        id: prapk
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/assemble-qa.log" \
-            --dependency-verification="$APP_DEP_VERIFICATION" :app:assembleQa
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PR_RUN_ID" --jq .head_sha)
+          [ "$sha" = "$PR_HEAD_SHA" ] || { echo "::error::run $PR_RUN_ID is for $sha, not $PR_HEAD_SHA"; exit 1; }
+          gh run download "$PR_RUN_ID" -R "$GITHUB_REPOSITORY" -n tv-home-qa-build-apk -D "$RUNNER_TEMP/pr-apk"
           shopt -s nullglob
-          apks=(app/build/outputs/apk/qa/*.apk)
-          [ "${#apks[@]}" -eq 1 ] || { echo "::error::expected exactly one qa APK, found ${#apks[@]}"; exit 1; }
+          apks=("$RUNNER_TEMP"/pr-apk/*.apk)
+          [ "${#apks[@]}" -eq 1 ] || { echo "::error::expected one qa APK in the artifact, found ${#apks[@]}"; exit 1; }
           cp "${apks[0]}" "$RUNNER_TEMP/tour-qa.apk"
-          ./gradlew --stop >/dev/null 2>&1 || true
+          echo "tour: qa APK from run $PR_RUN_ID ($PR_HEAD_SHA), sha256 $(sha256sum "$RUNNER_TEMP/tour-qa.apk" | cut -c1-16)"
+
+      - name: Build the fake TV apps (CDE x2, ESPN)
+        run: scripts/ci/tour-fake-apps.sh "$RUNNER_TEMP/fake-apps"
 
       - name: Enable KVM
         run: |
@@ -85,7 +91,7 @@ jobs:
           emulator-boot-timeout: 480
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
           disable-animations: true
-          script: scripts/ci/screenshot-tour.sh "$RUNNER_TEMP/tour-qa.apk" "$RUNNER_TEMP/tour-shots"
+          script: scripts/ci/screenshot-tour.sh "$RUNNER_TEMP/tour-qa.apk" "$RUNNER_TEMP/tour-shots" "$RUNNER_TEMP/fake-apps"
 
       - name: Upload screenshots
         if: always()

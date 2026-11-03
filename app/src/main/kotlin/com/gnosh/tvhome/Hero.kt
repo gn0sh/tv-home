@@ -87,6 +87,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import tvhome.core.feeds.FeedsSnapshot
 import tvhome.core.feeds.GameDay
 import tvhome.core.feeds.GamePhase
+import tvhome.core.feeds.WatchDefaults
 import tvhome.core.feeds.WatchMap
 import tvhome.core.feeds.WatchTarget
 import tvhome.core.feeds.LiveFeeds
@@ -391,11 +392,18 @@ private data class HeroSettings(
         @Volatile var last: HeroSettings? = null
 
         /** Disk and package manager: call off the main thread. */
-        fun read(context: Context) = HeroSettings(
-            FeedSettings.switches(context), FeedSettings.location(context), FeedSettings.travelRules(context),
-            FeedSettings.watchMap(context),
-            FeedSettings.watchPackages(context).filterTo(HashSet()) { InstalledApps.canLaunch(context, it) },
-        ).also { last = it }
+        fun read(context: Context): HeroSettings {
+            // watch-defaults: the adb map first, then the built-in one over the launchable apps (CDE for broadcast,
+            // local and cable channels; streaming apps when installed). Its targets are launchable by construction.
+            val apps = InstalledApps.launcherApps(context)
+            val installed = FeedSettings.watchPackages(context).filterTo(HashSet()) { InstalledApps.canLaunch(context, it) }
+            apps.mapTo(installed) { it.packageName }
+            return HeroSettings(
+                FeedSettings.switches(context), FeedSettings.location(context), FeedSettings.travelRules(context),
+                FeedSettings.watchMap(context).orElse(WatchDefaults.map(apps)),
+                installed,
+            ).also { last = it }
+        }
     }
 }
 
