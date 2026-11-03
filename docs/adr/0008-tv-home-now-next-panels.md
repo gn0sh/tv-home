@@ -100,7 +100,9 @@ safe margins. ux-designer may move numbers; the structure is fixed.
 ### 5. Claude daily brief
 - **Inputs (the only data sent; no event titles, `brief-titles-egress`).** A small JSON facts object built by
   `briefFacts()` from cached panel values: local date and weekday, the weather chip text, the next rain window, today's
-  high/low, the active alert event name, the game line (team, opponent, local time, network), and up to 3 calendar
+  high and low (two facts; the current temperature is not sent, `brief-fingerprint-churn`), the active alert event
+  name and the game line (team, opponent, local time, network; both feed text, cleaned and cut to 60 chars before
+  sending, `brief-feed-injection`), and up to 3 calendar
   items as **placeholders only**: `{"id":"E1","when":"tomorrow 9:00 AM","allDay":false}`. Never sent: event titles,
   location, ZIP, calendar URL, app list, keys, device ids. Golden test: no fixture title substring appears in the
   request body, Quiet on or off.
@@ -111,7 +113,7 @@ safe margins. ux-designer may move numbers; the structure is fixed.
 - **Request (`brief-fallback-price`).** Same key, host pin and timeouts as Ask. The model is **pinned, with no
   `fallbacks` field and no fallback beta header**: a refusal is just "no line" (template). Model `AskConfig.MODEL`
   (`claude-opus-5-5`) unless Brian picks `claude-haiku-5-5`; effort `low`, `max_tokens` 1024 (thinking counts toward
-  it), structured output `{"line": string, "uses": [enum weather, rain, temps, alert, game, E1, E2, E3]}`, no tools,
+  it), structured output `{"line": string, "uses": [enum weather, rain, high, low, alert, game, E1, E2, E3]}`, no tools,
   no history. `AnthropicClient` gets a `post(body)` used by both Ask (unchanged, keeps its fallback) and the brief.
 - **Slots (`brief-slot-attempt`).** Two slots a day, 07:00 and 16:00 local; the first home visit after a slot may
   attempt it. The slot is recorded as attempted **before** the call; if that write fails there is no call. One attempt
@@ -135,8 +137,17 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   filling, else the template. Display-only: no links, no actions.
 - **On by default since Brian approved it (2026-11-03)** (hard stop 3 cleared: recurring spend on his key, within the
   cap above): the switch defaults on, and the engine still calls only when the Ask key is provisioned. It stays
-  provisionable off (`--bind id:s:brief --bind on:b:false`); off or without a key, the template line fills the slot
-  at no cost.
+  provisionable off (`--bind id:s:brief --bind on:b:false`). **Off means no brief line at all** (not even the
+  template, nor a cached line); **no key** means the free template line (`brief-off-still-shows`).
+- **Review fixes (PR #24).** No slot is spent on empty facts (cold start before the feeds fill in,
+  `brief-empty-snapshot`). The fingerprint always includes the date, so a line never carries over to the next day
+  (`brief-date-carryover`). A ledger more than a month ahead counts as malformed: exhausted now, rewritten, healed next
+  month (`brief-ledger-future-lock`). The line has its own full-width row at the bottom of the dock band, inside the
+  overscan margins plus the drift travel, and drifts with the hero text (`brief-oled-drift`); it is fitted by
+  measuring at the row's real width and font, dropping template parts (or falling back from a cached line) so it is
+  never ellipsized (`brief-line-truncation`). Placeholders are filled in the same composition as the Quiet value
+  (`brief-quiet-flash`). Accepted, no change: `brief-zone-hop` (a time-zone change on the TV can shift or repeat a
+  slot within a day; the monthly cap still bounds the spend).
 
 ### 6. Quiet mode
 - `QuietMode` flag in SharedPreferences (survives restart), toggled by the Quiet pill (last in focus order) and over

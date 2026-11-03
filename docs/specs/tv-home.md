@@ -233,7 +233,7 @@ As Brian, I want the screen to survive being left on, because the LG is OLED and
 
 #### M7-6: Claude one-line daily brief
 As Brian, I want one line that sums up my day ("Rain after 4, Preds at 7 on ESPN+, dentist tomorrow 9am").
-1. Generated from the other panels' cached data (weather, calendar, game), not the open web, using the existing Ask Claude key and client. Shown only once that key is provisioned.
+1. Generated from the other panels' cached data (weather, calendar, game), not the open web, using the existing Ask Claude key and client. Claude is asked only once that key is provisioned; until then the free local template line (story 4) shows. The brief's switch is on by default (approved 2026-11-03); switched off, no brief line shows at all.
 2. Cached; regenerated at most twice a day (about 07:00 and 16:00 local) plus an explicit refresh at most once an hour. JVM test with a fake clock and a counting client proves the cap.
 3. A hard spend cap: a monthly request/token budget stored on device; at the cap it stops generating and shows the cached line with its age, then hides when stale. The dedicated key's own limit stays the backstop. No new key or spend (hard stop 3): this reuses the key and limit Brian already set.
 4. Degrades gracefully: no key, no network, API error or empty reply all fall back to a local template line built from the same data ("Rain after 4 · Preds 7:00 PM · Dentist tomorrow 9 AM"). No error text is ever shown.
