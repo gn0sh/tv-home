@@ -5,20 +5,27 @@ import tvhome.core.sky.SunDay
 import tvhome.core.sky.SunPosition
 import java.time.Duration
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
+import java.time.ZoneOffset
+import kotlin.math.roundToInt
 
 /** Where the backdrop draws the sun's centre: fractions of the backdrop image (1920 x 600), from its top left. */
 data class SunSpot(val x: Float, val y: Float)
 
 /**
- * The real sky at one moment, at the location the weather feed uses: the sun's [position] and the local [day]'s events.
- * Built once a minute on the hero's clock tick; [of] is a few dozen trig calls.
+ * The real sky at one moment, at the location the weather feed uses: the sun's [position] and the events of the solar
+ * [day] around [at]. Built once a minute on the hero's clock tick; [of] is a few dozen trig calls.
  */
 data class SkyNow(val at: Instant, val position: SunPosition, val day: SunDay) {
     companion object {
-        fun of(at: Instant, zone: ZoneId, lat: Double, lon: Double): SkyNow =
-            SkyNow(at, Sun.position(at, lat, lon), Sun.day(LocalDate.ofInstant(at, zone), zone, lat, lon))
+        /**
+         * The day is the location's own (local mean solar time, from the longitude), never the device's time zone: a
+         * TV whose zone is wrong or far away still gets the sunrise and sunset around [at] at that place, and a
+         * location across the date line gets its own date.
+         */
+        fun of(at: Instant, lat: Double, lon: Double): SkyNow {
+            val solar = ZoneOffset.ofTotalSeconds((lon * 240.0).roundToInt().coerceIn(-43_200, 43_200))
+            return SkyNow(at, Sun.position(at, lat, lon), Sun.day(at.atOffset(solar).toLocalDate(), solar, lat, lon))
+        }
     }
 }
 

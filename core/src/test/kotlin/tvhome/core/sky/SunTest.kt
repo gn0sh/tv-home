@@ -123,10 +123,18 @@ class SunTest {
             val ev = listOf(s.dawn, s.sunrise, s.noon, s.sunset, s.dusk)
             ev.forEach { assertNotNull(it, "$d") }
             assertEquals(ev, ev.sortedBy { it }, "$d order")
-            assertEquals(d, LocalDate.ofInstant(s.noon, central), "$d transit on the day")
+            assertEquals(d, s.noon.atZone(central).toLocalDate(), "$d transit on the day")
             // Geometric -0.833 at sunrise; refraction lifts what you see to about -0.4 (the upper limb on the horizon).
             assertEquals(-0.43, Sun.position(s.sunrise!!, lat, lon).elevation, 0.1, "$d sunrise elevation")
             d = d.plusDays(1)
         }
+    }
+
+    @Test fun aucklandAcrossTheDateLine() {
+        // NZDT is UTC+13: Nov 3's sunrise is on Nov 2 in UTC, its transit just after UTC midnight.
+        val d = Sun.day(LocalDate.of(2026, 11, 3), ZoneId.of("Pacific/Auckland"), -36.85, 174.76)
+        assertNear("2026-11-02T17:14:05Z", d.sunrise, what = "sunrise 6:14 AM NZDT")
+        assertNear("2026-11-03T00:04:31Z", d.noon, toleranceS = 60, what = "transit 1:05 PM NZDT")
+        assertNear("2026-11-03T06:55:33Z", d.sunset, what = "sunset 7:56 PM NZDT")
     }
 }

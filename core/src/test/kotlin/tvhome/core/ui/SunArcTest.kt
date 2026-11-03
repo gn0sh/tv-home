@@ -13,13 +13,13 @@ class SunArcTest {
     private val lon = -87.36
     private val central = ZoneId.of("America/Chicago")
     private fun sky(y: Int, mo: Int, d: Int, h: Int, m: Int = 0) =
-        SkyNow.of(LocalDate.of(y, mo, d).atTime(h, m).atZone(central).toInstant(), central, lat, lon)
+        SkyNow.of(LocalDate.of(y, mo, d).atTime(h, m).atZone(central).toInstant(), lat, lon)
 
     private val flat = FloatArray(3) { 0.6f }
 
     @Test fun sunriseSitsOnTheHillsAtTheLeftEndOfTheArc() {
         val day = sky(2026, 11, 3, 12).day
-        val s = SunArc.place(SkyNow.of(day.sunrise!!, central, lat, lon), flat)
+        val s = SunArc.place(SkyNow.of(day.sunrise!!, lat, lon), flat)
         assertNotNull(s)
         assertEquals(SunArc.X_RISE, s!!.x, 0.002f)
         // Elevation is about -0.4 at sunrise (refraction): the centre is a hair under the line, the top half shows.
@@ -28,9 +28,9 @@ class SunArcTest {
 
     @Test fun sunsetIsAtTheRightEndAndNoonAtTheTop() {
         val day = sky(2026, 11, 3, 12).day
-        val set = SunArc.place(SkyNow.of(day.sunset!!, central, lat, lon), flat)!!
+        val set = SunArc.place(SkyNow.of(day.sunset!!, lat, lon), flat)!!
         assertEquals(SunArc.X_SET, set.x, 0.002f)
-        val noon = SunArc.place(SkyNow.of(day.noon, central, lat, lon), flat)!!
+        val noon = SunArc.place(SkyNow.of(day.noon, lat, lon), flat)!!
         assertEquals(SunArc.Y_TOP, noon.y, 0.001f)
         assertTrue(noon.x > SunArc.X_RISE && noon.x < SunArc.X_SET)
     }
@@ -44,7 +44,7 @@ class SunArcTest {
         var d = LocalDate.of(2026, 1, 1)
         while (d.year == 2026) {
             for (h in 0..23) for (m in listOf(0, 30)) {
-                val s = SunArc.place(SkyNow.of(d.atTime(h, m).atZone(central).toInstant(), central, lat, lon), flat)
+                val s = SunArc.place(SkyNow.of(d.atTime(h, m).atZone(central).toInstant(), lat, lon), flat)
                     ?: continue
                 assertTrue(s.y >= SunArc.Y_TOP - 1e-4f, "$d $h:$m y ${s.y}")
                 assertTrue(s.x in 0.52f..0.96f, "$d $h:$m x ${s.x}")
@@ -63,7 +63,7 @@ class SunArcTest {
     @Test fun midnightSunUsesSolarTime() {
         val oslo = ZoneId.of("Europe/Oslo")
         val noon = tvhome.core.sky.Sun.day(LocalDate.of(2026, 6, 21), oslo, 69.65, 18.96).noon
-        val s = SunArc.place(SkyNow.of(noon, oslo, 69.65, 18.96), null)!!
+        val s = SunArc.place(SkyNow.of(noon, 69.65, 18.96), null)!!
         assertEquals((SunArc.X_RISE + SunArc.X_SET) / 2, s.x, 0.002f)
         assertEquals(SunArc.Y_TOP, s.y, 0.001f)
     }
@@ -91,5 +91,17 @@ class SunArcTest {
         assertNotNull(SunArc.fixed(HeroMotif.DAY))
         assertNull(SunArc.fixed(HeroMotif.STARS))
         assertNull(SunArc.fixed(HeroMotif.GAME))
+    }
+
+    @Test fun dayIsTheLocationsNotTheDeviceZones() {
+        // 7 PM CST on Nov 3 is already Nov 4 in UTC (a TV left on UTC): the sky still uses Clarksville's Nov 3.
+        val sky = SkyNow.of(java.time.Instant.parse("2026-11-04T01:00:00Z"), lat, lon)
+        val nov3 = tvhome.core.sky.Sun.day(LocalDate.of(2026, 11, 3), central, lat, lon)
+        assertEquals(nov3.sunset, sky.day.sunset)
+        // Mid-afternoon in Auckland (UTC+13, across the date line): its own Nov 3, sunrise on the UTC date before.
+        val akl = SkyNow.of(java.time.Instant.parse("2026-11-03T03:00:00Z"), -36.85, 174.76)
+        val sunrise = akl.day.sunrise!!
+        assertTrue(kotlin.math.abs(java.time.Duration.between(java.time.Instant.parse("2026-11-02T17:14:05Z"), sunrise).seconds) < 120, "$sunrise")
+        assertNotNull(SunArc.place(akl, flat))
     }
 }
