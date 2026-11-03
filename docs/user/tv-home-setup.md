@@ -95,35 +95,66 @@ tell the team; the file `%LOCALAPPDATA%\tv-remote\remote-app.log` says why.
 **LG or Vizio.** When the Google TV is plugged into the Vizio, tap **Vizio** in the switch at the top of the remote
 (tap **LG** to go back). It only changes where Vol+, Vol- and Mute go; every other button works the same either way.
 The remote remembers the choice next time it opens. With Vizio picked:
-- Volume goes to the Google TV as ordinary volume key presses, and the Google TV passes them to the Vizio over
-  HDMI-CEC. The LG is never contacted, so it can be off or unplugged.
-- The remote cannot read the Vizio's volume, so the card says "Vizio (via HDMI-CEC)" instead of a number, and there is
-  no 60 limit. To keep it safe, **Vol+ moves one step per tap** (holding it does not repeat). Vol- and Mute repeat
-  as usual.
-- If the Vizio's volume does not respond: on the Google TV open Settings > Remotes & Accessories > Set up remote
-  buttons > Volume control (approximately; the names vary by model, see
-  [Google's help page](https://support.google.com/chromecast/answer/10094150)) and pick the option that controls the
-  TV over HDMI (CEC or Auto), not infrared. Also check that CEC is on in the Vizio's own settings (usually System >
-  CEC) and on the Google TV (Settings > Display & Sound > HDMI-CEC, approximately).
-- If CEC volume still does not work with the Vizio, the team can later pair the remote with the Vizio over the
-  network (SmartCast). That needs a pairing code shown on the Vizio and a stored key, so it waits for your go-ahead.
+- **Once paired** (steps below), Vol+, Vol- and Mute go straight to the Vizio over your home network (SmartCast).
+  The card shows the Vizio's volume, and **Vol+ stops at 60**, as with the LG. The LG is never contacted.
+- **Not paired yet**: the card says "Pair the Vizio" and Vol+ is not sent. Vol- and Mute go to the Google TV, which
+  passes them to the Vizio over HDMI-CEC (the Vizio may ignore them).
+- If the Vizio answers but does not report its volume, Vol+ moves one step per tap (holding it does not repeat), and
+  after 2 such steps in a row it stops and says the Vizio did not report its volume, until the Vizio reports it again.
 
-**To update, or to set it up the first time**, in PowerShell from the tv-home folder:
+**Pair the Vizio (once, about 2 minutes, at the TV).** Turn the Vizio on.
+1. Double-click **Update TV Remote** on the desktop. It adds the pairing command. (No such icon yet? Do the
+   one-time setup under "To set it up" below first.)
+2. Open PowerShell in the tv-home folder.
+3. On the Vizio, open Settings > Network > Network Information and note its IP address (for example 192.168.68.90).
+4. Type `.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe --host 192.168.68.90` (with the Vizio's address) and
+   press Enter.
+   Without `--host` it searches the network instead and shows the address it found: type `y` only if it matches the
+   one on the Vizio's screen (the default is no). Windows Firewall may block the search; if it finds nothing, use
+   `--host`.
+5. A 4-digit PIN appears on the Vizio. Type it in PowerShell and press Enter. You should see `Vizio paired.`
+6. Close TV Remote if it is open, reopen it, tap **Vizio** at the top, and press Vol- once. The card should show
+   a number.
+
+If it says the PIN was not accepted, run step 4 again for a new PIN. To unpair, run
+`.\tv-remote\.venv\Scripts\tv-remote-vizio-pair.exe --forget`. That deletes the pairing from this PC only; to cut
+the PC off on the TV too, remove "TV Remote (PC)" from the Vizio's paired devices (Settings > System > Mobile Devices,
+approximately; the name varies by model).
+The key the Vizio hands over is sealed with Windows
+(DPAPI) in `%APPDATA%\tv-remote\vizio-auth.sealed` and never shown. The remote also remembers the Vizio's
+certificate; if a different device answers at that address later, the remote refuses it and says to pair again.
+
+**To update after the team merges a change: double-click Update TV Remote** on the desktop (or in the Start menu).
+It gets the latest tv-home (`git pull --ff-only` on main), reinstalls the app only when its dependencies or the
+installer changed, closes TV Remote and opens it again, then shows a small box with the result. It changes nothing
+if the tv-home folder is not on main or has changes of its own, and says so; it never discards anything.
+
+**To set it up (once, or if the icons are missing)**, in PowerShell from the tv-home folder:
 ```
 git pull
 .\scripts\install-remote-shortcut.ps1
 ```
-It installs the remote app into `tv-remote\.venv` (about a minute the first time) and puts "TV Remote" on the desktop
-and in the Start menu. Then tap **TV Remote**. Right-click it in the Start menu > Pin to taskbar to pin it. If an
+It installs the remote app into `tv-remote\.venv` (about a minute the first time) and puts "TV Remote" and "Update TV
+Remote" on the desktop and in the Start menu. Then tap **TV Remote**. Right-click it in the Start menu > Pin to taskbar to pin it. If an
 older "TV Remote" is pinned to the taskbar, unpin it and pin the new one.
 
-`-Remove` takes both icons away. `-Classic` makes the icons open the older PowerShell remote
+`-Remove` takes all the icons away. `-Classic` makes the icons open the older PowerShell remote
 (`.\scripts\tv-remote-pc.ps1`, which still works on its own) instead. Both change only the PC.
 
 It uses the adb in `%LOCALAPPDATA%\tv-home-tools` and the LG pairing in `%APPDATA%\tv-remote` (made by `tv_pair`), opens
 no port and sends only the fixed commands its buttons name. Typed text may use letters, numbers, spaces and
 `. , - _ @`. To use another Google TV address, start it from PowerShell instead of the icon:
 `.\tv-remote\.venv\Scripts\tv-remote-app.exe --serial 192.168.68.71:5555`.
+
+**Google TV settings in one step.** `.\scripts\tv-setting.ps1 <name> <value>` changes one setting from a fixed list
+and prints its value before and after (debugging on, as for the remote; `-Serial` for another address). There is no
+way to send it any other command. The list today:
+- `.\scripts\tv-setting.ps1 cec-volume on` (or `off`): whether the Google TV sends volume to the TV over HDMI-CEC.
+  `.\scripts\tv-setting.ps1 cec-volume` alone shows the current value.
+
+**For the team:** after a merged change to the PC remote, the ask to Brian is "merge, then double-click Update TV
+Remote", not git commands. Brian only types commands for one-time steps such as pairing the Vizio. A new Google TV
+setting goes into the list in `scripts/tv-setting.ps1`, not into an adb line for Brian to paste.
 
 ## Home button (optional; you choose)
 As installed, the dashboard changes nothing about Home. To switch it on, in PowerShell from the tv-home folder (it

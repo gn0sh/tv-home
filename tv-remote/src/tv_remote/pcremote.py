@@ -213,10 +213,14 @@ class AdbShell:
 class LgVolume:
     """Runs lgpipe.handle on one private event loop thread, so the LG link is reused between presses."""
 
-    def __init__(self, lg: Any, *, timeout: float = LG_TIMEOUT, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, lg: Any, *, timeout: float = LG_TIMEOUT, clock: Callable[[], float] = time.monotonic,
+                 name: str = "LG", unknown_up: str = "refuse"):
         from .lgpipe import handle
 
         self._lg, self._handle, self._timeout, self._clock = lg, handle, timeout, clock
+        self._name, self._unknown_up = name, unknown_up
+        self._no_answer = f"error the {name} did not answer"
+        self.level_known: bool | None = None  # after the last up or down: did the TV report its level?
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name="lg-volume", daemon=True)
         self._thread.start()
@@ -231,16 +235,17 @@ class LgVolume:
             if self._closed:
                 return "error the remote is closing"
             if self._failed_at is not None and self._clock() - self._failed_at < RETRY_AFTER:
-                return "error the LG did not answer"
+                return self._no_answer
             if len(self._pending) >= LG_MAX_PENDING:
                 return "busy"
-            fut = asyncio.run_coroutine_threadsafe(self._handle(self._lg, cmd), self._loop)
+            fut = asyncio.run_coroutine_threadsafe(
+                self._handle(self._lg, cmd, name=self._name, unknown_up=self._unknown_up), self._loop)
             self._pending.add(fut)
         try:
             reply = fut.result(timeout=self._timeout)
         except FutureTimeout:
             fut.cancel()
-            reply = "error the LG did not answer"
+            reply = self._no_answer
         except CancelledError:
             reply = "error the remote is closing"
         except Exception as exc:  # noqa: BLE001  handle() already turns errors into text; this is a backstop
@@ -248,7 +253,9 @@ class LgVolume:
         with self._lock:
             self._pending.discard(fut)
             if not self._closed:
-                self._failed_at = self._clock() if reply == "error the LG did not answer" else None
+                self._failed_at = self._clock() if reply == self._no_answer else None
+            if cmd in ("up", "down"):
+                self.level_known = reply[3:].strip().isdigit() if reply.startswith("ok ") else False
         return reply
 
     def close(self, wait: float = 1.5) -> None:
@@ -295,6 +302,25 @@ def load_lg() -> LgVolume | None:
             return None
         return LgVolume(LgRemote(config.lg.host, config.lg.mac, LgVault(config_dir(), default_protector())))
     except Exception:  # noqa: BLE001  no LG means adb volume, never a crash or a message with the config details
+        return None
+
+
+def load_vizio() -> LgVolume | None:
+    """The paired Vizio (ADR 0007): [vizio] host in config.toml plus a token and certificate pin from
+    tv-remote-vizio-pair. None when any of that is missing. Building it sends nothing to the TV."""
+    try:
+        from .config import config_dir, load_config
+        from .secretstore import default_protector
+        from .vizio import VizioRemote, VizioVault
+
+        config = load_config()
+        if not config.vizio:
+            return None
+        vault = VizioVault(config_dir(), default_protector())
+        if not vault.paired():
+            return None
+        return LgVolume(VizioRemote(config.vizio.host, vault), name="Vizio", unknown_up="step")
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -374,17 +400,19 @@ def _guard(fn: Callable[..., dict[str, Any]], want: int, backends: tuple[Any, ..
         return _reply(False, "Something went wrong (" + type(exc).__name__ + "). Try again.")
 
 
-def _start(tv: AdbShell, lg: Any, choice: TvChoice) -> dict[str, Any]:
+def _start(tv: AdbShell, lg: Any, choice: TvChoice, vz: Any = None) -> dict[str, Any]:
     apps = [{"name": n, "pkg": p, "installed": None} for n, p in APPS]
     if not tv.connect():
-        return _reply(False, tv.offline_message, apps=apps, lg=lg is not None, serial=tv.serial, tv=choice.name)
+        return _reply(False, tv.offline_message, apps=apps, lg=lg is not None, serial=tv.serial, tv=choice.name,
+                      vizio_paired=vz is not None)
     have = tv.packages()
     status = f"Ready: {tv.serial}."
     if have is not None:
         for a in apps:
             a["installed"] = a["pkg"] in have
         status += " Dimmed apps are not on the TV."
-    return _reply(True, status, apps=apps, lg=lg is not None, serial=tv.serial, tv=choice.name)
+    return _reply(True, status, apps=apps, lg=lg is not None, serial=tv.serial, tv=choice.name,
+                  vizio_paired=vz is not None)
 
 
 def _key(tv: AdbShell, code: object) -> dict[str, Any]:
@@ -413,47 +441,72 @@ def _text(tv: AdbShell, text: object) -> dict[str, Any]:
 VIZIO_SAID = {"up": "Volume up", "down": "Volume down", "mute": "Mute"}
 
 
-def _volume(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice, cmd: object) -> dict[str, Any]:
+PAIR_VIZIO = "Pair the Vizio: run tv-remote-vizio-pair"
+
+
+def _volume(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice, vz: LgVolume | None,
+            cmd: object) -> dict[str, Any]:
+    """Every reply carries tv= (the mode it was sent in), so the page can ignore a late reply after a switch."""
     if not isinstance(cmd, str) or cmd not in VOLUME_KEYS:
         return _reply(False, "That button is not on this remote.")
-    if choice.name == "vizio":
-        # No pairing with the Vizio: the adb volume key, which the Google TV passes on over HDMI-CEC. The LG is never
-        # contacted in this mode (it may be off or unplugged). Up is one step per tap; the page does not repeat it,
-        # and this drops an up that comes too soon after the last one (vizio-one-step-js-only).
-        if cmd == "up" and not choice.vizio_up_allowed():
-            return _reply(False, "One step per tap for Vizio volume up.", via="vizio")
-        ok, status = tv.send(volume_key_line(cmd))
-        return _reply(ok, f"{VIZIO_SAID[cmd]} sent to the Vizio (via HDMI-CEC)." if ok else status, via="vizio")
+    mode = choice.name
+    if mode == "vizio":
+        # The LG is never contacted in this mode (it may be off or unplugged).
+        if vz is None:
+            # Not paired: the Vizio ignores HDMI-CEC volume, and adb volume has no cap, so up is not sent; down and
+            # mute still go out as adb keys (harmless, and they work on a TV that does honour CEC).
+            if cmd == "up":
+                return _reply(False, PAIR_VIZIO + ".", via="none", tv=mode, pair=True)
+            ok, status = tv.send(volume_key_line(cmd))
+            return _reply(ok, f"{VIZIO_SAID[cmd]} sent over HDMI-CEC. {PAIR_VIZIO} for volume that works."
+                          if ok else status, via="googletv", tv=mode, pair=True)
+        # Paired: SmartCast with the cap. When the Vizio did not report its level last time, up is one step per tap
+        # (lgpipe "step" mode), and this drops an up that comes too soon after the last one.
+        if cmd == "up" and not vz.level_known and not choice.vizio_up_allowed():
+            return _reply(False, "One step per tap while the Vizio does not report its volume.", via="vizio", tv=mode)
+        return _interpret(tv, choice, vz(cmd), cmd, "Vizio", mode)
     if lg is None:
         if cmd == "up":  # adb volume has no cap (adb-volume-uncapped), so up goes to the LG or nowhere
-            return _reply(False, "Volume up needs the LG, and it is not set up.", via="none")
+            return _reply(False, "Volume up needs the LG, and it is not set up.", via="none", tv=mode)
         ok, status = tv.send(volume_key_line(cmd))
-        return _reply(ok, "Volume sent to the Google TV (the LG is not set up)." if ok else status, via="googletv")
-    reply = lg(cmd)
+        return _reply(ok, "Volume sent to the Google TV (the LG is not set up)." if ok else status, via="googletv",
+                      tv=mode)
+    return _interpret(tv, choice, lg(cmd), cmd, "LG", mode)
+
+
+def _interpret(tv: AdbShell, choice: TvChoice, reply: str, cmd: str, name: str, mode: str) -> dict[str, Any]:
+    """A reply from lgpipe.handle for the LG or the Vizio, as the page shows it. Only fixed reasons are shown."""
+    via = mode  # "lg" or "vizio"
     if reply == "busy":
-        return _reply(False, "Still changing the volume...", via="lg")
+        return _reply(False, "Still changing the volume...", via=via, tv=mode)
     if reply.startswith("ok "):
         value = reply[3:].strip()
         if value in ("muted", "unmuted"):
-            return _reply(True, "Muted" if value == "muted" else "Sound on", via="lg", muted=value == "muted")
+            return _reply(True, "Muted" if value == "muted" else "Sound on", via=via, muted=value == "muted", tv=mode)
         if value.isdigit():
             limit = " (the most this remote allows)" if int(value) >= VOLUME_CAP else ""
-            return _reply(True, f"Volume {value}{limit}", via="lg", level=int(value))
-        return _reply(True, "Volume changed", via="lg")
+            return _reply(True, f"Volume {value}{limit}", via=via, level=int(value), tv=mode)
+        if cmd == "mute":  # the Vizio did not say whether it was muted, so it toggled (vizio-mute-unknown)
+            return _reply(True, "Mute pressed", via=via, tv=mode)
+        return _reply(True, "Volume changed", via=via, tv=mode)
+    the = "the " + name
     reason = reply[6:] if reply.startswith("error ") else ""
-    if reason == "the LG did not report its volume":
+    if reason == f"{the} did not report its volume":
         # lgpipe refused to raise an unknown level (volume-step-cap); the adb key must not get round that.
-        return _reply(False, "The LG did not report its volume, so it was not raised.", via="lg")
+        return _reply(False, f"The {name} did not report its volume, so it was not raised.", via=via, tv=mode)
     reason = reason if LG_REASON_RE.match(reason) else "did not work"
-    lg_said = "The LG" + reason[6:] if reason.startswith("the LG") else "The LG: " + reason
+    said = f"The {name}" + reason[len(the):] if reason.startswith(the) else f"The {name}: " + reason
+    if name == "Vizio" and "pair it again" in said:
+        said = said.replace("pair it again", "run tv-remote-vizio-pair again")
     if cmd == "up":
-        return _reply(False, f"{lg_said}. Volume up was not sent.", via="none")
-    if choice.name != "lg":  # switched to Vizio while the LG was being asked (stale-mode-fallback): send nothing
-        return _reply(False, f"{lg_said}. Not sent: the remote is now on the Vizio.", via="none")
+        return _reply(False, f"{said}. Volume up was not sent.", via="none", tv=mode)
+    if choice.name != mode:  # switched TVs while this one was being asked (stale-mode-fallback): send nothing
+        other = "Vizio" if choice.name == "vizio" else "LG"
+        return _reply(False, f"{said}. Not sent: the remote is now on the {other}.", via="none", tv=mode)
     ok, status = tv.send(volume_key_line(cmd))
     if ok:
-        return _reply(True, f"{lg_said}. Sent to the Google TV instead.", via="googletv")
-    return _reply(False, f"{lg_said}. {status}", via="none")
+        return _reply(True, f"{said}. Sent to the Google TV instead.", via="googletv", tv=mode)
+    return _reply(False, f"{said}. {status}", via="none", tv=mode)
 
 
 class _Sealed:
@@ -486,8 +539,8 @@ def _set_tv(choice: TvChoice, name: object) -> dict[str, Any]:
                   tv=name)
 
 
-def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None,
-                choice: TvChoice | None = None) -> tuple[Callable[..., dict[str, Any]], ...]:
+def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice | None = None,
+                vz: LgVolume | None = None) -> tuple[Callable[..., dict[str, Any]], ...]:
     """The six functions the page may call, registered with ``window.expose`` (finding jsapi-private-dispatch).
 
     The backends live only in these closures. The page reaches a function only by its exact name in the exposed
@@ -498,7 +551,7 @@ def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None,
     choice = choice if choice is not None else TvChoice(None)
 
     def start(*args):
-        return _guard(_start, 0, (tv, lg, choice), args)
+        return _guard(_start, 0, (tv, lg, choice, vz), args)
 
     def key(*args):
         return _guard(_key, 1, (tv,), args)
@@ -510,7 +563,7 @@ def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None,
         return _guard(_text, 1, (tv,), args)
 
     def volume(*args):
-        return _guard(_volume, 1, (tv, lg, choice), args)
+        return _guard(_volume, 1, (tv, lg, choice, vz), args)
 
     def set_tv(*args):
         return _guard(_set_tv, 1, (choice,), args)
@@ -675,19 +728,21 @@ def main(argv: list[str] | None = None) -> None:
         configure_webview(webview)
         tv = AdbShell(adb, args.serial)
         lg = load_lg()
+        vz = load_vizio()
         width, height = window_size(*_work_area(webview))
         window = webview.create_window("TV Remote", html=ui_html(), js_api=SEALED,
                                        width=width, height=height, min_size=(340, 400),
                                        background_color="#0B0D12", text_select=False)
         choice = TvChoice(Path(os.environ["LOCALAPPDATA"]) / "tv-remote" / SETTINGS_FILE)
-        window.expose(*make_bridge(tv, lg, choice))
+        window.expose(*make_bridge(tv, lg, choice, vz))
         window.events.loaded += lambda: _lock_down(window)
         try:
             webview.start(private_mode=True, icon=icon_path())
         finally:
             tv.close()
-            if lg is not None:
-                lg.close()
+            for backend in (lg, vz):
+                if backend is not None:
+                    backend.close()
             _release(mutex)
     except Exception as exc:  # noqa: BLE001  started from an icon there is no console, so show it in a box
         _show_error(f"TV remote could not start: {exc}")

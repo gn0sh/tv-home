@@ -80,7 +80,7 @@ def test_mac_refused(mac):
 @pytest.mark.parametrize(
     "data,msg",
     [
-        ({}, "neither"),
+        ({}, "add at least one TV"),
         ({"lg": {"host": "192.168.1.2"}}, "both host and mac"),
         ({"googletv": {}}, "needs host"),
         ({"lg": {"host": "192.168.1.2", "mac": "AA:BB:CC:DD:EE:FF", "key": "x"}}, "Unknown key"),
