@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test
 import tvhome.core.agenda.agendaWindow
 import tvhome.core.agenda.dedupeEvents
 import tvhome.core.agenda.normalizeTitle
-import tvhome.core.agenda.sameTitle
+import tvhome.core.agenda.titlesMatch
 import tvhome.core.state.AgendaState
 import tvhome.core.state.CachedAgenda
 import tvhome.core.state.reduce
@@ -50,11 +50,39 @@ class CalendarDedupeTest {
 
     @Test fun titleMatching() {
         assertEquals("barber vip beard trim holiday barber shop", normalizeTitle("Barber: VIP  Beard Trim – Holiday Barber Shop!"))
-        assertTrue(sameTitle("VIP Beard-Trim", "vip beard trim"))
-        assertTrue(sameTitle("Barber: VIP Beard Trim – Holiday Barber Shop", "VIP Beard Trim"))
-        assertFalse(sameTitle("Gym", "Gymnastics"), "whole words only")
-        assertFalse(sameTitle("", "Gym")); assertFalse(sameTitle("!!", "??"))
-        assertFalse(sameTitle("Dentist", "Standup"))
+        assertTrue(titlesMatch("VIP Beard-Trim", "vip beard trim", allDay = false))
+        assertTrue(titlesMatch("Barber: VIP Beard Trim – Holiday Barber Shop", "VIP Beard Trim", allDay = false))
+        assertFalse(titlesMatch("Pickup", "School pickup", allDay = false), "a one-word title never matches by containment")
+        assertTrue(titlesMatch("Pickup", "pickup", allDay = false), "equal titles still do")
+        assertFalse(titlesMatch("Gym class", "Gym classes today", allDay = false), "whole words only")
+        assertFalse(titlesMatch("Spirit week", "Spirit week: pajama day", allDay = true), "all-day: equal titles only")
+        assertTrue(titlesMatch("Election Day", "election day", allDay = true))
+        assertFalse(titlesMatch("", "Gym", allDay = false)); assertFalse(titlesMatch("!!", "??", allDay = false))
+        assertFalse(titlesMatch("Dentist", "Standup", allDay = false))
+    }
+
+    /** dedupe-allday-containment and dedupe-generic-timed, through the parser and the agenda. */
+    @Test fun allDayAndGenericTitlesStayApart() {
+        val items = (state("allday-and-generic-titles.ics") as AgendaState.Ok).today.items.map { it.title }.sorted()
+        assertEquals(listOf("Birthday", "Election Day", "Jack's birthday", "No school", "Pickup", "School", "School pickup",
+            "Spirit week: pajama day").sorted(), items, "only the equal Election Day pair and the shared Spirit week UID merge")
+    }
+
+    /** dedupe-order-dependent: the same events in any order give the same events (grouping is transitive). */
+    @Test fun resultDoesNotDependOnFeedOrder() {
+        val events = parseOutcome(fixture("duplicate-title-forms.ics"), agendaWindow(now, zone), zone).complete() +
+            parseOutcome(fixture("allday-and-generic-titles.ics"), agendaWindow(now, zone), zone).complete() +
+            // A chain: A~B (same uid), B~C (title), A!~C. Every order must collapse all three.
+            listOf(
+                EventInstance("x", "Trim", EventTime.At(now), EventTime.At(now.plusSeconds(600))),
+                EventInstance("x", "Beard trim", EventTime.At(now), EventTime.At(now.plusSeconds(600))),
+                EventInstance("y", "VIP beard trim", EventTime.At(now), EventTime.At(now.plusSeconds(600))),
+            )
+        val expected = dedupeEvents(events).toSet()
+        val rnd = java.util.Random(7)
+        repeat(50) { assertEquals(expected, dedupeEvents(events.shuffled(rnd)).toSet()) }
+        assertEquals(1, expected.count { it.start == EventTime.At(now) })
+        assertTrue(expected.any { it.uid == "y" && it.title == "VIP beard trim" }, "the kept event's uid and title are one member's")
     }
 
     @Test fun neverMergesDifferentTimes() {

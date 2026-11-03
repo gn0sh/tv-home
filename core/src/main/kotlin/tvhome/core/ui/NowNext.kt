@@ -3,7 +3,7 @@ package tvhome.core.ui
 import tvhome.core.agenda.AgendaDay
 import tvhome.core.agenda.AgendaItem
 import tvhome.core.agenda.TimeLabel
-import tvhome.core.agenda.sameTitle
+import tvhome.core.agenda.titlesMatch
 import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelView
 import tvhome.core.feeds.Stamped
@@ -58,9 +58,9 @@ object NowNextCopy {
     fun notUpdatedSince(time: String) = "Calendar not updated since $time"
 }
 
-/** The same appointment twice: same start and end, and titles that match ([sameTitle]). */
+/** The same appointment twice, by the merge step's own rule ([titlesMatch]; these are timed items with no uid). */
 private fun sameItem(a: AgendaItem, b: AgendaItem): Boolean =
-    a.startsAt == b.startsAt && a.endsAt == b.endsAt && sameTitle(a.title, b.title)
+    a.startsAt == b.startsAt && a.endsAt == b.endsAt && titlesMatch(a.title, b.title, allDay = a.label == TimeLabel.AllDay)
 
 /** Countdown and "Leave by" apply from this far ahead (inclusive). */
 val COUNTDOWN_WINDOW: Duration = Duration.ofMinutes(60)
