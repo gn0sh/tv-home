@@ -796,7 +796,7 @@ def scene_game():
     roof = bpy.context.active_object
     roof.scale = (1.0, (ry + 2) / (rx + 2), 0.45)
     roof.data.materials.append(material("roof", lin(0x666666), rough=0.5))
-    band = emission_material("band", lin(0xFFE6BE), 3.0)
+    band = emission_material("band", lin(0xFFE6BE), 0.5)
     rng = random.Random(3)
     for k in range(90):  # lit concourse windows in rows along the front of the wall
         a = math.pi + math.pi * (k + 0.5) / 90
@@ -805,14 +805,14 @@ def scene_game():
                 if rng.random() < 0.75:
                     box("win", (cx + (rx + 0.2) * math.cos(a), cy + (ry + 0.2) * math.sin(a),
                                 gz + 9 + row * 9), (1.6, 0.3, 1.4), band, rot_z=a + math.pi / 2)
-    field = emission_material("field", lin(0xF0E6E6), 10.0)
+    field = emission_material("field", lin(0xF0E6E6), 3.0)
     bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=rx * 0.95, depth=1, location=(cx, cy, gz + 4))
     f = bpy.context.active_object
     f.scale = (1.0, ry / rx, 1.0)
     f.data.materials.append(field)
     mast = material("mast", lin(0x141414), rough=0.7)
-    flood = emission_material("flood", lin(0xFFF6F0), 10.0)
-    shaft = beam_material("shaft", lin(0xE8D8D8), 0.9)
+    flood = emission_material("flood", lin(0xFFF6F0), 0.45)  # never white: 7:1 over the scarlet scrim
+    shaft = beam_material("shaft", lin(0xE8D8D8), 0.3)
     for dx, dy in ((-0.92, -0.85), (0.92, -0.85), (-0.85, 0.9), (0.85, 0.9)):
         mx, my = cx + dx * rx, cy + dy * ry
         top_z = gz + 92
@@ -821,7 +821,7 @@ def scene_game():
             for c_ in range(6):
                 box("fl", (mx + (c_ - 2.5) * 2.2, my - 1.0, top_z + r_ * 2.2), (1.8, 0.5, 1.8), flood)
         beam((mx, my, top_z + 2), (cx + dx * rx * 0.25, cy + dy * ry * 0.2, gz + 2), 34.0, shaft)
-        point_lamp((mx, my - 6, top_z - 4), 1.2e5, lin(0xFFF0EC), radius=5)
+        point_lamp((mx, my - 6, top_z - 4), 6.0e4, lin(0xFFF0EC), radius=5)
     plateau = material("plateau", lin(0x141012), rough=1.0, fog=(lin(0x3A1414), 0.5))
     ridge("plateau", depth + 60, -0.1, 1.1, HZ + 0.03, 0.02, plateau, seed=119, freq=2.0, thick=300)
     near = material("near", lin(0x0C0A0A), rough=1.0)
@@ -882,7 +882,7 @@ def scene_arena():
     # Indoor hockey arena, seen from high in the end stands across a lit rink: the navy seating bowl wraps the ice, a
     # gold ribbon board runs round the bowl between the lower and upper levels, the boards carry a gold rail, and the
     # lights over the ice (out of frame, with a scoreboard) light the ice and the near seats. The interest is on the
-    # right (the rink's centre); the left stays dark for the title. Scrim exception: ARENA_BRIGHTNESS in core Tokens.
+    # right (the rink's centre); the left stays dark for the title. The app scrims it in navy (SCRIM).
     s = bpy.context.scene
     cam = s.camera
     cam.data.lens = 20.0
@@ -891,10 +891,10 @@ def scene_arena():
     world([(0.0, lin(0x01060F)), (0.5, lin(0x020A18)), (1.0, lin(0x030C1C))], strength=1.0)
     cx, cy, hx, hy = 14.0, 62.0, 30.0, 13.0
     rink = [superellipse(cx, cy, hx, hy, 2 * math.pi * i / 128, 5.0) for i in range(128)]
-    ice = material("ice", lin(0x6A88B4), rough=0.18)
+    ice = material("ice", lin(0x56729E), rough=0.22)
     sock(ice.node_tree.nodes["Principled BSDF"].inputs, "Specular IOR Level").default_value = 0.5
     flat_shape("ice", rink, 0.0, ice)
-    gold_paint = material("goldpaint", lin(GOLD), rough=0.4)
+    gold_paint = material("goldpaint", lin(0xC89010), rough=0.6)
     navy_paint = material("navypaint", lin(0x1A3A7A), rough=0.4)
     box("centre", (cx, cy, 0.02), (0.35, 2 * hy, 0.02), gold_paint)
     for dx in (-9.0, 9.0):
@@ -959,7 +959,7 @@ def scene_arena():
     for lx in (-18, -6, 6, 18):
         for ly in (-6, 6):
             lamp = bpy.data.lights.new("area", "AREA")
-            lamp.energy, lamp.color, lamp.size = 3500.0, (1.0, 0.96, 0.9), 6.0
+            lamp.energy, lamp.color, lamp.size = 2600.0, (1.0, 0.96, 0.9), 6.0
             ob = bpy.data.objects.new("area", lamp)
             ob.location = (cx + lx, cy + ly, 30.0)
             s.collection.objects.link(ob)
@@ -1054,15 +1054,15 @@ def contrast_check(name, img):
     return ok
 
 
-# Backdrop brightness after the app's black scrim (core GlanceTokens.backdropBrightness): 0.25 for every motif but
-# ARENA, whose art has no near-white pixel, so it can show more of its navy and gold at 0.33 (R3 exception, ADR 0008).
-BRIGHTNESS = {"ARENA": 0.33}
+# The scrim the app draws over each backdrop (HeroTheme.scrim): black, but the team colour on game days, so the hero
+# reads navy (Predators) or scarlet (Ohio State). The art always shows at 25% (GlanceTokens.BACKDROP_BRIGHTNESS).
+SCRIM = {"ARENA": 0x041E42, "GAME": 0x2A0707}
 
 
 def scrim_check(name, img):
-    """R3: the hero text keeps 7:1 over the brightest art pixel (99.9th percentile) at the motif's scrim brightness."""
-    b = BRIGHTNESS.get(name, 0.25)
-    lum = float(np.percentile(luminance(np.clip(img * b, 0, 1).reshape(-1, 3)), 99.9))
+    """R3: the hero text keeps 7:1 over the art's brightest pixel (99.9th percentile) composited as the app draws it."""
+    comp = img * 0.25 + srgb(SCRIM.get(name, 0x000000)) * 0.75
+    lum = float(np.percentile(luminance(np.clip(comp, 0, 1).reshape(-1, 3)), 99.9))
     ok = True
     report = []
     for cname, c in (("text", TEXT), ("secondary", SECONDARY)):
@@ -1070,7 +1070,7 @@ def scrim_check(name, img):
         ratio = (lt + 0.05) / (lum + 0.05)
         ok &= ratio >= 7.0
         report.append(f"{cname} {ratio:.1f}")
-    print(f"[{name}] at {b:.2f} brightness (99.9th percentile pixel): " + ", ".join(report))
+    print(f"[{name}] over its scrim (99.9th percentile pixel): " + ", ".join(report))
     return ok
 
 
