@@ -74,6 +74,25 @@ object HomeLayout {
     /** The brief line's reserved row under the dock (PR #24 uses 40 dp: 32 dp text plus the drift's travel). */
     const val BRIEF_ROW_DP = 40
 
+    /** The hero text zones are never shorter than this at any allowed tile size (two 44 sp lines, line 2, the age). */
+    const val HERO_MIN_DP = 150
+
+    // The dock row (app HomeScreen uses these): two dashboard tiles, then the pills at their widest.
+    const val TILE_GAP_DP = 28
+    const val PILL_GAP_DP = 16
+    const val ASK_PILL_DP = 250
+    const val WATCH_PILL_MAX_DP = 200
+    const val QUIET_PILL_MAX_DP = 170
+    const val DOCK_TILES = 2
+
+    /** Horizontal padding of a tile row (room for the 1.1x focus scale): a sixteenth of the tile width each side. */
+    fun rowPadH(tileWidthDp: Int): Int = tileWidthDp / 16
+
+    /** The dock row's widest content: tiles, the gaps between all children, and every pill at its maximum. */
+    fun dockWidth(tileWidthDp: Int): Int =
+        2 * rowPadH(tileWidthDp) + DOCK_TILES * tileWidthDp + DOCK_TILES * TILE_GAP_DP +
+            ASK_PILL_DP + WATCH_PILL_MAX_DP + QUIET_PILL_MAX_DP + 2 * PILL_GAP_DP
+
     /** One tile row band: vertical padding for the 1.1x focus scale, the tile, and its label (12 dp gap + one line). */
     fun rowBand(tileHeightDp: Int): Int = 2 * (tileHeightDp / 13) + tileHeightDp + TILE_LABEL_DP
     const val TILE_LABEL_DP = 44

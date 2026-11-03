@@ -12,9 +12,9 @@ class HomeThemeTest {
     @Test fun fullThemeIsApplied() {
         val t = HomeTheme.parse(
             """{"background":"#000000","tile":"#111111","focusFill":"#222222","focusRing":"#FFaa00",
-               "text":"#FFFFFF","secondaryText":"#cccccc","tileWidthDp":300,"tileHeightDp":169}""",
+               "text":"#FFFFFF","secondaryText":"#cccccc","tileWidthDp":200,"tileHeightDp":112}""",
         )
-        assertEquals(HomeTheme(0x000000, 0x111111, 0x222222, 0xFFAA00, 0xFFFFFF, 0xCCCCCC, 300, 169), t)
+        assertEquals(HomeTheme(0x000000, 0x111111, 0x222222, 0xFFAA00, 0xFFFFFF, 0xCCCCCC, 200, 112), t)
     }
 
     @Test fun partialThemeKeepsOtherDefaults() {
@@ -53,6 +53,10 @@ class HomeThemeTest {
     }
 
     @Test fun boundsAreInclusive() {
-        assertEquals(d.copy(tileWidthDp = 120, tileHeightDp = 270), HomeTheme.parse("""{"tileWidthDp":120,"tileHeightDp":270}"""))
+        assertEquals(d.copy(tileWidthDp = 120, tileHeightDp = 120), HomeTheme.parse("""{"tileWidthDp":120,"tileHeightDp":120}"""))
+        assertEquals(d.copy(tileWidthDp = 200, tileHeightDp = 68), HomeTheme.parse("""{"tileWidthDp":200,"tileHeightDp":68}"""))
+        // layout-tile-range: sizes the home layout cannot fit are refused (whole theme falls back to the default).
+        assertEquals(d, HomeTheme.parse("""{"tileHeightDp":121}"""))
+        assertEquals(d, HomeTheme.parse("""{"tileWidthDp":201}"""))
     }
 }

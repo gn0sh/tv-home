@@ -69,3 +69,21 @@ class BriefRowTest {
         assertEquals(32, HomeLayout.BRIEF_ROW_DP - 2 * Drift.MAX_Y_DP.toInt())
     }
 }
+
+/** layout-tile-range: every tile size the theme accepts fits the zone map and the dock row. */
+class TileRangeTest {
+    @Test fun everyAllowedTileSizeFits() {
+        for (h in HomeTheme.TILE_HEIGHT_DP) {
+            val m = HomeLayout.map(h)
+            assertTrue(m.heroLeft.h >= HomeLayout.HERO_MIN_DP, "tile height $h: hero ${m.heroLeft.h}")
+            assertTrue(m.apps.y >= m.heroLeft.bottom, "$h")
+            assertEquals(HeroZones.SCREEN_H - HeroZones.SAFE_Y, m.brief.bottom)
+        }
+        for (w in HomeTheme.TILE_WIDTH_DP) {
+            assertTrue(HomeLayout.dockWidth(w) <= HeroZones.SCREEN_W - 2 * HeroZones.SAFE_X, "tile width $w: dock ${HomeLayout.dockWidth(w)}")
+        }
+        // Just past the ranges, they would not fit: the ranges are not needlessly narrow.
+        assertTrue(HomeLayout.dockWidth(HomeTheme.TILE_WIDTH_DP.last + 16) > HeroZones.SCREEN_W - 2 * HeroZones.SAFE_X)
+        assertTrue(HomeLayout.map(HomeTheme.TILE_HEIGHT_DP.last + 12).heroLeft.h < HomeLayout.HERO_MIN_DP)
+    }
+}

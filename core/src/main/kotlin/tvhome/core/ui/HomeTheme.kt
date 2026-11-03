@@ -25,8 +25,12 @@ data class HomeTheme(
         /** Files larger than this are not read at all. */
         const val MAX_BYTES = 4096
 
-        val TILE_WIDTH_DP = 120..480
-        val TILE_HEIGHT_DP = 68..270
+        /**
+         * What the home zone map fits (layout-tile-range): taller tiles squeeze the hero below [HomeLayout.HERO_MIN_DP],
+         * wider ones push the dock's pills past the safe area. HeroLayoutTest checks both ends.
+         */
+        val TILE_WIDTH_DP = 120..200
+        val TILE_HEIGHT_DP = 68..120
 
         private val HEX = Regex("#[0-9A-Fa-f]{6}")
         private val COLOURS = setOf("background", "tile", "focusFill", "focusRing", "text", "secondaryText")
