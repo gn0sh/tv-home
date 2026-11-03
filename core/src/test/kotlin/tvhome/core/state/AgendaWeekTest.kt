@@ -60,3 +60,26 @@ class AgendaWeekTest {
         assertEquals(0, buildDays(emptyList(), now, zone, 7, today.atStartOfDay(zone).toInstant()).size)
     }
 }
+
+/** board-truncated-week: after a cut at the parser's cap, days past the last kept instance are not loaded, not empty. */
+class TruncatedWeekTest {
+    private val zone = ZoneId.of("America/Chicago")
+    private val now = Instant.parse("2026-11-03T15:00:00Z")
+    private val today = LocalDate.of(2026, 11, 3)
+    private fun at(d: Int, h: Int) = EventInstance("u$d$h", "E", EventTime.At(today.plusDays(d.toLong()).atTime(h, 0).atZone(zone).toInstant()), null)
+
+    @Test fun daysFromTheLastKeptStartAreNotLoaded() {
+        val s = reduce(true, null, FetchResult.Ok(listOf(at(0, 9), at(3, 10)), now, truncated = true), now, zone) as AgendaState.Ok
+        assertEquals(listOf(today, today.plusDays(1), today.plusDays(2)), s.week.map { it.date }, "day 3 may be partial: not shown as complete")
+    }
+
+    @Test fun neverLessThanTodayAndTomorrow() {
+        val s = reduce(true, null, FetchResult.Ok(listOf(at(0, 9)), now, truncated = true), now, zone) as AgendaState.Ok
+        assertEquals(listOf(today, today.plusDays(1)), s.week.map { it.date })
+    }
+
+    @Test fun notTruncatedKeepsTheWholeWeek() {
+        val s = reduce(true, null, FetchResult.Ok(listOf(at(0, 9)), now), now, zone) as AgendaState.Ok
+        assertEquals(7, s.week.size)
+    }
+}

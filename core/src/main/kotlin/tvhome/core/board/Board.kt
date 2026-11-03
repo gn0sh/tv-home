@@ -56,7 +56,15 @@ data class Board(
     val alerts: List<BoardAlert>,
     val games: List<BoardCell>,
     val weather: BoardCell,
+    /**
+     * NWS alerts were checked but could not be loaded: "Alerts unknown" on the status row with the calendar's age (not in
+     * the weather cell, so the bottom strip keeps to two lines when nothing is stale).
+     */
+    val alertsUnknown: Boolean = false,
 ) {
+    /** Lines the bottom strip needs: its tallest cell (heading row included), 1 to 3. */
+    val stripLines: Int get() = (games + weather).maxOf { it.lines.size }.coerceIn(1, 3)
+
     override fun toString(): String = "Board(${grid.columns.size} columns, message=${calendarMessage != null}, ${alerts.size} alerts)"
 }
 
@@ -107,7 +115,7 @@ fun board(i: BoardInputs): Board {
     }
     val alertsUnknown = alertsView == PanelView.NoData && i.feeds.alertsChecked
 
-    return Board(grid, message, age, forecast, alerts, i.teams.map { gameCell(it, i) }, weatherCell(i, weatherView, alertsUnknown))
+    return Board(grid, message, age, forecast, alerts, i.teams.map { gameCell(it, i) }, weatherCell(i, weatherView), alertsUnknown)
 }
 
 private fun forecastOf(d: DayForecast): BoardForecast =
@@ -134,16 +142,15 @@ private fun gameCell(team: TeamConfig, i: BoardInputs): BoardCell {
     val vs = if (g.home) "vs" else "at"
     val first = if (g.phase == GamePhase.LIVE) GameDay.line(next, i.now, i.zone) else "$vs ${g.opponent}"
     val second = if (g.phase == GamePhase.LIVE) "Live · ${GameDay.tvText(g)}"
-    else "${GameDay.whenText(g.start, i.now, i.zone)} · ${GameDay.tvText(g)}"
+    else "${GameDay.whenText(g.start, i.now, i.zone, i.is24h)} · ${GameDay.tvText(g)}"
     return BoardCell(team.name, listOfNotNull(first, second, shown.ageText), warn = shown.stale)
 }
 
-private fun weatherCell(i: BoardInputs, v: PanelView<tvhome.core.feeds.WeatherNow>, alertsUnknown: Boolean): BoardCell {
-    val extra = listOfNotNull(BoardCopy.ALERTS_UNKNOWN.takeIf { alertsUnknown })
+private fun weatherCell(i: BoardInputs, v: PanelView<tvhome.core.feeds.WeatherNow>): BoardCell {
     return when {
-        !i.switches.weather -> BoardCell(BoardCopy.WEATHER, listOf(BoardCopy.WEATHER_OFF) + extra)
+        !i.switches.weather -> BoardCell(BoardCopy.WEATHER, listOf(BoardCopy.WEATHER_OFF))
         !i.hasLocation -> BoardCell(BoardCopy.WEATHER, listOf(BoardCopy.NO_LOCATION))
-        v !is PanelView.Shown -> BoardCell(BoardCopy.WEATHER, listOf(BoardCopy.WEATHER_UNKNOWN, BoardCopy.WEATHER_UNKNOWN_DETAIL) + extra, warn = true)
+        v !is PanelView.Shown -> BoardCell(BoardCopy.WEATHER, listOf(BoardCopy.WEATHER_UNKNOWN, BoardCopy.WEATHER_UNKNOWN_DETAIL), warn = true)
         else -> {
             val w = v.value
             val now = listOf("Now ${w.tempF}°F", w.condition).filter { it.isNotEmpty() }.joinToString(" ")
@@ -156,7 +163,7 @@ private fun weatherCell(i: BoardInputs, v: PanelView<tvhome.core.feeds.WeatherNo
                 ?: w.nextPrecip?.replaceFirstChar(Char::uppercase)
                 ?: today?.precipChance?.takeIf { it >= BoardCopy.RAIN_SHOWN_FROM }?.let { "Rain $it% today" }
             val second = listOfNotNull(range, rain).joinToString(" · ").ifEmpty { null }
-            BoardCell(BoardCopy.WEATHER, listOfNotNull(now, second, v.ageText) + extra, warn = v.stale || alertsUnknown)
+            BoardCell(BoardCopy.WEATHER, listOfNotNull(now, second, v.ageText), warn = v.stale)
         }
     }
 }

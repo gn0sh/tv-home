@@ -6,9 +6,14 @@ import java.time.Instant
 enum class SourceError { NOT_CONFIGURED, OFFLINE, NETWORK, HTTP_STATUS, TOO_LARGE, PARSE, PARSE_LIMIT, INSECURE_URL }
 
 sealed interface FetchResult {
-    data class Ok(val events: List<EventInstance>, val fetchedAt: Instant) : FetchResult {
+    data class Ok(
+        val events: List<EventInstance>,
+        val fetchedAt: Instant,
+        /** The parser cut instances at its cap ([ParseStats.truncated]): days after the last kept one are incomplete. */
+        val truncated: Boolean = false,
+    ) : FetchResult {
         /** Counts only (event titles are personal data). */
-        override fun toString(): String = "Ok(${events.size} events, fetchedAt=$fetchedAt)"
+        override fun toString(): String = "Ok(${events.size} events, fetchedAt=$fetchedAt" + (if (truncated) ", truncated)" else ")")
     }
     data class Failed(val error: SourceError) : FetchResult
 }

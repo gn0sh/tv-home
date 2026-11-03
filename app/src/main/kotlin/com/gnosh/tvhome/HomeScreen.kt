@@ -515,10 +515,10 @@ private fun AppRow(
     }
 }
 
-private const val TILE_GAP_DP = 28
+private const val TILE_GAP_DP = HomeLayout.TILE_GAP_DP
 
 /** Label under a tile: 12 dp gap plus one line of secondary text. */
-private const val TILE_LABEL_DP = 44
+private const val TILE_LABEL_DP = HomeLayout.TILE_LABEL_DP
 
 /** The tile box both kinds of tile share: size, focus scale, fill and ring, and OK/Enter to click. */
 @Composable
@@ -756,12 +756,12 @@ const val WATCH_DESC_PREFIX = "Watch the game on "
 const val QUIET_DESC_ON = "Quiet mode, on. Event titles are hidden."
 const val QUIET_DESC_OFF = "Quiet mode, off. Turn on to hide event titles."
 
-private const val PILL_GAP_DP = 16
+private const val PILL_GAP_DP = HomeLayout.PILL_GAP_DP
 private const val PILL_MIN_DP = 140
-private const val WATCH_PILL_MAX_DP = 200
-private const val QUIET_PILL_MAX_DP = 170
+private const val WATCH_PILL_MAX_DP = HomeLayout.WATCH_PILL_MAX_DP
+private const val QUIET_PILL_MAX_DP = HomeLayout.QUIET_PILL_MAX_DP
 
-private const val ASK_BUTTON_W_DP = 250
+private const val ASK_BUTTON_W_DP = HomeLayout.ASK_PILL_DP
 private const val ASK_BUTTON_H_DP = 56
 
 private const val DOCK_CALENDAR = "calendar"

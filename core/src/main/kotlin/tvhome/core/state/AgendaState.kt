@@ -136,4 +136,26 @@ fun neededRange(now: Instant, zone: ZoneId): InstantRange {
 }
 
 /** Builds the cache for a good fetch; the window is derived from the fetch time, not from "now". */
-fun cacheOf(r: FetchResult.Ok, zone: ZoneId) = CachedAgenda(r.fetchedAt, fetchWindow(r.fetchedAt, zone), r.events)
+fun cacheOf(r: FetchResult.Ok, zone: ZoneId): CachedAgenda {
+    val full = fetchWindow(r.fetchedAt, zone)
+    return CachedAgenda(r.fetchedAt, if (r.truncated) truncatedWindow(full, r.events, r.fetchedAt, zone) else full, r.events)
+}
+
+/**
+ * The window a truncated parse really covers (board-truncated-week). The parser keeps today and tomorrow first, then the
+ * earliest instances, so every day that ends by the last kept instance's start day is complete; that day and the ones
+ * after it may miss events. The cached window is cut to the start of that day, never before the end of tomorrow (the
+ * agenda's own range, so the cache stays usable): the Board then shows those days as "Not loaded yet", never as
+ * "Nothing scheduled". Persisted through the window, so the cache format is unchanged.
+ */
+internal fun truncatedWindow(full: InstantRange, events: List<tvhome.core.calendar.EventInstance>, fetchedAt: Instant, zone: ZoneId): InstantRange {
+    val lastStart = events.maxOfOrNull { e ->
+        when (val s = e.start) {
+            is tvhome.core.calendar.EventTime.At -> s.instant
+            is tvhome.core.calendar.EventTime.AllDay -> s.date.atStartOfDay(zone).toInstant()
+        }
+    } ?: return InstantRange(full.start, agendaWindow(fetchedAt, zone).end.coerceAtMost(full.end))
+    val cut = lastStart.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+    val floor = fetchedAt.atZone(zone).toLocalDate().plusDays(2).atStartOfDay(zone).toInstant()
+    return InstantRange(full.start, maxOf(cut, floor).coerceAtMost(full.end))
+}

@@ -16,6 +16,7 @@ import java.util.Locale
  */
 object GameDay {
     private val TIME = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
+    private val TIME_24 = DateTimeFormatter.ofPattern("HH:mm", Locale.US)
     private val DAY = DateTimeFormatter.ofPattern("EEE", Locale.US)
     private val DAY_DATE = DateTimeFormatter.ofPattern("EEE d MMM", Locale.US)
     internal val STALE_UPCOMING: Duration = Duration.ofHours(4)
@@ -74,18 +75,19 @@ object GameDay {
         }
     }
 
-    /** The start as the hero and Board say it: "Thu 7:00 PM". */
-    fun whenText(start: Instant, now: Instant, zone: ZoneId): String = dayText(start, now, zone) + " " + TIME.format(start.atZone(zone))
+    /** The start as the hero and Board say it: "Thu 7:00 PM", or "Thu 19:00" when the TV uses the 24-hour clock. */
+    fun whenText(start: Instant, now: Instant, zone: ZoneId, is24h: Boolean = false): String =
+        dayText(start, now, zone) + " " + (if (is24h) TIME_24 else TIME).format(start.atZone(zone))
 
     /**
      * One line for the next game, on any day: "Predators vs Stars · Thu 7:00 PM · TV: ESPN+". A live game reads as
      * [line] does, plus the TV text.
      */
-    fun nextLine(tg: TeamGame, now: Instant, zone: ZoneId): String = runCatching {
+    fun nextLine(tg: TeamGame, now: Instant, zone: ZoneId, is24h: Boolean = false): String = runCatching {
         val (team, g) = tg
         if (g.phase == GamePhase.LIVE) return@runCatching "${lineUnsafe(tg, now, zone)} · ${tvText(g)}"
         val vs = if (g.home) "vs" else "at"
-        "${team.name} $vs ${g.opponent} · ${whenText(g.start, now, zone)} · ${tvText(g)}"
+        "${team.name} $vs ${g.opponent} · ${whenText(g.start, now, zone, is24h)} · ${tvText(g)}"
     }.getOrDefault(tg.team.name)
 
     /** The badge beside the clock: "LIVE" during a game, otherwise "GAME DAY". */

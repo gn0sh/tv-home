@@ -80,7 +80,7 @@ fun contextCard(
         return ContextCard.Game(line, game.team.key, game.game.phase, network)
     }
     if (next != null) {
-        return ContextCard.Game(GameDay.nextLine(next, now, zone), next.team.key, next.game.phase, null, ContextCard.Game.NEXT_GAME)
+        return ContextCard.Game(GameDay.nextLine(next, now, zone, is24h), next.team.key, next.game.phase, null, ContextCard.Game.NEXT_GAME)
     }
     return timeOfDay
 }
