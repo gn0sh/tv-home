@@ -738,10 +738,58 @@ m3_restore() {
   else sh_ settings put secure enabled_accessibility_services "$a11y_before" >/dev/null 2>&1 || true; fi
   sh_ settings put secure accessibility_enabled "$on_before" >/dev/null 2>&1 || true
 }
+# m3-launcher-dialog: twice (PR #21's run and c46545e's, each about 11 min after boot) a Home press brought up the
+# launcher's own com.google.android.tvlauncher/.dialog.ShowDialogsActivity, in the launcher's task, instead of its
+# home activity. HomeWatch acts only on the home activity class, so it leaves that dialog alone, on purpose: it is the
+# TV's own prompt, and on Brian's TV he sees it on Home, dismisses it with Back, and the launcher's home coming back
+# is what redirects. So QA treats it as the launcher's, not ours: each M3 Home press goes through m3_home, which on
+# that dialog records what it shows (text, the launcher task), dismisses it with Back, records what came up, and
+# repeats the press once from the same starting point. Every check still runs against a press without the dialog; the
+# dialog twice in a row, or more than 3 times in M3, fails.
+LAUNCHER_DIALOG=".dialog.ShowDialogsActivity"
+m3_dialogs=0
+launcher_dialog_up() { resumed | head -1 | grep -qF "$LAUNCHER_DIALOG"; }
+record_launcher_dialog() { # $1 = label
+  local xml; xml=$(ui_text)
+  printf '%s\n' "$xml" > "$OUT/ui-launcher-dialog-$m3_dialogs.xml"
+  echo "---- m3-launcher-dialog #$m3_dialogs ($1): on screen"
+  grep -oE '(text|content-desc|resource-id)="[^"]+"' <<<"$xml" | sort -u | head -40 || true
+  echo "---- m3-launcher-dialog #$m3_dialogs: dumpsys activity activities, launcher task"
+  sh_ dumpsys activity activities | tr -d '\r' \
+    | awk '/^ *\* Task\{/{t=($0 ~ /tvlauncher|type=home/)} t' | grep -vE 'Intent \{.*(extras|dat=)' | head -60 || true
+}
+dismiss_launcher_dialog() { # $1 = label
+  m3_dialogs=$((m3_dialogs + 1))
+  record_launcher_dialog "$1"
+  (( m3_dialogs <= 3 )) || fail "m3-launcher-dialog: ShowDialogsActivity came up $m3_dialogs times in M3; not a one-off prompt"
+  sh_ input keyevent KEYCODE_BACK; sleep 3
+  launcher_dialog_up && fail "m3-launcher-dialog: Back did not dismiss ShowDialogsActivity ($1)"
+  note "m3-launcher-dialog #$m3_dialogs ($1): dismissed with Back; then on top: $(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1)$(in_front && echo ' (the dashboard: the launcher home coming back redirected)')"
+}
+m3_home() { # $1 = settle seconds; the rest = what sets the press up again before the one retry
+  local wait=$1; shift
+  sh_ input keyevent KEYCODE_HOME; sleep "$wait"
+  launcher_dialog_up || return 0
+  dismiss_launcher_dialog "${FUNCNAME[1]}:${BASH_LINENO[0]}"
+  sleep 4   # outside the double-press window of any redirect the dismissal caused
+  if (( $# )); then "$@"; fi
+  sh_ input keyevent KEYCODE_HOME; sleep "$wait"
+  if launcher_dialog_up; then record_launcher_dialog retry; fail "m3-launcher-dialog: ShowDialogsActivity came back on the retried Home press"; fi
+  return 0
+}
+m3_dash() { sh_ am start -W -n "$MAIN" >/dev/null; sleep 4; }   # the dashboard in front again (an app shown: ends a stay)
+m3_idle_to() { # dashboard awake, then $1 s of idle_test time, and the state that the original press started from
+  local t
+  m3_dash
+  [[ $(idle_of) == ACTIVE ]] || { key DPAD_RIGHT; sleep 1; }   # a key wakes (F4); any focus move is harmless here
+  t=$(date +%s); sleep_until "$t" "$1"
+  if (( $1 >= 60 )); then black_shown || fail "m3-idle: NEAR_BLACK not reached before the retried Home check"
+  else [[ $(idle_of) == DIM ]] || fail "m3-idle: DIM not reached before the retried Home check"; fi
+}
 # If a check below fails mid-step, put the emulator back (m3-dirty-on-fail), in case it is reused.
 m3_dirty=1
 m3_cleanup() { [[ -n ${m3_dirty:-} ]] && m3_restore; return 0; }
-other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+other_app; m3_home 3 other_app
 in_front && fail "m3: as installed, Home opened the dashboard (the Home watch must be off until turned on)"
 stock_pkg=$(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1); stock_pkg=${stock_pkg%%/*}
 [[ -n $stock_pkg ]] || fail "m3: could not read the TV's own home package (test setup)"
@@ -756,7 +804,7 @@ a11y_state() { sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services
 sh_ dumpsys accessibility | tr -d '\r' | grep -q "HomeWatchService" || { a11y_state; fail "m3: the Home watch was not bound after turning it on"; }
 other_app
 in_front && fail "m3: Settings did not come to the front (test setup)"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 other_app
 if ! in_front; then
   a11y_state
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
@@ -765,13 +813,13 @@ pass "m3: Home from another app opens the dashboard"
 # F4: the Home redirect works from DIM and from NEAR_BLACK, and comes back awake (idle_test 30 s still set).
 m3t=$(date +%s); sleep_until "$m3t" 36
 st=$(idle_of); [[ $st == DIM ]] || fail "m3-idle: DIM not reached before the Home check (state '$st')"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 m3_idle_to 36
 in_front || fail "m3-idle: Home from DIM did not bring the dashboard back ($(resumed | head -1))"
 st=$(idle_of); [[ $st == ACTIVE ]] || fail "m3-idle: after Home from DIM the state is '$st', expected ACTIVE"
 pass "m3-idle: Home from DIM redirects and wakes the screen"
 m3t=$(date +%s); sleep_until "$m3t" 66
 black_shown || fail "m3-idle: NEAR_BLACK not reached before the Home check"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 m3_idle_to 66
 in_front || fail "m3-idle: Home from NEAR_BLACK did not bring the dashboard back ($(resumed | head -1))"
 black_shown && fail "m3-idle: after Home from NEAR_BLACK the screen is still black"
 pass "m3-idle: Home from NEAR_BLACK redirects and wakes the screen"
@@ -780,16 +828,19 @@ sleep 4   # outside the double-press window before the next check
 # The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
 # Settings, until another app comes up (HomeRedirect in :core has the timing cases).
 # A fresh redirect, then Home again about a second later (inside the 2.5 s window).
-sh_ input keyevent KEYCODE_HOME; sleep 1
-in_front || fail "m3: the first Home of the double press did not redirect (m3-qa-double-vacuous; $(resumed | head -1))"
-sh_ input keyevent KEYCODE_HOME; sleep 4
+m3_first_of_double() {
+  m3_home 1 m3_dash
+  in_front || fail "m3: the first Home of the double press did not redirect (m3-qa-double-vacuous; $(resumed | head -1))"
+}
+m3_first_of_double
+m3_home 4 eval 'm3_dash; m3_first_of_double'
 in_front && fail "m3: a quick second Home did not leave the TV's own home showing"
 resumed | head -1 | grep -qF "$stock_pkg/" || fail "m3: a quick second Home did not show the TV's own home ($(resumed | head -1))"
 pass "m3: Home twice quickly leaves the TV's own home (and its Settings) showing"
-sh_ input keyevent KEYCODE_HOME; sleep 4
+m3_home 4
 in_front && fail "m3: Home on the TV's own home during a stay brought the dashboard back"
 pass "m3: further Home presses keep the TV's own home until an app is opened"
-other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+other_app; m3_home 3 other_app
 in_front || fail "m3: after leaving the TV's own home, Home did not open the dashboard again ($(resumed | head -1))"
 pass "m3: once another app has been opened, Home opens the dashboard again"
 if (( napps >= 2 )); then
@@ -797,24 +848,25 @@ if (( napps >= 2 )); then
   key DPAD_RIGHT; key DPAD_RIGHT
   moved=$(focus_after m3)
   [[ -n ${moved%%|*} && ${moved%%|*} != "$start_name" ]] || fail "m3: Right x2 did not move focus off '$start_name' (test setup; m3-home-focus-vacuous)"
-  sh_ input keyevent KEYCODE_HOME; sleep 3
+  m3_home 3 eval 'm3_dash; key DPAD_RIGHT; key DPAD_RIGHT'
   cur=$(focus_after m3)
   [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"
   pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
 fi
-sh_ input keyevent KEYCODE_HOME; sleep 3   # focus back on the first tile, as before Down in M2b
+m3_home 3 m3_dash   # focus back on the first tile, as before Down in M2b
 key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
 expect_text "m3-full" "Calendar full screen"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 eval 'm3_dash; key DPAD_DOWN; key DPAD_CENTER; sleep 2' 
 in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
 pass "m3: Home from the full-screen calendar returns to the home row"
 m3_restore
 m3_dirty=""
 sleep 2
-other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+other_app; m3_home 3 other_app
 in_front && fail "m3: after rollback, Home still opens the dashboard"
 pass "m3: rollback (Home watch off, settings restored) gives Home back to the TV"
+echo "m3-launcher-dialog: ShowDialogsActivity dismissed $m3_dialogs time(s) in M3"
 no_app_crash_yet "m3"
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"
