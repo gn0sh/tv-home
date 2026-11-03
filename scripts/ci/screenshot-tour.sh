@@ -10,7 +10,7 @@
 # followed by a line "TOUR <n> <name>: PRODUCED|NOT PRODUCED (<reason>)" from a uiautomator check of what is on screen.
 # A state that cannot be produced is reported as NOT PRODUCED, never faked.
 #
-# Home shots run twice: at the emulator's own size, then with `wm size 1280x720` (canvas scaling check; reset after).
+# Then the real sun at four UTC clock times (adb root + date -u) and two cold-start frames.
 #
 # Fake data only: invented events and games, the FakeSecrets dummy calendar URL, a fixed location. Helpers follow
 # scripts/ci/emulator-qa.sh (a, sh_, ui_text, the Private DNS offline switch from its M7 Q1 block).
@@ -62,10 +62,14 @@ to_jpeg() { # $1 png, $2 jpg
   esac
 }
 RESULTS=()
-shot() { # $1 = n, $2 = name, $3 = verdict ("" = produced, else the reason it is not)
+shot() { # $1 = n, $2 = name, $3 = verdict ("" = produced, else the reason it is not), $4 = a PNG already taken on the device
   local n=$1 name=$2 png="$SHOT_DIR/$1-$2.png" jpg
   jpg=$(mktemp --suffix=.jpg)
-  a exec-out screencap -p > "$png" || { RESULTS+=("TOUR $n $name: NOT PRODUCED (screencap failed)"); return 0; }
+  if [[ -n ${4:-} ]]; then
+    a exec-out cat "$4" > "$png" && [[ -s $png ]] || { RESULTS+=("TOUR $n $name: NOT PRODUCED (device capture missing)"); return 0; }
+  else
+    a exec-out screencap -p > "$png" || { RESULTS+=("TOUR $n $name: NOT PRODUCED (screencap failed)"); return 0; }
+  fi
   to_jpeg "$png" "$jpg" || cp "$png" "$jpg"
   echo "===SHOT $n $name BEGIN==="
   base64 "$jpg"
@@ -444,17 +448,48 @@ has 'resource-id="hero_idle_DIM"' || v="not in DIM"
 shot 10 dim "$v"
 sh_ content delete --uri "$P/idle_test" >/dev/null 2>&1 || true
 
-# ---- home shots again at 1280x720 (the design canvas scales; checked by eye and by the same uiautomator checks) ----
-trap 'sh_ wm size reset >/dev/null 2>&1 || true' EXIT
-echo "tour: default size $(sh_ wm size | tr -d '\r' | tr '\n' ' ')density $(sh_ wm density | tr -d '\r' | tr '\n' ' ')"
-if sh_ wm size 1280x720; then
-  sleep 3
-  home_shots 11 "-720p"
-else
-  warn "tour: wm size 1280x720 refused; no 720p shots"
-fi
-sh_ wm size reset || warn "tour: wm size reset failed"
-trap - EXIT
+# ---- the real sun (PR #26): location is Clarksville TN (provisioned above); the clock is set in UTC with root -------
+# CST is UTC-6 in November. 18:00Z noon (sun high), 22:30Z 4:30 PM (low, near the hills), 23:45Z 5:45 PM (after
+# sunset, dusk), 01:00Z next day 7 PM (night). Each shot relaunches home, so the hero computes the sky for the new time.
+a root >/dev/null 2>&1 || warn "tour: adb root refused"
+a wait-for-device
+sleep 3
+sh_ settings put global auto_time 0 >/dev/null 2>&1 || true
+sh_ cmd alarm set-timezone America/Chicago >/dev/null 2>&1 || true
+utc_clock() { # $1 = MMDDhhmmYY.ss in UTC, $2 = the expected epoch
+  local now
+  sh_ date -u "$1" >/dev/null 2>&1 || true
+  sleep 1
+  now=$(dev_now)
+  if (( now - $2 < 120 && $2 - now < 120 )); then echo "tour: clock $(sh_ date | tr -d '\r') ($(sh_ date -u | tr -d '\r'))"; return 0; fi
+  sh_ cmd alarm set-time "$(( $2 * 1000 ))" >/dev/null 2>&1 || true   # fallback: shell's SET_TIME
+  sleep 2
+  now=$(dev_now)
+  (( now - $2 < 120 && $2 - now < 120 )) || { warn "tour: could not set the clock to $1 UTC"; return 1; }
+  echo "tour: date -u refused; set-time gave $(sh_ date | tr -d '\r')"
+}
+quiet false >/dev/null 2>&1 || true
+rmc panels/alerts.json; no_games
+n=11
+for spec in "110318000026.00 2026-11-03T18:00:00Z sun-noon" "110322300026.00 2026-11-03T22:30:00Z sun-1630" \
+            "110323450026.00 2026-11-03T23:45:00Z sun-dusk" "110401000026.00 2026-11-04T01:00:00Z sun-1900"; do
+  read -r stamp utc name <<<"$spec"
+  v=""
+  utc_clock "$stamp" "$(date -u -d "$utc" +%s)" || v="the clock could not be set to $utc"
+  evening_agenda; plant_weather "$W_EVENING"; plant_brief
+  home; sleep 3; look
+  has 'content-desc="Hero now: ' || v="${v:+$v; }no hero"
+  shot "$n" "$name" "$v"; n=$((n + 1))
+done
+
+# Cold start: the first frame (~300 ms after launch) should be the plain background, never a wrong scene; then 2 s.
+# Captured on the device in one shell command, so adb latency does not shift the timing.
+for spec in "0.3 cold-300ms" "2 cold-2s"; do
+  read -r wait name <<<"$spec"
+  sh_ "am force-stop $PKG; am start -n $MAIN >/dev/null; sleep $wait; screencap -p /sdcard/tour-cold.png" || true
+  shot "$n" "$name" "" /sdcard/tour-cold.png; n=$((n + 1))
+  sh_ rm -f /sdcard/tour-cold.png || true
+done
 
 echo
 echo "== Tour summary"
