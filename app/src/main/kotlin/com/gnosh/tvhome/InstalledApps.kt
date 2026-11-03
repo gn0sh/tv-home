@@ -76,6 +76,19 @@ class InstalledApps {
         fun canLaunch(context: Context, pkg: String): Boolean =
             runCatching { context.packageManager.getLeanbackLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
 
+        /**
+         * The launchable TV apps with their labels, no images (watch-defaults: the built-in Watch map looks for the CDE
+         * app and the streaming apps among these). Package manager calls: off the main thread.
+         */
+        fun launcherApps(context: Context): List<LauncherApp> = runCatching {
+            val pm = context.packageManager
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(launcherIntent(), 0).mapNotNull { ri ->
+                val ai = ri.activityInfo ?: return@mapNotNull null
+                LauncherApp(ai.packageName, ai.name, runCatching { ri.loadLabel(pm).toString() }.getOrDefault(""))
+            }
+        }.getOrDefault(emptyList())
+
         /** The Watch pill: opens [pkg]'s TV launch intent in its own task (the tiles' path). False if gone or refused. */
         fun launchPackage(context: Context, pkg: String): Boolean = try {
             val i = context.packageManager.getLeanbackLaunchIntentForPackage(pkg)

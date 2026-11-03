@@ -20,6 +20,8 @@ data class WatchTarget(val network: String, val packageName: String)
 class WatchMap private constructor(
     private val packages: Map<String, WatchTarget>,
     private val teamDefaults: Map<String, String>,
+    /** For a network this map does not name: the built-in defaults ([WatchDefaults]), or null. */
+    private val fallback: ((String) -> WatchTarget?)? = null,
 ) {
     /** The network that carries [game] and has a mapped app, installed or not ("ESPN+"); null when none maps. */
     fun network(game: TeamGame): String? = candidates(game).firstOrNull()?.network
@@ -31,13 +33,31 @@ class WatchMap private constructor(
     private fun candidates(game: TeamGame): List<WatchTarget> {
         val listed = game.game.networks
         val names = if (listed.isNotEmpty()) listed else listOfNotNull(teamDefaults[game.team.key])
-        return names.mapNotNull { packages[key(it)] }.distinctBy { it.packageName }
+        return names.mapNotNull(::resolve).distinctBy { it.packageName }
     }
+
+    /** This map's own entry for [network], else the fallback's. */
+    private fun resolve(network: String): WatchTarget? =
+        packages[key(network)] ?: runCatching { fallback?.invoke(network) }.getOrNull()
+
+    /**
+     * This map first (an adb-provisioned entry or team default always wins), then [defaults] for every network it does
+     * not name.
+     */
+    fun orElse(defaults: WatchMap): WatchMap = WatchMap(packages, teamDefaults + defaults.teamDefaults.filterKeys { it !in teamDefaults }) { n ->
+        defaults.resolve(n)
+    }
+
+    /** True when nothing is mapped and there is no fallback (no Watch pill can show). */
+    val isEmpty: Boolean get() = packages.isEmpty() && fallback == null
 
     override fun toString(): String = "WatchMap(${packages.size} networks, ${teamDefaults.size} defaults)"
 
     companion object {
         val EMPTY = WatchMap(emptyMap(), emptyMap())
+
+        /** A map that names nothing itself and asks [resolve] for every network (the built-in defaults). */
+        internal fun resolving(resolve: (String) -> WatchTarget?): WatchMap = WatchMap(emptyMap(), emptyMap(), resolve)
         const val MAX_NETWORKS = 32
         const val MAX_TEAMS = 8
         const val MAX_PACKAGE = 100
