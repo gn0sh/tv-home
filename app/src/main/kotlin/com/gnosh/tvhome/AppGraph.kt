@@ -7,6 +7,10 @@ import android.net.NetworkCapabilities
 import tvhome.core.assistant.AnthropicClient
 import tvhome.core.assistant.AskApp
 import tvhome.core.assistant.AskEngine
+import tvhome.core.assistant.BriefConfig
+import tvhome.core.assistant.BriefEngine
+import tvhome.core.assistant.BriefLedger
+import tvhome.core.assistant.BriefTicker
 import tvhome.core.assistant.ClaudeClient
 import tvhome.core.assistant.DailyCap
 import tvhome.core.assistant.FileCountStore
@@ -66,12 +70,33 @@ class AppGraph(app: Application) {
      * Ask Claude (M1b lean). The key is read from [secrets] per call and goes only into the request header. The daily
      * count is a date and a number in no-backup storage, never a question.
      */
-    val claude: ClaudeClient = AnthropicClient { secrets.get(SecretKey.ANTHROPIC_API_KEY) }
+    private val anthropic = AnthropicClient { secrets.get(SecretKey.ANTHROPIC_API_KEY) }
+    val claude: ClaudeClient = anthropic
     val askCap = DailyCap(FileCountStore(File(app.noBackupFilesDir, "ask-count.txt")), clock = { Instant.now() }, zone = { ZoneId.systemDefault() })
 
     /** A fresh engine (and conversation) per visit to the Ask view; [apps] is read at each question. */
     fun newAskEngine(apps: () -> List<AskApp>): AskEngine =
-        AskEngine(claude, hasKey = { runCatching { secrets.get(SecretKey.ANTHROPIC_API_KEY) }.getOrNull() != null }, cap = askCap, apps = apps)
+        AskEngine(claude, hasKey = ::hasAnthropicKey, cap = askCap, apps = apps)
+
+    private fun hasAnthropicKey(): Boolean = runCatching { secrets.get(SecretKey.ANTHROPIC_API_KEY) }.getOrNull() != null
+
+    /**
+     * The one-line daily brief (M7-6, ADR 0008 section 5). Same key and client as Ask, its own ledger and cache files in
+     * no-backup storage (no titles in either). On by default; it calls only when a key exists and the switch is not
+     * provisioned off. Lazy and touched only off the main thread (the hero reads it on IO, after the first frame).
+     */
+    val brief: BriefTicker by lazy {
+        val dir = app.noBackupFilesDir
+        val clock = { Instant.now() }
+        BriefTicker(BriefEngine(
+            anthropic,
+            BriefLedger(FileCountStore(File(dir, "brief-ledger.txt")), clock, { ZoneId.systemDefault() }),
+            FileCountStore(File(dir, "brief-cache.json"), maxBytes = BriefConfig.MAX_CACHE_BYTES),
+            clock,
+            enabled = { FeedSettings.switches(app).brief },
+            hasKey = ::hasAnthropicKey,
+        ))
+    }
 }
 
 private fun isOnline(context: Context): Boolean {

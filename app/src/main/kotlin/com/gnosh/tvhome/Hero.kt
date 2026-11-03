@@ -32,10 +32,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -68,6 +70,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,6 +88,7 @@ import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.Precip
 import tvhome.core.ui.ContextCard
 import tvhome.core.ui.DriftOffset
+import tvhome.core.assistant.briefFacts
 import tvhome.core.ui.GlanceInputs
 import tvhome.core.ui.GlanceTokens
 import tvhome.core.ui.HeroMotif
@@ -131,7 +136,8 @@ const val HERO_CARD_DESC_PREFIX = "Hero card: "
  * It owns the minute clock, so the countdown and the theme re-evaluate at each tick without recomposing the home
  * screen. [idle] dims the backdrop and text (DIM; NEAR_BLACK is drawn over everything by [NearBlackLayer]); [drift]
  * moves the top strip and the hero text, read in the layer phase only. [quiet] (M7-F6) hides event titles in every
- * string; [onWatch] reports the Watch pill's target (M7-F5) to the dock, which is outside the hero.
+ * string; [onWatch] reports the Watch pill's target (M7-F5) to the dock, which is outside the hero, and [onBrief] the
+ * one-line brief (M7-F6) the dock band draws (null: nothing to say, or dropped by the glance budget).
  */
 @Composable
 fun HeroLayer(
@@ -139,6 +145,7 @@ fun HeroLayer(
     drift: State<DriftOffset>,
     quiet: Boolean,
     onWatch: (WatchTarget?) -> Unit,
+    onBrief: (String?) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -168,14 +175,44 @@ fun HeroLayer(
     val is24h = DateFormat.is24HourFormat(context)
     val zone = ZoneId.systemDefault()
     val instant = Instant.now()
-    val glance = remember(now, snap, agenda, settings, is24h, quiet) {
+    val inputs = remember(now, snap, agenda, settings, is24h, quiet) {
         // isInstalled reads a set built on IO (HeroSettings.read): no package manager call on the main thread.
-        homeGlance(GlanceInputs(
+        GlanceInputs(
             instant, zone, is24h, snap, settings.switches, settings.hasLocation, agenda, settings.travel,
             quiet = quiet, watchMap = settings.watchMap, isInstalled = { it in settings.installed },
-        ))
+        )
     }
+    // M7-F6 brief. When home became visible (STARTED), else null: the ticker refreshes only while home is seen.
+    var visibleSince by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(owner) {
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            visibleSince = SystemClock.elapsedRealtime()
+            try { awaitCancellation() } finally { visibleSince = null }
+        }
+    }
+    // Bumped after each refresh, so the line is re-read from the cache.
+    var briefRefreshed by remember { mutableIntStateOf(0) }
+    // The line: facts and the cache file read on IO (never on the main thread; the hero is composed after the first
+    // frame, AC8). Titles, or "Busy" in Quiet, are filled by the engine.
+    val brief by produceState<String?>(null, inputs, briefRefreshed) {
+        value = withContext(Dispatchers.IO) { runCatching { graph.brief.line(briefFacts(inputs), quiet) }.getOrNull() }
+    }
+    // On each minute tick: at most one request per slot (BriefLedger), off the main thread. Its own scope, so a feed
+    // update or the next tick never cancels a request that is in flight (a cancel would still spend the slot).
+    val briefScope = rememberCoroutineScope()
+    LaunchedEffect(now) {
+        val since = visibleSince ?: return@LaunchedEffect
+        val tickInputs = inputs
+        briefScope.launch {
+            val ran = withContext(Dispatchers.IO) {
+                runCatching { graph.brief.onTick(briefFacts(tickInputs), SystemClock.elapsedRealtime() - since) }.getOrDefault(false)
+            }
+            if (ran) briefRefreshed++
+        }
+    }
+    val glance = remember(inputs, brief) { homeGlance(inputs.copy(brief = brief)) }
     LaunchedEffect(glance.watch) { onWatch(glance.watch) }
+    LaunchedEffect(glance.brief) { onBrief(glance.brief) }
     val weather = (view(snap.weather, PanelPolicies.WEATHER, settings.switches.weather, instant) as? PanelView.Shown)?.value
     val game = if (settings.switches.games) GameDay.select(snap.games?.value.orEmpty(), instant, zone) else null
     // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).

@@ -24,6 +24,9 @@ class BriefTicker(private val engine: BriefEngine, private val settleMs: Long = 
         return true
     }
 
+    /** The line to draw ([BriefEngine.line]): reads the small cache file, so call it off the main thread. */
+    fun line(facts: BriefFacts, quiet: Boolean): String? = engine.line(facts, quiet)
+
     override fun toString(): String = "BriefTicker"
 
     companion object {

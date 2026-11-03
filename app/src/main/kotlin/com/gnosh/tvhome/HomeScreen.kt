@@ -61,6 +61,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
@@ -72,6 +73,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -265,6 +267,8 @@ fun HomeScreen(
     val idleState = idle.state.value
     // M7-F5: the Watch pill's target, reported by the hero (homeGlance owns the rule); null hides the pill.
     var watch by remember { mutableStateOf<WatchTarget?>(null) }
+    // M7-F6: the one-line brief, reported by the hero (homeGlance owns the budget); null draws nothing.
+    var brief by remember { mutableStateOf<String?>(null) }
     val watchPill = remember { FocusRequester() }
     val quietPill = remember { FocusRequester() }
     // watch-pill-focus-loss: the pill can vanish while focused (the game ended); focus moves on to Quiet, else Ask.
@@ -293,7 +297,7 @@ fun HomeScreen(
         // the second would reach the activity.
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
-        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it })
+        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it }, onBrief = { brief = it })
         CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
@@ -305,6 +309,29 @@ fun HomeScreen(
             )
             Dock(shown) {
                 CalendarTileView(tile, shown, calendar, down = askTile, onClick = { open = DOCK_CALENDAR })
+            }
+        }
+        // M7-F6 brief line (ADR 0008 section 3, dock band): one line in the dock's label row, right of the Calendar
+        // tile and under the pills, so it moves nothing and is not focusable (R1 order unchanged). Same size and colour
+        // as the tile labels (24 sp, at least 32 px); the engine caps it at 90 characters.
+        brief?.let { line ->
+            val pad = rowPadding(theme)
+            Box(
+                Modifier.fillMaxSize().padding(
+                    start = (Tokens.MARGIN_H_DP + pad.calculateLeftPadding(LayoutDirection.Ltr).value.toInt() + theme.tileWidthDp + TILE_GAP_DP).dp,
+                    end = Tokens.MARGIN_H_DP.dp,
+                    bottom = (Tokens.MARGIN_V_DP + pad.calculateBottomPadding().value.toInt()).dp,
+                ),
+                contentAlignment = Alignment.BottomStart,
+            ) {
+                Text(
+                    line,
+                    color = color(shown.secondaryText),
+                    fontSize = Tokens.SECONDARY_SP.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.height((TILE_LABEL_DP - 12).dp).testTag(DOCK_BRIEF_TAG),
+                )
             }
         }
         // Bottom centre, in the dock's band (beside the Calendar tile) so the hero gets the room: the pill is centred on
@@ -730,6 +757,9 @@ const val QUIET_DESC_ON = "Quiet mode, on. Event titles are hidden."
 const val QUIET_DESC_OFF = "Quiet mode, off. Turn on to hide event titles."
 
 private const val PILL_GAP_DP = 16
+
+/** Test tag of the brief line in the dock band (uiautomator resource-id), read by the emulator QA check. */
+const val DOCK_BRIEF_TAG = "dock_brief"
 private const val PILL_MIN_DP = 140
 private const val WATCH_PILL_MAX_DP = 240
 private const val QUIET_PILL_MAX_DP = 170
