@@ -21,6 +21,7 @@ URI="content://$PKG.provision/calendar_url"
 MAX_COLD_MS=${MAX_COLD_MS:-2000}   # AC8
 MAX_REGRESSION_MS=${MAX_REGRESSION_MS:-300}   # AC8 baseline: PR median may exceed the merge base's by at most this
 BASE_APK=${BASE_APK:-}   # merge base's APK, same throwaway signer (pull requests); empty or missing = no comparison
+DEBUG_APK=${DEBUG_APK:-}   # debuggable build of the same code, used only by the M7 Q1/Q2 block (run-as cache planting)
 # Fake value that passes the validator. Built from parts so the full string is not in this file's text either.
 DUMMY_TOKEN="private-$(printf 'f%.0s' $(seq 1 32))"
 DUMMY_URL="https://calendar.google.com/calendar/ical/x%40example.com/$DUMMY_TOKEN/basic.ics"
@@ -850,17 +851,69 @@ m7_relog() { # restart the background logcat stream (appending) after adbd resta
   LOGCAT_PID=$!
 }
 step "M7 Q1: hero shows the next event with a countdown and a severe-alert override (planted caches, network off)"
-# Release APK, so no run-as: the caches are planted as root, which only some emulator images allow. Without root this
-# step is NOT VERIFIED and the JVM tests (NowNextTest, HomeGlanceTest) stand in.
-m7_root=""
-if a root 2>&1 | tr -d '\r' | grep -qiE 'restarting|already running as root'; then
-  a wait-for-device; sleep 2
-  [[ $(sh_ id -u | tr -d '\r') == 0 ]] && m7_root=1
-  m7_relog   # adbd restarted, which ends the logcat stream
+# The release APK has no cache-planting path and is not debuggable, so the caches are planted one of two ways:
+#  runas (primary): the app job's debug APK (DEBUG_APK: same code and applicationId, debuggable, debug key) replaces
+#    the release app for Q1 and Q2 only, and `run-as` writes into its no_backup dir. The android-tv API 34 image is a
+#    user build without adb root, so CI takes this route.
+#  root (fallback, images that allow adb root): the release app's files are written as root.
+# Neither works: Q1 fails, never only a warning. The release APK is reinstalled (and the dummy URL re-provisioned)
+# afterwards, so every later step runs against release.
+m7_mode=""; m7_why=""
+data=/data/user/0/$PKG/no_backup; uid=""
+m7_install() { # $1 = apk, $2 = label. A different signer means uninstall first, which wipes the app's data.
+  local out
+  network on   # clears the old uid's deny before the uid can change
+  a uninstall "$PKG" >/dev/null 2>&1 || true
+  out=$(a install --no-incremental -r -g "$1" 2>&1 | tr -d '\r' || true)
+  grep -q 'Success' <<<"$out" || { m7_why="installing the $2 APK failed ($out)"; return 1; }
+  PROVISION_VALUE="$DUMMY_URL" scripts/provision.sh | tr -d '\r' > "$OUT/provision-m7-$2.txt" || true
+  grep -q '^Saved\.$' "$OUT/provision-m7-$2.txt" || { m7_why="re-provisioning the dummy URL on the $2 APK failed"; return 1; }
+}
+m7_put() { # $1 = path under no_backup, content on stdin; read back so a silent write failure cannot pass
+  if [[ $m7_mode == runas ]]; then
+    a shell "run-as $PKG sh -c 'cat > no_backup/$1'" || fail "m7: run-as write of $1 failed"
+    [[ $(sh_ "run-as $PKG sh -c 'test -s no_backup/$1 && echo ok'" | tr -d '\r') == ok ]] || fail "m7: $1 is empty after the run-as write"
+  else
+    a shell "cat > $data/$1" || fail "m7: root write of $1 failed"
+    sh_ chown "$uid:$uid" "$data/$1"; sh_ chmod 600 "$data/$1"; sh_ restorecon "$data/$1" >/dev/null 2>&1 || true
+    [[ $(sh_ "test -s $data/$1 && echo ok" | tr -d '\r') == ok ]] || fail "m7: $1 is empty after the root write"
+  fi
+}
+m7_rm() { # paths under no_backup
+  local f
+  for f in "$@"; do
+    if [[ $m7_mode == runas ]]; then sh_ "run-as $PKG rm -f no_backup/$f" || true; else sh_ rm -f "$data/$f" || true; fi
+  done
+}
+m7_swapped=""
+if [[ -z $DEBUG_APK || ! -f $DEBUG_APK ]]; then
+  m7_why="no debug APK (DEBUG_APK='$DEBUG_APK')"
+elif m7_swapped=1; m7_install "$DEBUG_APK" debug; then
+  if [[ $(sh_ "run-as $PKG sh -c 'mkdir -p no_backup/panels && test -w no_backup/panels && echo ok'" 2>&1 | tr -d '\r') == ok ]]; then
+    m7_mode=runas
+    pass "m7: debug APK installed for Q1; caches are planted with run-as"
+  else
+    m7_why="run-as $PKG does not work with the debug APK"
+  fi
 fi
-if [[ -z $m7_root ]]; then
-  warn "M7 hero countdown and alert override NOT VERIFIED on the emulator: adb root is not available on this image"
-else
+if [[ -z $m7_mode ]]; then
+  warn "m7: run-as route unavailable ($m7_why); trying adb root"
+  if [[ -n $m7_swapped ]]; then
+    m7_install "$APK" release || fail "m7: putting the release APK back failed: $m7_why"
+  fi
+  if a root 2>&1 | tr -d '\r' | grep -qiE 'restarting|already running as root'; then
+    a wait-for-device; sleep 2
+    [[ $(sh_ id -u | tr -d '\r') == 0 ]] && m7_mode=root
+    m7_relog   # adbd restarted, which ends the logcat stream
+  fi
+  [[ -n $m7_mode ]] || fail "m7: cannot plant the hero caches: neither run-as ($m7_why) nor adb root works on this image"
+  uid=$(sh_ stat -c %u "/data/user/0/$PKG" | tr -d '\r')
+  [[ $uid =~ ^[0-9]+$ ]] || fail "m7: could not read the app's uid ($uid)"
+  sh_ mkdir -p "$data/panels"; sh_ chown -R "$uid:$uid" "$data"; sh_ chmod -R u+rwX,go-rwx "$data"
+  sh_ restorecon -R "$data" >/dev/null 2>&1 || true
+  pass "m7: adb root works; caches are planted as root into the release app"
+fi
+{
   sh_ content insert --uri "content://$PKG.provision/location" --bind lat:d:36.53 --bind lon:d:-87.36 \
     || fail "m7: location insert refused"
   sh_ am force-stop "$PKG"
@@ -871,15 +924,10 @@ else
   same_day=""; [[ $(TZ=$etz date -d '+50 minutes' +%F) == $(TZ=$etz date +%F) ]] && same_day=1
   now=$(iso now); ev=$(iso '+42 minutes'); evend=$(iso '+102 minutes'); until=$(iso '+90 minutes')
   ws=$(iso '-2 days'); we=$(iso '+3 days')
-  data=/data/user/0/$PKG/no_backup
-  uid=$(sh_ stat -c %u "/data/user/0/$PKG" | tr -d '\r')
-  [[ $uid =~ ^[0-9]+$ ]] || fail "m7: could not read the app's uid ($uid)"
   agenda='{"v":1,"fetchedAt":"'$now'","windowStart":"'$ws'","windowEnd":"'$we'","events":[{"uid":"qa-1","title":"QA Dentist","start":{"kind":"at","value":"'$ev'"},"end":{"kind":"at","value":"'$evend'"}}]}'
   alerts='{"v":1,"at":"'$now'","data":{"alerts":[{"event":"Tornado Warning","severity":"Extreme","kind":"OVERRIDE","until":"'$until'"}]}}'
-  sh_ mkdir -p "$data/panels"
-  printf '%s' "$agenda" | a shell "cat > $data/agenda-cache.json"
-  printf '%s' "$alerts" | a shell "cat > $data/panels/alerts.json"
-  sh_ chown -R "$uid:$uid" "$data"; sh_ chmod -R u+rwX,go-rwx "$data"; sh_ restorecon -R "$data" >/dev/null 2>&1 || true
+  printf '%s' "$agenda" | m7_put agenda-cache.json
+  printf '%s' "$alerts" | m7_put panels/alerts.json
   network off
   sh_ am start -W -n "$MAIN" >/dev/null; sleep 8   # first frame, 1.5 s settle, cache load
   ui=$(ui_text); [[ -n $ui ]] || fail "m7: uiautomator dump failed"
@@ -913,7 +961,7 @@ else
 
   # ---- M7 Q2 (F5, F6): Watch pill only on game day with a mapped, installed app; dock focus order; Quiet ----
   yt=com.google.android.youtube.tv
-  sh_ rm -f "$data/panels/alerts.json"   # the game card, not the alert, for this part
+  m7_rm panels/alerts.json   # the game card, not the alert, for this part
   if ! sh_ pm path "$yt" 2>/dev/null | grep -q '^package:'; then
     warn "M7 Watch pill NOT VERIFIED on the emulator: $yt is not installed on this image"
   elif [[ $(TZ=$etz date -d '+100 minutes' +%F) != $(TZ=$etz date +%F) ]]; then
@@ -924,14 +972,13 @@ else
     sh_ content insert --uri "content://$PKG.provision/watch" --bind networks:s:"YouTube=$yt" --bind defaults:s:predators=YouTube \
       || fail "q2: watch map insert refused"
     # No game: no pill, even with the map set.
-    sh_ rm -f "$data/panels/games.json"
+    m7_rm panels/games.json
     q2_restart
     watch_shown && fail "q2: the Watch pill shows with no game today"
     pass "q2: no game today, no Watch pill"
     gstart=$(iso '+90 minutes')
     games='{"v":1,"at":"'$now'","data":[{"team":"predators","start":"'$gstart'","opponent":"QA Opponent","home":true,"phase":"UPCOMING"}]}'
-    printf '%s' "$games" | a shell "cat > $data/panels/games.json"
-    sh_ chown "$uid:$uid" "$data/panels/games.json"; sh_ chmod 600 "$data/panels/games.json"; sh_ restorecon "$data/panels/games.json" >/dev/null 2>&1 || true
+    printf '%s' "$games" | m7_put panels/games.json
     q2_restart
     watch_shown || fail "q2: an upcoming game today with a mapped, installed app shows no Watch pill"
     pass "q2: game day with a mapped, installed app shows the Watch pill"
@@ -998,11 +1045,17 @@ else
   fi
   sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
   sh_ content insert --uri "content://$PKG.provision/quiet" --bind on:b:false >/dev/null 2>&1 || true
-  sh_ rm -f "$data/agenda-cache.json" "$data/panels/alerts.json" "$data/panels/games.json"
+  m7_rm agenda-cache.json panels/alerts.json panels/games.json
   sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
   network on
-  a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
-fi
+  if [[ $m7_mode == root ]]; then
+    a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
+  else
+    m7_install "$APK" release || fail "m7: putting the release APK back after Q1 failed: $m7_why"
+    sh_ run-as "$PKG" true >/dev/null 2>&1 && fail "m7: run-as still works after reinstalling the release APK"
+    pass "m7: release APK reinstalled (not debuggable) with the dummy URL provisioned; later steps run on release"
+  fi
+}
 
 step "fetch attempt with network on (dummy URL fails; error paths must not log it)"
 network on

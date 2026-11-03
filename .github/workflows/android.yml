@@ -304,6 +304,51 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+      # M7 Q1/Q2 emulator checks (pull requests and dispatch, the events the emulator job runs on): the release APK is
+      # not debuggable and has no cache-planting path, and the android-tv image has no adb root, so the emulator job
+      # installs this debuggable build of the same commit for that block only and plants caches with run-as. It is
+      # scanned like the release APK and uploaded only as this run's artifact (1 day); it is never signed with the
+      # release key, published or attached anywhere else. The release-only manifest check above stays release-only.
+      - name: Build debug APK (emulator Q1 only)
+        id: debug
+        if: steps.detect.outputs.present == 'true' && github.event_name != 'push'
+        run: |
+          set -euo pipefail
+          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/assemble-debug.log" \
+            --dependency-verification="$APP_DEP_VERIFICATION" :app:assembleDebug
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/debug/*.apk)
+          [ "${#apks[@]}" -eq 1 ] || { echo "::error::expected exactly one debug APK, found ${#apks[@]}"; exit 1; }
+          apkanalyzer=$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | sort -V | tail -1)
+          [ "$("$apkanalyzer" manifest debuggable "${apks[0]}")" = "true" ] \
+            || { echo "::error::the debug APK is not debuggable, so run-as cannot plant the Q1 caches"; exit 1; }
+          [ "$("$apkanalyzer" manifest application-id "${apks[0]}")" = "com.gnosh.tvhome" ] \
+            || { echo "::error::the debug APK's application id is not com.gnosh.tvhome"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/debug-apk"
+          cp "${apks[0]}" "$RUNNER_TEMP/debug-apk/tv-home-debug.apk"
+          echo "path=$RUNNER_TEMP/debug-apk/tv-home-debug.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Scan debug APK (dex and resources) and its build log
+        id: debugscan
+        if: steps.debug.outputs.path != ''
+        env:
+          DEBUG_APK: ${{ steps.debug.outputs.path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/debug-apk-unzipped"
+          unzip -q -o "$DEBUG_APK" -d "$RUNNER_TEMP/debug-apk-unzipped"
+          scripts/ci/scan-secrets.sh "$RUNNER_TEMP/debug-apk-unzipped" "$RUNNER_TEMP/assemble-debug.log"
+          echo "path=$DEBUG_APK" >> "$GITHUB_OUTPUT"
+
+      - name: Upload debug APK (this run only, emulator Q1)
+        if: steps.debugscan.outputs.path != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tv-home-debug-apk
+          path: ${{ steps.debugscan.outputs.path }}
+          retention-days: 1
+          if-no-files-found: error
+
       # AC8 baseline (spec M7-1.5: cold start before and after): pull requests only. Builds the merge base's release APK,
       # unsigned (no signing secrets exist on pull_request), from a git worktree, with that tree's own wrapper,
       # verification metadata and gradle-quiet.sh. The emulator job signs it with the same throwaway key.
@@ -418,6 +463,13 @@ jobs:
         with:
           name: tv-home-base-apk
           path: ${{ runner.temp }}/base-apk
+      # Debug build of the same commit for the M7 Q1/Q2 block only (run-as cache planting; see the app job). Required:
+      # without it (and without adb root) Q1 fails.
+      - name: Download debug APK (emulator Q1)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: tv-home-debug-apk
+          path: ${{ runner.temp }}/debug-apk
       - name: Sign APK with a throwaway key (emulator only)
         run: |
           set -euo pipefail
@@ -476,7 +528,8 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
           disable-animations: true
           # BASE_APK: the AC8 baseline (pull requests); absent file = no comparison. MAX_COLD_MS stays 2000.
-          script: BASE_APK="$RUNNER_TEMP/qa-base-signed.apk" MAX_REGRESSION_MS=300 MAX_COLD_MS=2000 scripts/ci/emulator-qa.sh "$RUNNER_TEMP/qa-signed.apk" "$RUNNER_TEMP/qa-out" "$RUNNER_TEMP/qa-shot"
+          # DEBUG_APK: debuggable build for the M7 Q1/Q2 block only; the release APK is reinstalled right after it.
+          script: BASE_APK="$RUNNER_TEMP/qa-base-signed.apk" DEBUG_APK="$RUNNER_TEMP/debug-apk/tv-home-debug.apk" MAX_REGRESSION_MS=300 MAX_COLD_MS=2000 scripts/ci/emulator-qa.sh "$RUNNER_TEMP/qa-signed.apk" "$RUNNER_TEMP/qa-out" "$RUNNER_TEMP/qa-shot"
       - name: Upload home-screen screenshot
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
