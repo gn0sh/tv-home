@@ -86,6 +86,7 @@ import tvhome.core.assistant.AskCopy
 import tvhome.core.ui.CALENDAR_TILE_LABEL
 import tvhome.core.ui.CalendarTile
 import tvhome.core.feeds.WatchTarget
+import tvhome.core.ui.HomeLayout
 import tvhome.core.ui.HomeTheme
 import tvhome.core.ui.IdleState
 import tvhome.core.ui.OledTokens
@@ -283,7 +284,8 @@ fun HomeScreen(
     }
     val context = LocalContext.current
     // Top of the apps row in design dp, so the hero text never runs behind it (emulator tour 2026-11-03).
-    val appsTop = remember { mutableStateOf<Int?>(null) }
+    // Starts at the zone map's value (HomeLayout) and follows the measured row.
+    val appsTop = remember(theme.tileHeightDp) { mutableStateOf<Int?>(HomeLayout.map(theme.tileHeightDp).apps.y) }
     val canvasTop = remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
     val shown = if (idleState == IdleState.DIM) theme.dimmed() else theme
@@ -353,6 +355,8 @@ fun HomeScreen(
                     )
                 }
             }
+            // The brief line's reserved row (HomeLayout.BRIEF_ROW_DP; filled by m7-brief), always kept so nothing moves.
+            Spacer(Modifier.height(HomeLayout.BRIEF_ROW_DP.dp))
         }
         }
         if (idleState == IdleState.NEAR_BLACK) NearBlackLayer(idle.drift)

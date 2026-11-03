@@ -35,3 +35,30 @@ class HeroLayoutTest {
         assertEquals(HeroZones.HERO_LEFT.copy(h = 348 - 8 - 112), HeroZones.layout(348).left)
     }
 }
+
+class HomeLayoutTest {
+    @Test fun zoneMapIsDisjointInsideTheSafeAreaForEveryTileSize() {
+        for (tile in listOf(68, 108, 135, 160)) {
+            val m = HomeLayout.map(tile)
+            for (z in m.all.filter { it.h > 0 }) {
+                assertTrue(z.x >= HeroZones.SAFE_X && z.right <= HeroZones.SCREEN_W - HeroZones.SAFE_X, "$tile $z")
+                assertTrue(z.y >= HeroZones.SAFE_Y && z.bottom <= HeroZones.SCREEN_H - HeroZones.SAFE_Y, "$tile $z")
+            }
+            val zs = m.all.filter { it.h > 0 && it.w > 0 }
+            for (i in zs.indices) for (j in zs.indices) if (i != j) assertFalse(zs[i].overlaps(zs[j]), "$tile ${zs[i]} ${zs[j]}")
+            assertEquals(HomeLayout.BRIEF_ROW_DP, m.brief.h)
+            assertEquals(HeroZones.SCREEN_H - HeroZones.SAFE_Y, m.brief.bottom)
+        }
+    }
+
+    /** Default theme (108 dp tiles): the numbers in the handoff's zone map. */
+    @Test fun defaultMap() {
+        val m = HomeLayout.map(108)
+        assertEquals(HeroZones.Zone(64, 36, 1152, 64), m.topStrip)
+        assertEquals(HeroZones.Zone(64, 112, 680, 188), m.heroLeft)
+        assertEquals(HeroZones.Zone(768, 112, 448, 188), m.heroRight)
+        assertEquals(HeroZones.Zone(64, 308, 1152, 168), m.apps)
+        assertEquals(HeroZones.Zone(64, 476, 1152, 168), m.dock)
+        assertEquals(HeroZones.Zone(64, 644, 1152, 40), m.brief)
+    }
+}

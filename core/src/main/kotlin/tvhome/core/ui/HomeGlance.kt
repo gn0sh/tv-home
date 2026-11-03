@@ -64,6 +64,44 @@ object HeroZones {
 }
 
 /**
+ * The home screen's zone map on the design canvas (1280 x 720 dp), top to bottom, each in its own box with no overlap
+ * (Brian 2026-11-03: "a lot of stuff layered on top of each other"). Inside the 5% safe area ([HeroZones.SAFE_X],
+ * [HeroZones.SAFE_Y]): the top strip, the hero band (Now/Next left, context card right), the apps row band, the dock
+ * band (dashboard tiles and pills in one row), and a reserved full-width row for the daily brief line (m7-brief), so
+ * nothing moves when the line comes and goes. Bands follow the theme's tile height (focus-scale room included).
+ */
+object HomeLayout {
+    /** The brief line's reserved row under the dock (PR #24 uses 40 dp: 32 dp text plus the drift's travel). */
+    const val BRIEF_ROW_DP = 40
+
+    /** One tile row band: vertical padding for the 1.1x focus scale, the tile, and its label (12 dp gap + one line). */
+    fun rowBand(tileHeightDp: Int): Int = 2 * (tileHeightDp / 13) + tileHeightDp + TILE_LABEL_DP
+    const val TILE_LABEL_DP = 44
+
+    data class Map(
+        val topStrip: HeroZones.Zone,
+        val heroLeft: HeroZones.Zone,
+        val heroRight: HeroZones.Zone,
+        val apps: HeroZones.Zone,
+        val dock: HeroZones.Zone,
+        val brief: HeroZones.Zone,
+    ) {
+        val all get() = listOf(topStrip, heroLeft, heroRight, apps, dock, brief)
+    }
+
+    fun map(tileHeightDp: Int): Map {
+        val w = HeroZones.SCREEN_W - 2 * HeroZones.SAFE_X
+        val bottom = HeroZones.SCREEN_H - HeroZones.SAFE_Y
+        val band = rowBand(tileHeightDp)
+        val brief = HeroZones.Zone(HeroZones.SAFE_X, bottom - BRIEF_ROW_DP, w, BRIEF_ROW_DP)
+        val dock = HeroZones.Zone(HeroZones.SAFE_X, brief.y - band, w, band)
+        val apps = HeroZones.Zone(HeroZones.SAFE_X, dock.y - band, w, band)
+        val hero = HeroZones.layout(apps.y)
+        return Map(hero.top, hero.left, hero.right, apps, dock, brief)
+    }
+}
+
+/**
  * The design canvas (1280 x 720 dp): the app draws on it at any screen size by scaling dp, so a 1080p screen at 2.0
  * density (960 x 540 dp, the TV emulator) lays out exactly like one at 1.5 (emulator tour 2026-11-03: the hero card ran
  * off the right edge at 2.0). Physical sizes stay what the design asked for: 1 sp is 1.5 px at 1080p either way.
