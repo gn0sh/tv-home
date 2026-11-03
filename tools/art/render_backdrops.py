@@ -773,17 +773,18 @@ def beam(tip, target, radius, mat):
 
 def scene_game():
     # A generic arena glow at night: an oval stadium on a far plateau, floodlight masts throwing shafts of light down
-    # into the bowl, and the glow of the pitch lighting the haze above it. Neutral colours; the app tints the image with
-    # the team's backdrop colours. No logos, no text.
-    top, bottom = lin(0x0A1220), lin(0x1A2638)
+    # into the bowl, and the glow of the pitch lighting the haze above it. Ohio State's scarlet and gray
+    # (Teams.OHIO_STATE): a scarlet night sky and haze over a gray stadium. Outdoor football only; hockey has ARENA.
+    # No logos, no text.
+    top, bottom = lin(0x2A0707), lin(0x3A0C0C)
     ax, depth = 0.73, 680
-    world([(0.0, mixc(top, lin(0x04080F), 0.5)), (0.35, top), (HZ - 0.03, bottom), (HZ + 0.03, lin(0x22324A)),
-           (1.0, lin(0x22324A))],
-          glows=[(ax, HZ - 0.02, lin(0x4A6898), 10, 0.40, 3.0), (ax, HZ - 0.07, lin(0xB8CCEC), 70, 0.35, 1.6)],
+    world([(0.0, mixc(top, lin(0x0E0303), 0.5)), (0.35, top), (HZ - 0.03, bottom), (HZ + 0.03, lin(0x3A2A2A)),
+           (1.0, lin(0x3A2A2A))],
+          glows=[(ax, HZ - 0.02, lin(0xBB0000), 10, 0.45, 3.0), (ax, HZ - 0.07, lin(0xB0B0B0), 70, 0.30, 1.6)],
           stars=(0.93, 0.35))
     cx, cy, _ = place(ax, 0.5, depth)
     gz, rx, ry, wall = 22.0, 110.0, 62.0, 34.0
-    shell = material("shell", lin(0x0E1420), rough=0.8)
+    shell = material("shell", lin(0x1E1E20), rough=0.8)
     bpy.ops.mesh.primitive_cylinder_add(vertices=128, radius=rx, depth=wall, end_fill_type="NOTHING",
                                         location=(cx, cy, gz + wall / 2))
     bowl = bpy.context.active_object
@@ -794,7 +795,7 @@ def scene_game():
                                      location=(cx, cy, gz + wall + 1.5))
     roof = bpy.context.active_object
     roof.scale = (1.0, (ry + 2) / (rx + 2), 0.45)
-    roof.data.materials.append(material("roof", lin(0x1A2232), rough=0.5))
+    roof.data.materials.append(material("roof", lin(0x666666), rough=0.5))
     band = emission_material("band", lin(0xFFE6BE), 3.0)
     rng = random.Random(3)
     for k in range(90):  # lit concourse windows in rows along the front of the wall
@@ -804,14 +805,14 @@ def scene_game():
                 if rng.random() < 0.75:
                     box("win", (cx + (rx + 0.2) * math.cos(a), cy + (ry + 0.2) * math.sin(a),
                                 gz + 9 + row * 9), (1.6, 0.3, 1.4), band, rot_z=a + math.pi / 2)
-    field = emission_material("field", lin(0xDDEBFF), 10.0)
+    field = emission_material("field", lin(0xF0E6E6), 10.0)
     bpy.ops.mesh.primitive_cylinder_add(vertices=64, radius=rx * 0.95, depth=1, location=(cx, cy, gz + 4))
     f = bpy.context.active_object
     f.scale = (1.0, ry / rx, 1.0)
     f.data.materials.append(field)
-    mast = material("mast", lin(0x0A0E16), rough=0.7)
-    flood = emission_material("flood", lin(0xF4F8FF), 10.0)
-    shaft = beam_material("shaft", lin(0xDCE8FF), 0.9)
+    mast = material("mast", lin(0x141414), rough=0.7)
+    flood = emission_material("flood", lin(0xFFF6F0), 10.0)
+    shaft = beam_material("shaft", lin(0xE8D8D8), 0.9)
     for dx, dy in ((-0.92, -0.85), (0.92, -0.85), (-0.85, 0.9), (0.85, 0.9)):
         mx, my = cx + dx * rx, cy + dy * ry
         top_z = gz + 92
@@ -820,12 +821,158 @@ def scene_game():
             for c_ in range(6):
                 box("fl", (mx + (c_ - 2.5) * 2.2, my - 1.0, top_z + r_ * 2.2), (1.8, 0.5, 1.8), flood)
         beam((mx, my, top_z + 2), (cx + dx * rx * 0.25, cy + dy * ry * 0.2, gz + 2), 34.0, shaft)
-        point_lamp((mx, my - 6, top_z - 4), 1.2e5, lin(0xE8F0FF), radius=5)
-    plateau = material("plateau", lin(0x0A0F18), rough=1.0, fog=(lin(0x1A2638), 0.5))
+        point_lamp((mx, my - 6, top_z - 4), 1.2e5, lin(0xFFF0EC), radius=5)
+    plateau = material("plateau", lin(0x141012), rough=1.0, fog=(lin(0x3A1414), 0.5))
     ridge("plateau", depth + 60, -0.1, 1.1, HZ + 0.03, 0.02, plateau, seed=119, freq=2.0, thick=300)
-    near = material("near", lin(0x070B12), rough=1.0)
+    near = material("near", lin(0x0C0A0A), rough=1.0)
     ridge("near", 220, -0.1, 1.1, HZ + 0.10, 0.025, near, seed=121, freq=1.5, lift=calm_left)
-    ground_plane(material("ground", lin(0x080C14)))
+    ground_plane(material("ground", lin(0x0E0B0B)))
+
+
+def superellipse(cx, cy, rx, ry, a, n=3.0):
+    """Point on a rounded-rectangle ellipse at parameter angle a (n = 2 is an ellipse, larger is squarer)."""
+    c, s_ = math.cos(a), math.sin(a)
+    return (cx + rx * math.copysign(abs(c) ** (2 / n), c), cy + ry * math.copysign(abs(s_) ** (2 / n), s_))
+
+
+def arc_wall(name, cx, cy, rx, ry, z0, z1, a0, a1, mat, n=3.0, seg=96):
+    verts, faces = [], []
+    for i in range(seg + 1):
+        x, y = superellipse(cx, cy, rx, ry, a0 + (a1 - a0) * i / seg, n)
+        verts += [(x, y, z0), (x, y, z1)]
+    for i in range(seg):
+        faces.append((2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1))
+    return link_mesh(name, verts, faces, mat, smooth=False)
+
+
+def arc_tread(name, cx, cy, r0, r1, z, a0, a1, mat, n=3.0, seg=24):
+    """A flat band between two rounded ellipses r0 = (rx, ry) and r1, at height z, from angle a0 to a1."""
+    verts, faces = [], []
+    for i in range(seg + 1):
+        a = a0 + (a1 - a0) * i / seg
+        x0, y0 = superellipse(cx, cy, r0[0], r0[1], a, n)
+        x1, y1 = superellipse(cx, cy, r1[0], r1[1], a, n)
+        verts += [(x0, y0, z), (x1, y1, z)]
+    for i in range(seg):
+        faces.append((2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1))
+    return link_mesh(name, verts, faces, mat, smooth=False)
+
+
+def flat_shape(name, pts, z, mat):
+    verts = [(x, y, z) for x, y in pts]
+    return link_mesh(name, verts, [tuple(range(len(pts)))], mat, smooth=False)
+
+
+def ring(name, cx, cy, r0, r1, z, mat, seg=64):
+    verts, faces = [], []
+    for i in range(seg):
+        a = 2 * math.pi * i / seg
+        verts += [(cx + r0 * math.cos(a), cy + r0 * math.sin(a), z), (cx + r1 * math.cos(a), cy + r1 * math.sin(a), z)]
+    for i in range(seg):
+        j = (i + 1) % seg
+        faces.append((2 * i, 2 * j, 2 * j + 1, 2 * i + 1))
+    return link_mesh(name, verts, faces, mat, smooth=False)
+
+
+# Predators navy and gold (Teams.PREDATORS). Our own generic arena: no logos, no wordmarks, no marks on the ice.
+NAVY, NAVY_LIT, GOLD = 0x041E42, 0x0B3169, 0xFFB81C
+
+
+def scene_arena():
+    # Indoor hockey arena, seen from high in the end stands across a lit rink: the navy seating bowl wraps the ice, a
+    # gold ribbon board runs round the bowl between the lower and upper levels, the boards carry a gold rail, and the
+    # lights over the ice (out of frame, with a scoreboard) light the ice and the near seats. The interest is on the
+    # right (the rink's centre); the left stays dark for the title. Scrim exception: ARENA_BRIGHTNESS in core Tokens.
+    s = bpy.context.scene
+    cam = s.camera
+    cam.data.lens = 20.0
+    cam.location = (0.0, 0.0, 16.0)
+    cam.rotation_euler = (math.pi / 2 - math.radians(10.0), 0, 0)
+    world([(0.0, lin(0x01060F)), (0.5, lin(0x020A18)), (1.0, lin(0x030C1C))], strength=1.0)
+    cx, cy, hx, hy = 14.0, 62.0, 30.0, 13.0
+    rink = [superellipse(cx, cy, hx, hy, 2 * math.pi * i / 128, 5.0) for i in range(128)]
+    ice = material("ice", lin(0x6A88B4), rough=0.18)
+    sock(ice.node_tree.nodes["Principled BSDF"].inputs, "Specular IOR Level").default_value = 0.5
+    flat_shape("ice", rink, 0.0, ice)
+    gold_paint = material("goldpaint", lin(GOLD), rough=0.4)
+    navy_paint = material("navypaint", lin(0x1A3A7A), rough=0.4)
+    box("centre", (cx, cy, 0.02), (0.35, 2 * hy, 0.02), gold_paint)
+    for dx in (-9.0, 9.0):
+        box("blue", (cx + dx, cy, 0.02), (0.35, 2 * hy, 0.02), navy_paint)
+    ring("circle", cx, cy, 4.4, 4.6, 0.025, navy_paint)
+    for fx in (-20.0, 20.0):
+        for fy in (-5.5, 5.5):
+            ring("fo", cx + fx, cy + fy, 4.4, 4.55, 0.025, navy_paint)
+    # Boards (navy) with a gold top rail, and a faint glass edge above them.
+    boards = material("boards", lin(NAVY_LIT), rough=0.6)
+    rail = emission_material("rail", lin(GOLD), 1.0)
+    glass = emission_material("glass", lin(0x8FB0E0), 0.35)
+    verts, faces = [], []
+    for i, (x, y) in enumerate(rink):
+        verts += [(x, y, 0.0), (x, y, 1.0)]
+    for i in range(len(rink)):
+        j = (i + 1) % len(rink)
+        faces.append((2 * i, 2 * j, 2 * j + 1, 2 * i + 1))
+    link_mesh("boards", verts, faces, boards, smooth=False)
+    for name, z0, z1, mat in (("rail", 1.0, 1.15, rail), ("glass", 2.75, 2.85, glass)):
+        verts = []
+        for x, y in rink:
+            verts += [(x, y, z0), (x, y, z1)]
+        link_mesh(name, verts, faces, mat, smooth=False)
+    # The seating bowl: 14 tiers wrapping the far side and both ends (the stands under the camera are left out).
+    rng = random.Random(41)
+    a0, a1 = math.radians(-28), math.radians(208)
+    riser = material("riser", lin(0x061430), rough=0.9)
+    aisle = material("aisle", lin(0x24344F), rough=0.9)
+    seats = [material(f"seat{k}", lin(c), rough=0.85) for k, c in enumerate((0x0B2650, 0x0E2C5C, 0x09204A, 0x123366))]
+    ribbon = emission_material("ribbon", lin(GOLD), 0.9)
+    step, rise = 3.2, 1.9
+    UPPER, RIBBON_END = 5, math.radians(100)
+    for k in range(14):
+        rx, ry = hx + 6 + step * k, hy + 6 + step * k
+        z = 1.2 + rise * k + (2.5 if k >= UPPER else 0.0)  # the upper level starts above a concourse
+        z_prev = 1.2 + rise * (k - 1) + (2.5 if k - 1 >= UPPER else 0.0) if k else 0.0
+        if k == UPPER:
+            # The ribbon board runs round the right and far side only: none behind the title on the left.
+            arc_wall("ribbonboard", cx, cy, rx, ry, z_prev, z_prev + 1.4, a0, RIBBON_END, ribbon)
+            fade = math.radians(36)
+            for j in range(24):  # dims out towards the left rather than stopping
+                ea = RIBBON_END + fade * j / 24
+                m = emission_material(f"ribbon{j}", lin(GOLD), 0.9 * (1 - (j + 1) / 25) ** 1.5)
+                arc_wall(f"ribbonfade{j}", cx, cy, rx, ry, z_prev, z_prev + 1.4, ea, ea + fade / 24, m, seg=3)
+            arc_wall("ribbonrest", cx, cy, rx, ry, z_prev, z_prev + 1.4, RIBBON_END + fade, a1, riser)
+            arc_wall("concourse", cx, cy, rx, ry, z_prev + 1.4, z, a0, a1, riser)
+        else:
+            arc_wall(f"riser{k}", cx, cy, rx, ry, z_prev, z, a0, a1, riser)
+        sec, gap = math.radians(13.0), math.radians(1.1)
+        a = a0
+        while a < a1:
+            b = min(a + sec, a1)
+            arc_tread(f"t{k}", cx, cy, (rx, ry), (rx + step, ry + step), z, a, b, seats[rng.randrange(4)], seg=6)
+            if b < a1:
+                arc_tread(f"a{k}", cx, cy, (rx, ry), (rx + step, ry + step), z, b, min(b + gap, a1), aisle, seg=1)
+            a = b + gap
+    top_r = (hx + 6 + step * 14, hy + 6 + step * 14)
+    z_top = 1.2 + rise * 13 + 2.5  # tier 13 is in the upper level
+    arc_wall("backwall", cx, cy, top_r[0], top_r[1], z_top, z_top + 14, a0, a1, material("wall", lin(0x030B1C)))
+    # Lights over the ice (out of frame) and a scoreboard hanging above centre ice whose faces glow navy and gold.
+    for lx in (-18, -6, 6, 18):
+        for ly in (-6, 6):
+            lamp = bpy.data.lights.new("area", "AREA")
+            lamp.energy, lamp.color, lamp.size = 3500.0, (1.0, 0.96, 0.9), 6.0
+            ob = bpy.data.objects.new("area", lamp)
+            ob.location = (cx + lx, cy + ly, 30.0)
+            s.collection.objects.link(ob)
+    # Soft navy fill from the roof, so the seating bowl reads in the dark.
+    fill = bpy.data.lights.new("fill", "AREA")
+    fill.energy, fill.color, fill.size = 6.0e4, (0.55, 0.68, 1.0), 140.0
+    fob = bpy.data.objects.new("fill", fill)
+    fob.location = (cx, cy + 10, 60.0)
+    s.collection.objects.link(fob)
+    board_glow = emission_material("jumbo", lin(0x2A5AB0), 4.0)
+    box("jumbo", (cx, cy, 34.0), (10.0, 7.0, 6.0), board_glow)
+    box("jumbo_ring", (cx, cy, 30.6), (10.4, 7.4, 0.6), emission_material("jumbo_gold", lin(GOLD), 6.0))
+    point_lamp((cx, cy, 26.0), 2.0e4, lin(0xFFD27A), radius=4)
 
 
 MOTIFS = {
@@ -835,7 +982,8 @@ MOTIFS = {
     "STARS": (scene_stars, (0x04060B, 0x0A1020)),
     "MOON_BATS": (scene_moon_bats, (0x120A1E, 0x3A1A12)),
     "SNOW": (scene_snow, (0x0A2418, 0x1B4A36)),
-    "GAME": (scene_game, (0x0A1220, 0x1A2638)),
+    "GAME": (scene_game, (0x2A0707, 0x8A0000)),
+    "ARENA": (scene_arena, (0x041E42, 0x0B3169)),
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -903,6 +1051,26 @@ def contrast_check(name, img):
             ok &= ratio >= 4.5
             report.append(f"{zname}/{cname} {ratio:.1f}")
     print(f"[{name}] contrast (99th percentile pixel): " + ", ".join(report))
+    return ok
+
+
+# Backdrop brightness after the app's black scrim (core GlanceTokens.backdropBrightness): 0.25 for every motif but
+# ARENA, whose art has no near-white pixel, so it can show more of its navy and gold at 0.33 (R3 exception, ADR 0008).
+BRIGHTNESS = {"ARENA": 0.33}
+
+
+def scrim_check(name, img):
+    """R3: the hero text keeps 7:1 over the brightest art pixel (99.9th percentile) at the motif's scrim brightness."""
+    b = BRIGHTNESS.get(name, 0.25)
+    lum = float(np.percentile(luminance(np.clip(img * b, 0, 1).reshape(-1, 3)), 99.9))
+    ok = True
+    report = []
+    for cname, c in (("text", TEXT), ("secondary", SECONDARY)):
+        lt = float(luminance(srgb(c)[None, :])[0])
+        ratio = (lt + 0.05) / (lum + 0.05)
+        ok &= ratio >= 7.0
+        report.append(f"{cname} {ratio:.1f}")
+    print(f"[{name}] at {b:.2f} brightness (99.9th percentile pixel): " + ", ".join(report))
     return ok
 
 
@@ -1053,6 +1221,8 @@ def main(argv):
         img = post(load_render(raw), top)
         if not contrast_check(name, img):
             failed.append(name)
+        if not scrim_check(name, img):
+            failed.append(name + " (scrim)")
         out8 = Image.fromarray(to_8bit(img, seed=len(name)))
         webp = os.path.join(args.out, f"hero_{name.lower()}.webp")
         out8.save(webp, "WEBP", quality=args.quality, method=6)
