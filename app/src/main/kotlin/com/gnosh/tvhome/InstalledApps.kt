@@ -69,6 +69,23 @@ class InstalledApps {
     companion object {
         private fun launcherIntent() = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
 
+        /**
+         * M7-F5: true when [pkg] has a TV launch intent (the same LEANBACK_LAUNCHER entry the tiles use; visible through
+         * the manifest's `<queries>`). Package manager call: off the main thread.
+         */
+        fun canLaunch(context: Context, pkg: String): Boolean =
+            runCatching { context.packageManager.getLeanbackLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+
+        /** The Watch pill: opens [pkg]'s TV launch intent in its own task (the tiles' path). False if gone or refused. */
+        fun launchPackage(context: Context, pkg: String): Boolean = try {
+            val i = context.packageManager.getLeanbackLaunchIntentForPackage(pkg)
+            if (i == null) false else { context.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }
+        } catch (e: ActivityNotFoundException) {
+            false
+        } catch (e: SecurityException) {
+            false
+        }
+
         /** Starts the app in its own task, so Back from it returns here. False if it is gone or refuses. */
         fun launch(context: Context, app: LauncherApp): Boolean = try {
             context.startActivity(launcherIntent().setClassName(app.packageName, app.activityName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

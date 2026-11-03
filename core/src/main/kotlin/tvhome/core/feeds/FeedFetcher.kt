@@ -30,6 +30,7 @@ class HttpFeedFetcher internal constructor(
     private val allowed: (HttpUrl) -> Boolean,
     timeoutMs: Long,
     customize: OkHttpClient.Builder.() -> Unit,
+    private val maxBody: (HttpUrl) -> Long = ::maxBodyFor,
     private val headers: (HttpUrl) -> Map<String, String> = ::headersFor,
 ) : FeedFetcher {
 
@@ -64,20 +65,20 @@ class HttpFeedFetcher internal constructor(
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) { cont.resume(null) }
                 override fun onResponse(call: Call, response: Response) {
-                    val text = try { response.use(::readCapped) } catch (_: Throwable) { null }
+                    val text = try { response.use { readCapped(it, maxBody(url)) } } catch (_: Throwable) { null }
                     cont.resume(text)
                 }
             })
         }
     }
 
-    private fun readCapped(response: Response): String? {
+    private fun readCapped(response: Response, max: Long): String? {
         if (!response.isSuccessful) return null
         val body = response.body ?: return null
-        if (body.contentLength() > MAX_BODY) return null
+        if (body.contentLength() > max) return null
         val source = body.source()
-        source.request(MAX_BODY + 1) // buffers up to the cap plus one byte, or to the end of the body
-        if (source.buffer.size > MAX_BODY) return null
+        source.request(max + 1) // buffers up to the cap plus one byte, or to the end of the body
+        if (source.buffer.size > max) return null
         return source.buffer.readUtf8()
     }
 
@@ -87,6 +88,16 @@ class HttpFeedFetcher internal constructor(
         /** Exactly these four hosts: weather, NHL schedule, ESPN schedule (M2f), NWS alerts (M7-B2). */
         val HOSTS: Set<String> = setOf("api.open-meteo.com", "api-web.nhle.com", "site.api.espn.com", "api.weather.gov")
         const val MAX_BODY = 512L * 1024
+        /**
+         * The ESPN team schedule carries about 50 KB per game (logos, venues, links): a 13-game season is over
+         * [MAX_BODY], so that one path (`.../teams/<id>/schedule`) may be larger. Nothing else is raised.
+         */
+        const val ESPN_SCHEDULE_MAX_BODY = 2L * 1024 * 1024
+        private val ESPN_SCHEDULE_PATH = Regex("/apis/site/v2/sports/football/college-football/teams/\\d{1,6}/schedule")
+
+        internal fun maxBodyFor(url: HttpUrl): Long =
+            if (url.host == "site.api.espn.com" && ESPN_SCHEDULE_PATH.matches(url.encodedPath)) ESPN_SCHEDULE_MAX_BODY else MAX_BODY
+
         const val TIMEOUT_MS = 10_000L
         const val USER_AGENT = "tvhome-hero/1"
 

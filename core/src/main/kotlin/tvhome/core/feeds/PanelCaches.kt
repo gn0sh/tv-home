@@ -19,19 +19,25 @@ internal object PanelCaches {
 
     private const val MAX_GAMES = 64
 
-    @Serializable class WeatherDto(val tempF: Int, val condition: String, val precipNow: String? = null, val nextPrecip: String? = null)
+    @Serializable class WeatherDto(
+        val tempF: Int, val condition: String, val precipNow: String? = null, val nextPrecip: String? = null,
+        val highF: Int? = null, val lowF: Int? = null, val highHour: Int? = null, val overnightLowF: Int? = null,
+    )
     @Serializable class GameDto(
         val team: String, val start: String, val opponent: String, val home: Boolean, val phase: String,
         val ownScore: Int? = null, val oppScore: Int? = null, val period: String? = null,
+        val networks: List<String> = emptyList(),
     )
 
     val weather: KSerializer<WeatherNow> = mapped(WeatherDto.serializer(),
-        { WeatherDto(it.tempF, it.condition, it.precipNow?.name, it.nextPrecip) },
+        { WeatherDto(it.tempF, it.condition, it.precipNow?.name, it.nextPrecip, it.highF, it.lowF, it.highHour, it.overnightLowF) },
         { d ->
             require(d.tempF in -100..150)
+            for (t in listOf(d.highF, d.lowF, d.overnightLowF)) require(t == null || t in -100..150)
+            require(d.highHour == null || d.highHour in 0..23)
             val precip = d.precipNow?.let { p -> Precip.entries.first { it.name == p } }
             val cond = if (d.condition.isEmpty()) "" else requireNotNull(Feeds.clean(d.condition))
-            WeatherNow(d.tempF, cond, precip, d.nextPrecip?.let { requireNotNull(Feeds.clean(it)) })
+            WeatherNow(d.tempF, cond, precip, d.nextPrecip?.let { requireNotNull(Feeds.clean(it)) }, d.highF, d.lowF, d.highHour, d.overnightLowF)
         })
 
     val alerts: KSerializer<AlertSet> = mapped(NwsAlerts.AlertSetDto.serializer(), NwsAlerts::toDto) {
@@ -40,7 +46,7 @@ internal object PanelCaches {
 
     /** Games for [teams] only; a game of a team no longer followed is dropped, not an error. */
     fun games(teams: List<TeamConfig>): KSerializer<List<TeamGame>> = mapped(ListSerializer(GameDto.serializer()),
-        { list -> list.map { (t, g) -> GameDto(t.key, g.start.toString(), g.opponent, g.home, g.phase.name, g.ownScore, g.oppScore, g.period) } },
+        { list -> list.map { (t, g) -> GameDto(t.key, g.start.toString(), g.opponent, g.home, g.phase.name, g.ownScore, g.oppScore, g.period, g.networks) } },
         { list ->
             require(list.size <= MAX_GAMES * teams.size.coerceAtLeast(1))
             list.mapNotNull { d ->
@@ -52,6 +58,7 @@ internal object PanelCaches {
                     Instant.parse(d.start), requireNotNull(Feeds.clean(d.opponent)), d.home,
                     GamePhase.entries.first { it.name == d.phase }, d.ownScore, d.oppScore,
                     d.period?.let { requireNotNull(Feeds.clean(it)) },
+                    d.networks.also { require(it.size <= GameInfo.MAX_NETWORKS) }.map { requireNotNull(Feeds.clean(it)) },
                 ))
             }
         })

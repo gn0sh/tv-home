@@ -35,6 +35,13 @@ data class WeatherNow(
     val condition: String,
     val precipNow: Precip?,
     val nextPrecip: String?,
+    /** Today's daily maximum and minimum (°F), when the document has them. */
+    val highF: Int? = null,
+    val lowF: Int? = null,
+    /** Local hour (0-23) of today's warmest hourly temperature; null when the hourly series is missing. */
+    val highHour: Int? = null,
+    /** Lowest hourly temperature of the coming (or current) night, 7 PM to 7 AM; null when the hours are not all there. */
+    val overnightLowF: Int? = null,
 ) {
     val chip: String
         get() {
@@ -54,13 +61,15 @@ object WeatherFeed {
     fun url(loc: Location): HttpUrl =
         ("https://api.open-meteo.com/v1/forecast" +
             "?latitude=${"%.2f".format(Locale.ROOT, loc.lat)}&longitude=${"%.2f".format(Locale.ROOT, loc.lon)}" +
-            "&current=temperature_2m,weather_code&hourly=weather_code" +
+            "&current=temperature_2m,weather_code&hourly=weather_code,temperature_2m" +
+            "&daily=temperature_2m_max,temperature_2m_min" +
             "&temperature_unit=fahrenheit&forecast_days=2&timezone=auto").toHttpUrl()
 
     /** Any missing or malformed required field is null ("no weather"), never an exception. */
     fun parse(raw: String): WeatherNow? = runCatching { parseUnsafe(raw) }.getOrNull()
 
     private fun parseUnsafe(raw: String): WeatherNow? {
+        if (NwsAlerts.depthOver(raw, MAX_DEPTH)) return null
         val root = json.parseToJsonElement(raw) as? JsonObject ?: return null
         val current = root["current"] as? JsonObject ?: return null
         val temp = current.number("temperature_2m") ?: return null
@@ -85,8 +94,58 @@ object WeatherFeed {
                 }
             }
         }
-        return WeatherNow(temp.roundToInt(), describe(code), precipNow, next)
+        val extra = timeOfDayFields(root, now)
+        return WeatherNow(temp.roundToInt(), describe(code), precipNow, next, extra.high, extra.low, extra.highHour, extra.overnightLow)
     }
+
+    private class Extra(val high: Int?, val low: Int?, val highHour: Int?, val overnightLow: Int?)
+
+    private fun temp(e: kotlinx.serialization.json.JsonElement?): Int? =
+        (e as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.takeIf { it in -100.0..150.0 }?.roundToInt()
+
+    /**
+     * Daily min/max for today and the hourly temperatures behind the morning arc and the overnight low. Every part is
+     * optional: a missing or malformed part is null and never fails the whole weather document.
+     */
+    private fun timeOfDayFields(root: JsonObject, now: LocalDateTime): Extra = runCatching {
+        val today = now.toLocalDate()
+        var high: Int? = null
+        var low: Int? = null
+        val daily = root["daily"] as? JsonObject
+        val days = daily?.get("time") as? JsonArray
+        if (days != null) {
+            val i = days.take(MAX_DAYS).indexOfFirst { (it as? JsonPrimitive)?.contentOrNull == today.toString() }
+            if (i >= 0) {
+                high = temp((daily["temperature_2m_max"] as? JsonArray)?.getOrNull(i))
+                low = temp((daily["temperature_2m_min"] as? JsonArray)?.getOrNull(i))
+            }
+        }
+        val hourly = root["hourly"] as? JsonObject
+        val times = hourly?.get("time") as? JsonArray
+        val temps = hourly?.get("temperature_2m") as? JsonArray
+        val byHour = HashMap<LocalDateTime, Int>()
+        if (times != null && temps != null) {
+            for (i in 0 until minOf(times.size, temps.size, MAX_HOURS)) {
+                val t = (times[i] as? JsonPrimitive)?.contentOrNull?.let { runCatching { LocalDateTime.parse(it) }.getOrNull() } ?: continue
+                byHour[t] = temp(temps[i]) ?: continue
+            }
+        }
+        val todays = byHour.filterKeys { it.toLocalDate() == today }
+        val peak = todays.maxByOrNull { it.value }
+        // The night in progress (before 7 AM) started yesterday evening; otherwise it starts tonight at 7 PM.
+        val nightStart = (if (now.hour < NIGHT_END) today.minusDays(1) else today).atTime(NIGHT_START, 0)
+        val from = maxOf(nightStart, now.truncatedTo(java.time.temporal.ChronoUnit.HOURS))
+        val nightEnd = nightStart.toLocalDate().plusDays(1).atTime(NIGHT_END, 0)
+        val hours = generateSequence(from) { it.plusHours(1) }.takeWhile { !it.isAfter(nightEnd) }.toList()
+        val night = hours.map { byHour[it] }
+        val overnight = if (night.isNotEmpty() && night.all { it != null }) night.filterNotNull().min() else null
+        Extra(high, low, peak?.key?.hour, overnight)
+    }.getOrDefault(Extra(null, null, null, null))
+
+    private const val MAX_DAYS = 16
+    private const val MAX_DEPTH = 32
+    private const val NIGHT_START = 19
+    private const val NIGHT_END = 7
 
     private const val MAX_HOURS = 96
 

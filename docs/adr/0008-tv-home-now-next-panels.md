@@ -120,7 +120,9 @@ safe margins. ux-designer may move numbers; the structure is fixed.
 - `QuietMode` flag in SharedPreferences (survives restart), toggled by the Quiet pill (last in focus order) and over
   adb/the PC remote through the provider. A remote key chord is left to ux: HOME, SEARCH and ASSIST never reach the app
   (PR #15 facts), and the remaining keys all have jobs.
-- Applied once, inside `homeGlance()` and `calendarTile()`: titles become "Busy", times stay. Turning Quiet on
+- Applied inside `homeGlance()`, `calendarTile()` and `screenModel(..., hideTitles)` (the full-screen calendar is covered too, decided in
+  review `quiet-calendar-fullscreen`); every title and spoken description goes through `QuietMode.title`: titles become "Busy", times stay.
+  While the stored Quiet value is still loading (null) callers treat it as on. Turning Quiet on
   discards a cached brief with `hadTitles`, and briefs made in Quiet carry no titles (template only, no call).
 - Test: with Quiet on, no fixture title substring appears in any string of `HomeGlance` or `CalendarTile`.
 

@@ -43,6 +43,16 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
         }
+        // CI emulator QA only (q1-debug-not-release): the release build (R8, minify, shrinkResources, the same proguard
+        // rules) made debuggable, so `run-as` can plant the M7 Q1/Q2 caches while R8's handling of the cache
+        // serializers is what gets tested. Debug-key signed, never the release key. Same applicationId: run-as and the
+        // provider authority need it. Built to apk/qa/, never published; the release checks and globs read apk/release/.
+        create("qa") {
+            initWith(getByName("release"))
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 
     compileOptions {

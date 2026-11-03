@@ -21,6 +21,7 @@ URI="content://$PKG.provision/calendar_url"
 MAX_COLD_MS=${MAX_COLD_MS:-2000}   # AC8
 MAX_REGRESSION_MS=${MAX_REGRESSION_MS:-300}   # AC8 baseline: PR median may exceed the merge base's by at most this
 BASE_APK=${BASE_APK:-}   # merge base's APK, same throwaway signer (pull requests); empty or missing = no comparison
+QA_BUILD_APK=${QA_BUILD_APK:-}   # the qa build (release + R8, debuggable) of the same code, used only by the M7 Q1/Q2 block (run-as cache planting)
 # Fake value that passes the validator. Built from parts so the full string is not in this file's text either.
 DUMMY_TOKEN="private-$(printf 'f%.0s' $(seq 1 32))"
 DUMMY_URL="https://calendar.google.com/calendar/ical/x%40example.com/$DUMMY_TOKEN/basic.ics"
@@ -164,7 +165,14 @@ final_scan() {
 }
 # idle-test-sticky: never leave the idle_test override on the device, whatever failed (the TV also expires it at 60 min).
 idle_cleanup() { timeout 30 adb shell content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true; }
-on_exit() { local rc=$?; idle_cleanup; declare -F m3_cleanup >/dev/null && m3_cleanup; final_scan || rc=1; exit $rc; }
+on_exit() {
+  local rc=$?
+  idle_cleanup
+  declare -F m3_cleanup >/dev/null && m3_cleanup
+  declare -F m7_offline >/dev/null && m7_offline off   # m7-dns-restore-on-exit: a failed Q1 must not leave DNS broken
+  final_scan || rc=1
+  exit $rc
+}
 trap on_exit EXIT
 
 step "device"
@@ -535,6 +543,10 @@ else
       fi
       pass "re-entry: Down from '$far' reached the Ask button"; key DPAD_UP; cur=$(focus_after re-entry)
       [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the Ask button did not reach the Calendar tile (now '$cur')" ;;
+    "Quiet mode"*|"Watch the game on "*)
+      # M7: the Watch and Quiet pills sit right-aligned in the dock band, so Down from a far-right tile may land there.
+      pass "re-entry: Down from '$far' reached a dock pill ('${cur%%|*}')"; key DPAD_UP; cur=$(focus_after re-entry)
+      [[ ${cur%%|*} == Calendar,* ]] || fail "re-entry: Up from the '${cur%%|*}' pill did not reach the Calendar tile (now '$cur')" ;;
     *) fail "re-entry: Down from '$far' did not reach the dock (focused node: '$cur')" ;;
   esac
   key DPAD_UP
@@ -546,8 +558,12 @@ else
   [[ -n $cur && ${cur%%|*} != "$far" ]] || fail "re-entry: Left after coming back did not move focus (now '${cur%%|*}')"
   back=${cur%%|*}
   pass "re-entry: Down, Up returned to '$far', and Left moved on to '$back'"
-  # Same through the Ask button: Down, Down, Up (to Calendar), Up (to the row), Right moves.
-  key DPAD_DOWN; key DPAD_DOWN
+  # Same through the Ask button: Down, Down, Up (to Calendar), Up (to the row), Right moves. A first Down that lands on
+  # the M7 Watch or Quiet pill goes Up to Calendar first (Up from a pill is set to Calendar).
+  key DPAD_DOWN
+  cur=$(focus_after re-entry)
+  case ${cur%%|*} in "Quiet mode"*|"Watch the game on "*) key DPAD_UP ;; esac
+  key DPAD_DOWN
   cur=$(focus_after re-entry)
   if [[ -z ${cur%%|*} ]]; then  # the Ask button hides focus from uiautomator: confirm with OK, then Back
     key DPAD_CENTER; sleep 1
@@ -729,10 +745,79 @@ m3_restore() {
   else sh_ settings put secure enabled_accessibility_services "$a11y_before" >/dev/null 2>&1 || true; fi
   sh_ settings put secure accessibility_enabled "$on_before" >/dev/null 2>&1 || true
 }
+# m3-launcher-dialog: twice (PR #21's run and c46545e's, each about 11 min after boot) a Home press brought up the
+# launcher's own com.google.android.tvlauncher/.dialog.ShowDialogsActivity, in the launcher's task, instead of its
+# home activity. HomeWatch acts only on the home activity class, so it leaves that dialog alone, on purpose: it is the
+# TV's own prompt, and on Brian's TV he sees it on Home, dismisses it with Back, and the launcher's home coming back
+# is what redirects. So QA treats it as the launcher's, not ours: each M3 Home press goes through m3_home, which on
+# that dialog records what it shows (text, the launcher task), dismisses it with Back, records what came up, and
+# repeats the press once from the same starting point. Every check still runs against a press without the dialog; the
+# dialog twice in a row, or more than 3 times in M3, fails.
+LAUNCHER_DIALOG=".dialog.ShowDialogsActivity"
+m3_dialogs=0
+launcher_dialog_up() { resumed | head -1 | grep -qF "$LAUNCHER_DIALOG"; }
+record_launcher_dialog() { # $1 = label
+  local xml; xml=$(ui_text)
+  printf '%s\n' "$xml" > "$OUT/ui-launcher-dialog-$m3_dialogs.xml"
+  echo "---- m3-launcher-dialog #$m3_dialogs ($1): on screen"
+  grep -oE '(text|content-desc|resource-id)="[^"]+"' <<<"$xml" | sort -u | head -40 || true
+  echo "---- m3-launcher-dialog #$m3_dialogs: dumpsys activity activities, launcher task"
+  sh_ dumpsys activity activities | tr -d '\r' \
+    | awk '/^ *\* Task\{/{t=($0 ~ /tvlauncher|type=home/)} t' | grep -vE 'Intent \{.*(extras|dat=)' | head -60 || true
+}
+dismiss_launcher_dialog() { # $1 = label
+  m3_dialogs=$((m3_dialogs + 1))
+  record_launcher_dialog "$1"
+  (( m3_dialogs <= 3 )) || fail "m3-launcher-dialog: ShowDialogsActivity came up $m3_dialogs times in M3; not a one-off prompt"
+  sh_ input keyevent KEYCODE_BACK; sleep 3
+  launcher_dialog_up && fail "m3-launcher-dialog: Back did not dismiss ShowDialogsActivity ($1)"
+  note "m3-launcher-dialog #$m3_dialogs ($1): dismissed with Back; then on top: $(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1)$(in_front && echo ' (the dashboard: the launcher home coming back redirected)')"
+}
+m3_home() { # $1 = settle seconds; the rest = what sets the press up again before the one retry
+  local wait=$1; shift
+  sh_ input keyevent KEYCODE_HOME; sleep "$wait"
+  launcher_dialog_up || return 0
+  dismiss_launcher_dialog "${FUNCNAME[1]}:${BASH_LINENO[0]}"
+  sleep 4   # outside the double-press window of any redirect the dismissal caused
+  if (( $# )); then "$@"; fi
+  sh_ input keyevent KEYCODE_HOME; sleep "$wait"
+  if launcher_dialog_up; then record_launcher_dialog retry; fail "m3-launcher-dialog: ShowDialogsActivity came back on the retried Home press"; fi
+  return 0
+}
+# Retry setups (m3-retry-precondition): each re-asserts the starting point the original press had.
+m3_dash() { # the dashboard in front again (an app shown: ends a stay)
+  sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
+  in_front || fail "m3 retry setup: the dashboard did not come to the front ($(resumed | head -1))"
+}
+m3_other() { # another app in front: not the dashboard, not the TV's own home or its dialog
+  local top
+  other_app
+  top=$(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1)
+  [[ -n $top && ${top%%/*} != "$PKG" && ${top%%/*} != "${stock_pkg:-com.google.android.tvlauncher}" ]] \
+    || fail "m3 retry setup: Settings is not in front ($top)"
+}
+m3_refocus() { # dashboard with focus moved off the first tile, as before the focus check
+  local m
+  m3_dash; key DPAD_RIGHT; key DPAD_RIGHT
+  m=$(focus_after m3)
+  [[ -n ${m%%|*} && ${m%%|*} != "$start_name" ]] || fail "m3 retry setup: Right x2 did not move focus off '$start_name'"
+}
+m3_full() { # the full-screen calendar showing, as before the Home-from-full-screen check
+  m3_dash; key DPAD_DOWN; key DPAD_CENTER; sleep 2
+  expect_text "m3-full-retry" "Calendar full screen"
+}
+m3_idle_to() { # dashboard awake, then $1 s of idle_test time, and the state that the original press started from
+  local t
+  m3_dash
+  [[ $(idle_of) == ACTIVE ]] || { key DPAD_RIGHT; sleep 1; }   # a key wakes (F4); any focus move is harmless here
+  t=$(date +%s); sleep_until "$t" "$1"
+  if (( $1 >= 60 )); then black_shown || fail "m3-idle: NEAR_BLACK not reached before the retried Home check"
+  else [[ $(idle_of) == DIM ]] || fail "m3-idle: DIM not reached before the retried Home check"; fi
+}
 # If a check below fails mid-step, put the emulator back (m3-dirty-on-fail), in case it is reused.
 m3_dirty=1
 m3_cleanup() { [[ -n ${m3_dirty:-} ]] && m3_restore; return 0; }
-other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+other_app; m3_home 3 m3_other
 in_front && fail "m3: as installed, Home opened the dashboard (the Home watch must be off until turned on)"
 stock_pkg=$(resumed | head -1 | grep -o '[a-z0-9_.]*/[A-Za-z0-9_.]*' | head -1); stock_pkg=${stock_pkg%%/*}
 [[ -n $stock_pkg ]] || fail "m3: could not read the TV's own home package (test setup)"
@@ -747,7 +832,7 @@ a11y_state() { sh_ dumpsys accessibility | tr -d '\r' | grep -iE 'Bound services
 sh_ dumpsys accessibility | tr -d '\r' | grep -q "HomeWatchService" || { a11y_state; fail "m3: the Home watch was not bound after turning it on"; }
 other_app
 in_front && fail "m3: Settings did not come to the front (test setup)"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 m3_other
 if ! in_front; then
   a11y_state
   fail "m3: Home from another app did not bring the dashboard to the front ($(resumed | head -1))"
@@ -756,13 +841,13 @@ pass "m3: Home from another app opens the dashboard"
 # F4: the Home redirect works from DIM and from NEAR_BLACK, and comes back awake (idle_test 30 s still set).
 m3t=$(date +%s); sleep_until "$m3t" 36
 st=$(idle_of); [[ $st == DIM ]] || fail "m3-idle: DIM not reached before the Home check (state '$st')"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 m3_idle_to 36
 in_front || fail "m3-idle: Home from DIM did not bring the dashboard back ($(resumed | head -1))"
 st=$(idle_of); [[ $st == ACTIVE ]] || fail "m3-idle: after Home from DIM the state is '$st', expected ACTIVE"
 pass "m3-idle: Home from DIM redirects and wakes the screen"
 m3t=$(date +%s); sleep_until "$m3t" 66
 black_shown || fail "m3-idle: NEAR_BLACK not reached before the Home check"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 m3_idle_to 66
 in_front || fail "m3-idle: Home from NEAR_BLACK did not bring the dashboard back ($(resumed | head -1))"
 black_shown && fail "m3-idle: after Home from NEAR_BLACK the screen is still black"
 pass "m3-idle: Home from NEAR_BLACK redirects and wakes the screen"
@@ -771,16 +856,19 @@ sleep 4   # outside the double-press window before the next check
 # The way out (home-recovery-unreachable): Home again soon after the redirect keeps the TV's own home, with its
 # Settings, until another app comes up (HomeRedirect in :core has the timing cases).
 # A fresh redirect, then Home again about a second later (inside the 2.5 s window).
-sh_ input keyevent KEYCODE_HOME; sleep 1
-in_front || fail "m3: the first Home of the double press did not redirect (m3-qa-double-vacuous; $(resumed | head -1))"
-sh_ input keyevent KEYCODE_HOME; sleep 4
+m3_first_of_double() {
+  m3_home 1 m3_dash
+  in_front || fail "m3: the first Home of the double press did not redirect (m3-qa-double-vacuous; $(resumed | head -1))"
+}
+m3_first_of_double
+m3_home 4 eval 'm3_dash; m3_first_of_double'
 in_front && fail "m3: a quick second Home did not leave the TV's own home showing"
 resumed | head -1 | grep -qF "$stock_pkg/" || fail "m3: a quick second Home did not show the TV's own home ($(resumed | head -1))"
 pass "m3: Home twice quickly leaves the TV's own home (and its Settings) showing"
-sh_ input keyevent KEYCODE_HOME; sleep 4
+m3_home 4
 in_front && fail "m3: Home on the TV's own home during a stay brought the dashboard back"
 pass "m3: further Home presses keep the TV's own home until an app is opened"
-other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+other_app; m3_home 3 m3_other
 in_front || fail "m3: after leaving the TV's own home, Home did not open the dashboard again ($(resumed | head -1))"
 pass "m3: once another app has been opened, Home opens the dashboard again"
 if (( napps >= 2 )); then
@@ -788,24 +876,25 @@ if (( napps >= 2 )); then
   key DPAD_RIGHT; key DPAD_RIGHT
   moved=$(focus_after m3)
   [[ -n ${moved%%|*} && ${moved%%|*} != "$start_name" ]] || fail "m3: Right x2 did not move focus off '$start_name' (test setup; m3-home-focus-vacuous)"
-  sh_ input keyevent KEYCODE_HOME; sleep 3
+  m3_home 3 m3_refocus
   cur=$(focus_after m3)
   [[ ${cur%%|*} == "$start_name" ]] || fail "m3: Home on the dashboard put focus on '${cur%%|*}', not the first tile '$start_name'"
   pass "m3: Home on the dashboard returns focus to the first tile ('$start_name')"
 fi
-sh_ input keyevent KEYCODE_HOME; sleep 3   # focus back on the first tile, as before Down in M2b
+m3_home 3 m3_dash   # focus back on the first tile, as before Down in M2b
 key DPAD_DOWN; key DPAD_CENTER; sleep 2   # open the full-screen calendar (Down reaches the dock)
 expect_text "m3-full" "Calendar full screen"
-sh_ input keyevent KEYCODE_HOME; sleep 3
+m3_home 3 m3_full
 in_front || fail "m3: Home from a full screen left the app"
 ui_text | grep -q 'content-desc="Calendar full screen"' && fail "m3: Home from the full-screen calendar did not return to the home row"
 pass "m3: Home from the full-screen calendar returns to the home row"
 m3_restore
 m3_dirty=""
 sleep 2
-other_app; sh_ input keyevent KEYCODE_HOME; sleep 3
+other_app; m3_home 3 m3_other
 in_front && fail "m3: after rollback, Home still opens the dashboard"
 pass "m3: rollback (Home watch off, settings restored) gives Home back to the TV"
+echo "m3-launcher-dialog: ShowDialogsActivity dismissed $m3_dialogs time(s) in M3"
 no_app_crash_yet "m3"
 
 step "AC6 provision the dummy URL over stdin (content write, scripts/provision.sh)"
@@ -842,17 +931,125 @@ m7_relog() { # restart the background logcat stream (appending) after adbd resta
   LOGCAT_PID=$!
 }
 step "M7 Q1: hero shows the next event with a countdown and a severe-alert override (planted caches, network off)"
-# Release APK, so no run-as: the caches are planted as root, which only some emulator images allow. Without root this
-# step is NOT VERIFIED and the JVM tests (NowNextTest, HomeGlanceTest) stand in.
-m7_root=""
-if a root 2>&1 | tr -d '\r' | grep -qiE 'restarting|already running as root'; then
-  a wait-for-device; sleep 2
-  [[ $(sh_ id -u | tr -d '\r') == 0 ]] && m7_root=1
-  m7_relog   # adbd restarted, which ends the logcat stream
+# The release APK has no cache-planting path and is not debuggable, so the caches are planted one of two ways:
+#  runas (primary): the app job's qa APK (QA_BUILD_APK: the release build with R8, made debuggable, debug key, same
+#    applicationId) replaces
+#    the release app for Q1 and Q2 only, and `run-as` writes into its no_backup dir. The android-tv API 34 image is a
+#    user build without adb root, so CI takes this route.
+#  root (fallback, images that allow adb root): the release app's files are written as root.
+# Neither works: Q1 fails, never only a warning. The release APK is reinstalled (and the dummy URL re-provisioned)
+# afterwards, so every later step runs against release.
+m7_mode=""; m7_why=""
+data=/data/user/0/$PKG/no_backup; uid=""
+m7_install() { # $1 = apk, $2 = label. A different signer means uninstall first, which wipes the app's data.
+  local out
+  network on   # clears the old uid's deny before the uid can change
+  a uninstall "$PKG" >/dev/null 2>&1 || true
+  out=$(a install --no-incremental -r -g "$1" 2>&1 | tr -d '\r' || true)
+  grep -q 'Success' <<<"$out" || { m7_why="installing the $2 APK failed ($out)"; return 1; }
+  PROVISION_VALUE="$DUMMY_URL" scripts/provision.sh | tr -d '\r' > "$OUT/provision-m7-$2.txt" || true
+  grep -q '^Saved\.$' "$OUT/provision-m7-$2.txt" || { m7_why="re-provisioning the dummy URL on the $2 APK failed"; return 1; }
+}
+m7_put() { # $1 = path under no_backup, content on stdin; read back so a silent write failure cannot pass
+  if [[ $m7_mode == runas ]]; then
+    a shell "run-as $PKG sh -c 'cat > no_backup/$1'" || fail "m7: run-as write of $1 failed"
+    [[ $(sh_ "run-as $PKG sh -c 'test -s no_backup/$1 && echo ok'" | tr -d '\r') == ok ]] || fail "m7: $1 is empty after the run-as write"
+  else
+    a shell "cat > $data/$1" || fail "m7: root write of $1 failed"
+    sh_ chown "$uid:$uid" "$data/$1"; sh_ chmod 600 "$data/$1"; sh_ restorecon "$data/$1" >/dev/null 2>&1 || true
+    [[ $(sh_ "test -s $data/$1 && echo ok" | tr -d '\r') == ok ]] || fail "m7: $1 is empty after the root write"
+  fi
+}
+m7_rm() { # paths under no_backup
+  local f
+  for f in "$@"; do
+    if [[ $m7_mode == runas ]]; then sh_ "run-as $PKG rm -f no_backup/$f" || true; else sh_ rm -f "$data/$f" || true; fi
+  done
+}
+# Offline for Q1/Q2 (qa-q1-live-overwrite): this image has no per-package networking command, so `network off` leaves
+# the app online, and the first alerts fetch (due at once) replaces the planted Tornado Warning with the real, empty NWS
+# answer, in memory and on disk (correct per ADR 0008; LiveFeedsPanelsTest.plantedQaAlertCacheShowsOffline...).
+# svc wifi/data and airplane mode do not take the wired default network down (first CI run), so Q1 uses a global
+# setting the shell may write: Private DNS in strict mode with a resolver host that cannot resolve, which fails every
+# hostname lookup for every app (the feeds use hostnames only). Confirmed below by lookups of each feed host from the
+# shell, and afterwards by the app itself: no weather fetch landed and the planted alerts file is unchanged.
+M7_FEED_HOSTS="api.weather.gov api.open-meteo.com api-web.nhle.com site.api.espn.com calendar.google.com"
+m7_dns_mode=""; m7_dns_spec=""; m7_offline_on=""
+m7_offline() { # on|off
+  local h out i ok
+  if [[ $1 == off ]]; then
+    [[ -n $m7_offline_on ]] || return 0
+    if [[ -z $m7_dns_spec || $m7_dns_spec == null ]]; then sh_ settings delete global private_dns_specifier >/dev/null 2>&1 || true
+    else sh_ settings put global private_dns_specifier "$m7_dns_spec" || true; fi
+    if [[ -z $m7_dns_mode || $m7_dns_mode == null ]]; then sh_ settings delete global private_dns_mode >/dev/null 2>&1 || true
+    else sh_ settings put global private_dns_mode "$m7_dns_mode" || true; fi
+    m7_offline_on=""
+    echo "m7 offline: Private DNS restored (mode=${m7_dns_mode:-default})"
+    return 0
+  fi
+  m7_dns_mode=$(sh_ settings get global private_dns_mode | tr -d '\r')
+  m7_dns_spec=$(sh_ settings get global private_dns_specifier | tr -d '\r')
+  sh_ settings put global private_dns_specifier qa-offline.invalid
+  sh_ settings put global private_dns_mode hostname
+  m7_offline_on=1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    ok=1
+    for h in $M7_FEED_HOSTS; do
+      out=$(sh_ ping -c 1 -W 2 "$h" 2>&1 | tr -d '\r' || true)
+      # A lookup failure must be shown, not inferred: a missing ping or a refused ICMP would also print no address.
+      grep -qiE 'unknown host|bad address|name or service not known|no address associated' <<<"$out" || { ok=""; break; }
+    done
+    [[ -n $ok ]] && break
+    sleep 2
+  done
+  [[ -n $ok ]] || fail "m7 offline: no lookup failure shown for $h with Private DNS strict to an unresolvable host ($out); Q1 cannot be offline"
+  pass "m7 offline: no feed host resolves (Private DNS strict, unresolvable resolver host)"
+}
+m7_ls() { # file names, sizes and stamps under no_backup; never file contents except the QA-planted alerts envelope
+  if [[ $m7_mode == runas ]]; then sh_ "run-as $PKG ls -l no_backup no_backup/panels" 2>&1 | tr -d '\r' || true
+  else sh_ ls -l "$data" "$data/panels" 2>&1 | tr -d '\r' || true; fi
+}
+m7_cat() { # $1 = path under no_backup
+  if [[ $m7_mode == runas ]]; then sh_ "run-as $PKG cat no_backup/$1" 2>/dev/null | tr -d '\r' || true
+  else sh_ cat "$data/$1" 2>/dev/null | tr -d '\r' || true; fi
+}
+m7_diag() { # on a hero failure: what the hero showed and what is on disk (QA data only; no secrets live in no_backup)
+  echo "---- m7 diagnostics: hero nodes in the dump"
+  grep -oE '(content-desc="Hero [^"]*"|resource-id="hero_[^"]*")' <<<"${ui:-}" || echo "(no hero nodes)"
+  echo "---- m7 diagnostics: run-as ls -l no_backup"; m7_ls
+  echo "---- m7 diagnostics: panels/alerts.json (QA-planted envelope or the app's rewrite)"; m7_cat panels/alerts.json | head -c 600; echo
+  echo "---- m7 diagnostics: private_dns_mode=$(sh_ settings get global private_dns_mode | tr -d '\r')"
+}
+m7_fail() { m7_diag; fail "$@"; }
+m7_swapped=""
+if [[ -z $QA_BUILD_APK || ! -f $QA_BUILD_APK ]]; then
+  m7_why="no qa APK (QA_BUILD_APK='$QA_BUILD_APK')"
+elif m7_swapped=1; m7_install "$QA_BUILD_APK" qa; then
+  if [[ $(sh_ "run-as $PKG sh -c 'mkdir -p no_backup/panels && test -w no_backup/panels && echo ok'" 2>&1 | tr -d '\r') == ok ]]; then
+    m7_mode=runas
+    pass "m7: qa APK (release + R8, debuggable) installed for Q1; caches are planted with run-as"
+  else
+    m7_why="run-as $PKG does not work with the qa APK"
+  fi
 fi
-if [[ -z $m7_root ]]; then
-  warn "M7 hero countdown and alert override NOT VERIFIED on the emulator: adb root is not available on this image"
-else
+if [[ -z $m7_mode ]]; then
+  warn "m7: run-as route unavailable ($m7_why); trying adb root"
+  if [[ -n $m7_swapped ]]; then
+    m7_install "$APK" release || fail "m7: putting the release APK back failed: $m7_why"
+  fi
+  if a root 2>&1 | tr -d '\r' | grep -qiE 'restarting|already running as root'; then
+    a wait-for-device; sleep 2
+    [[ $(sh_ id -u | tr -d '\r') == 0 ]] && m7_mode=root
+    m7_relog   # adbd restarted, which ends the logcat stream
+  fi
+  [[ -n $m7_mode ]] || fail "m7: cannot plant the hero caches: neither run-as ($m7_why) nor adb root works on this image"
+  uid=$(sh_ stat -c %u "/data/user/0/$PKG" | tr -d '\r')
+  [[ $uid =~ ^[0-9]+$ ]] || fail "m7: could not read the app's uid ($uid)"
+  sh_ mkdir -p "$data/panels"; sh_ chown -R "$uid:$uid" "$data"; sh_ chmod -R u+rwX,go-rwx "$data"
+  sh_ restorecon -R "$data" >/dev/null 2>&1 || true
+  pass "m7: adb root works; caches are planted as root into the release app"
+fi
+{
   sh_ content insert --uri "content://$PKG.provision/location" --bind lat:d:36.53 --bind lon:d:-87.36 \
     || fail "m7: location insert refused"
   sh_ am force-stop "$PKG"
@@ -863,50 +1060,153 @@ else
   same_day=""; [[ $(TZ=$etz date -d '+50 minutes' +%F) == $(TZ=$etz date +%F) ]] && same_day=1
   now=$(iso now); ev=$(iso '+42 minutes'); evend=$(iso '+102 minutes'); until=$(iso '+90 minutes')
   ws=$(iso '-2 days'); we=$(iso '+3 days')
-  data=/data/user/0/$PKG/no_backup
-  uid=$(sh_ stat -c %u "/data/user/0/$PKG" | tr -d '\r')
-  [[ $uid =~ ^[0-9]+$ ]] || fail "m7: could not read the app's uid ($uid)"
   agenda='{"v":1,"fetchedAt":"'$now'","windowStart":"'$ws'","windowEnd":"'$we'","events":[{"uid":"qa-1","title":"QA Dentist","start":{"kind":"at","value":"'$ev'"},"end":{"kind":"at","value":"'$evend'"}}]}'
   alerts='{"v":1,"at":"'$now'","data":{"alerts":[{"event":"Tornado Warning","severity":"Extreme","kind":"OVERRIDE","until":"'$until'"}]}}'
-  sh_ mkdir -p "$data/panels"
-  printf '%s' "$agenda" | a shell "cat > $data/agenda-cache.json"
-  printf '%s' "$alerts" | a shell "cat > $data/panels/alerts.json"
-  sh_ chown -R "$uid:$uid" "$data"; sh_ chmod -R u+rwX,go-rwx "$data"; sh_ restorecon -R "$data" >/dev/null 2>&1 || true
-  network off
+  printf '%s' "$agenda" | m7_put agenda-cache.json
+  printf '%s' "$alerts" | m7_put panels/alerts.json
+  network off   # no-op on images without per-package networking; m7_offline is what takes the app offline
+  m7_offline on
   sh_ am start -W -n "$MAIN" >/dev/null; sleep 8   # first frame, 1.5 s settle, cache load
-  ui=$(ui_text); [[ -n $ui ]] || fail "m7: uiautomator dump failed"
+  ui=$(ui_text); [[ -n $ui ]] || m7_fail "m7: uiautomator dump failed"
   printf '%s\n' "$ui" > "$OUT/ui-m7-hero.xml"
   a exec-out screencap -p > "$SHOT_DIR/tv-home-m7-hero.png" || true
   for n in "Hero now: " "Hero card: "; do
-    grep -qF "content-desc=\"$n" <<<"$ui" || fail "m7: no '$n...' node in the hero (planted caches not shown)"
+    grep -qF "content-desc=\"$n" <<<"$ui" || m7_fail "m7: no '$n...' node in the hero (planted caches not shown)"
   done
   grep -oE '<node [^>]*(content-desc="Hero (now|card): [^"]*"|resource-id="hero_idle_[A-Z_]+")[^>]*>' <<<"$ui" | grep -q 'focusable="true"' \
-    && fail "m7: a hero node is focusable (home-back-twice)"
+    && m7_fail "m7: a hero node is focusable (home-back-twice)"
   pass "m7: the hero's Now and card nodes are shown and none is focusable"
   if [[ -n $same_day ]]; then
     grep -qE 'content-desc="Hero now: [^"]*in (4[0-2]|3[0-9]) min"' <<<"$ui" \
-      || fail "m7: the hero does not show the next event with an 'in N min' countdown"
+      || m7_fail "m7: the hero does not show the next event with an 'in N min' countdown"
     pass "m7: the hero shows the next event with a countdown"
   else
     warn "m7: countdown check skipped: the planted event would fall after midnight in $etz (qa-midnight-flake)"
   fi
   grep -qE 'content-desc="Hero card: Tornado Warning until [^"]+"' <<<"$ui" \
-    || fail "m7: an active Tornado Warning does not take the context card"
+    || m7_fail "m7: an active Tornado Warning does not take the context card"
   pass "m7: a severe alert overrides the context card"
+  # The app could not fetch: weather (on, location set, due at once) wrote nothing, and the planted alerts are intact.
+  m7_cat panels/weather.json | grep -q . && m7_fail "m7: the app fetched weather during Q1, so it was not offline"
+  m7_cat panels/alerts.json | grep -qF '"at":"'"$now"'"' || m7_fail "m7: the planted alerts file was rewritten during Q1 (a fetch got through)"
+  pass "m7: the app could not fetch during Q1 (no weather cache written, planted alerts unchanged)"
   cur=$(focus_after m7)
   if (( napps >= 1 )); then
-    case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) fail "m7: with the hero full, first focus is '${cur%%|*}', not the apps row (R1)" ;; esac
+    case ${cur%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*) m7_fail "m7: with the hero full, first focus is '${cur%%|*}', not the apps row (R1)" ;; esac
     pass "m7: with the hero full, focus starts on the apps row ('${cur%%|*}')"
   fi
   sh_ input keyevent KEYCODE_BACK; sleep 2
-  in_front && fail "m7: one Back with the M7 hero full does not leave the app (home-back-twice)"
+  in_front && m7_fail "m7: one Back with the M7 hero full does not leave the app (home-back-twice)"
   pass "m7: one Back returns home (leaves the app)"
   no_app_crash_yet "m7 hero"
-  sh_ rm -f "$data/agenda-cache.json" "$data/panels/alerts.json"
+
+  # ---- M7 Q2 (F5, F6): Watch pill only on game day with a mapped, installed app; dock focus order; Quiet ----
+  yt=com.google.android.youtube.tv
+  m7_rm panels/alerts.json   # the game card, not the alert, for this part
+  if ! sh_ pm path "$yt" 2>/dev/null | grep -q '^package:'; then
+    warn "M7 Watch pill NOT VERIFIED on the emulator: $yt is not installed on this image"
+  elif [[ $(TZ=$etz date -d '+100 minutes' +%F) != $(TZ=$etz date +%F) ]]; then
+    warn "M7 Watch pill check skipped: a game 90 min out would fall after midnight in $etz"
+  else
+    q2_restart() { sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 8; }
+    watch_shown() { ui_text | grep -qF 'content-desc="Watch the game on YouTube"'; }
+    sh_ content insert --uri "content://$PKG.provision/watch" --bind networks:s:"YouTube=$yt" --bind defaults:s:predators=YouTube \
+      || fail "q2: watch map insert refused"
+    # No game: no pill, even with the map set.
+    m7_rm panels/games.json
+    q2_restart
+    watch_shown && fail "q2: the Watch pill shows with no game today"
+    pass "q2: no game today, no Watch pill"
+    gstart=$(iso '+90 minutes')
+    games='{"v":1,"at":"'$now'","data":[{"team":"predators","start":"'$gstart'","opponent":"QA Opponent","home":true,"phase":"UPCOMING"}]}'
+    printf '%s' "$games" | m7_put panels/games.json
+    q2_restart
+    watch_shown || fail "q2: an upcoming game today with a mapped, installed app shows no Watch pill"
+    pass "q2: game day with a mapped, installed app shows the Watch pill"
+    # Focus order (R1): apps row > Calendar > Ask > Watch > Quiet.
+    first=$(focus_after q2)
+    case ${first%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*|"Quiet mode"*|"Watch the game on "*) fail "q2: first focus is '${first%%|*}', not the apps row (R1)" ;; esac
+    key DPAD_DOWN; cur=$(focus_after q2)
+    [[ ${cur%%|*} == Calendar,* ]] || fail "q2: Down from the first tile reached '${cur%%|*}', not the Calendar tile"
+    key DPAD_DOWN; cur=$(focus_after q2)
+    # The Ask pill hides its focused node from uiautomator (it clears its semantics), so an empty node is confirmed by
+    # behaviour: OK opens the Ask view, and Back returns focus to the pill.
+    case ${cur%%|*} in
+      "${ASK_DESC_PREFIX}"*) ;;
+      "")
+        key DPAD_CENTER; sleep 1
+        expect_text "q2-ask" "Ask Claude full screen"
+        key BACK; sleep 1
+        in_front || fail "q2: Back from the Ask view left the app" ;;
+      *) fail "q2: Down from Calendar reached '${cur%%|*}', not the Ask pill" ;;
+    esac
+    pass "q2: Down from Calendar reached the Ask pill"
+    key DPAD_RIGHT; cur=$(focus_after q2)
+    [[ ${cur%%|*} == "Watch the game on YouTube" ]] || fail "q2: Right from Ask reached '${cur%%|*}', not the Watch pill"
+    key DPAD_RIGHT; cur=$(focus_after q2)
+    [[ ${cur%%|*} == "Quiet mode, off"* ]] || fail "q2: Right from Watch reached '${cur%%|*}', not the Quiet pill"
+    key DPAD_RIGHT; cur=$(focus_after q2)
+    [[ ${cur%%|*} == "Quiet mode, off"* ]] || fail "q2: the Quiet pill is not last in the dock band (Right moved to '${cur%%|*}')"
+    pass "q2: focus order apps row > Calendar > Ask > Watch > Quiet (last)"
+    # Quiet: OK hides titles on the next redraw, shows the marker, survives a restart; OK again restores.
+    ui=$(ui_text); grep -qF 'QA Dentist' <<<"$ui" || fail "q2: the planted event title is not on screen before Quiet (test setup)"
+    key DPAD_CENTER; sleep 2
+    ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-q2-quiet.xml"
+    grep -qF 'QA Dentist' <<<"$ui" && fail "q2: an event title is still on screen with Quiet on"
+    grep -qF 'resource-id="hero_quiet"' <<<"$ui" || fail "q2: no visible Quiet marker with Quiet on"
+    grep -qF 'Quiet mode, on' <<<"$ui" || fail "q2: the Quiet pill does not say on"
+    pass "q2: Quiet hides event titles on the next redraw and shows the marker"
+    # quiet-calendar-fullscreen: OK on the Calendar tile opens the full screen, which hides the title too.
+    key DPAD_UP   # Quiet pill -> Calendar (Up from a pill is set to Calendar)
+    cur=$(focus_after q2)
+    [[ ${cur%%|*} == Calendar,* ]] || fail "q2: could not reach the Calendar tile from the Quiet pill (now '${cur%%|*}')"
+    key DPAD_CENTER; sleep 2
+    ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-q2-quiet-calendar.xml"
+    grep -qF 'content-desc="Calendar full screen"' <<<"$ui" || fail "q2: OK on the Calendar tile did not open the full screen"
+    grep -qF 'QA Dentist' <<<"$ui" && fail "q2: the full-screen calendar shows an event title with Quiet on"
+    pass "q2: the full-screen calendar hides event titles with Quiet on"
+    key BACK; sleep 1
+    in_front || fail "q2: Back from the full-screen calendar left the app"
+    q2_restart
+    ui=$(ui_text)
+    grep -qF 'resource-id="hero_quiet"' <<<"$ui" && ! grep -qF 'QA Dentist' <<<"$ui" || fail "q2: Quiet did not survive a restart"
+    pass "q2: Quiet survives a restart"
+    sh_ content insert --uri "content://$PKG.provision/quiet" --bind on:b:false || fail "q2: quiet off over adb refused"
+    q2_restart
+    ui=$(ui_text); grep -qF 'QA Dentist' <<<"$ui" || fail "q2: titles did not come back with Quiet off"
+    pass "q2: Quiet off shows titles again"
+    # The map is required: without it, no pill on the same game day.
+    sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
+    q2_restart
+    watch_shown && fail "q2: the Watch pill shows with no watch map"
+    pass "q2: no watch map, no Watch pill"
+    sh_ input keyevent KEYCODE_BACK; sleep 2
+    in_front && fail "q2: one Back with the pills showing does not leave the app (home-back-twice)"
+    no_app_crash_yet "m7 q2"
+  fi
+  sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
+  sh_ content insert --uri "content://$PKG.provision/quiet" --bind on:b:false >/dev/null 2>&1 || true
+  m7_rm agenda-cache.json panels/alerts.json panels/games.json
   sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
+  m7_offline off
   network on
-  a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
-fi
+  if [[ $m7_mode == root ]]; then
+    a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
+  else
+    m7_install "$APK" release || fail "m7: putting the release APK back after Q1 failed: $m7_why"
+    # runas-revoke-check: the package manager must report the installed app as not debuggable (pkgFlags), not just
+    # "run-as failed" (which any error would satisfy).
+    pk=$(sh_ dumpsys package "$PKG" | tr -d '\r')
+    grep -qE '^ *pkgFlags=\[' <<<"$pk" || fail "m7: dumpsys package $PKG shows no pkgFlags after the release reinstall"
+    grep -E '^ *(pkgFlags|flags)=\[' <<<"$pk" | grep -q 'DEBUGGABLE' && fail "m7: the reinstalled $PKG is still DEBUGGABLE"
+    sh_ run-as "$PKG" true >/dev/null 2>&1 && fail "m7: run-as still works after reinstalling the release APK"
+    # m7-reinstall-state: the later steps need only the release app, the dummy URL (fetch attempt, final scan) and
+    # networking on; ProvisionActivity and the forced crash need nothing else. Location, watch map, Quiet, idle test and
+    # the Home watch were wiped with the qa app and are not used after this point.
+    sh_ content query --uri "$URI" | tr -d '\r' | grep -q 'configured=1' || fail "m7: the dummy URL is not configured on the reinstalled release APK"
+    pass "m7: release APK reinstalled; dumpsys shows it not debuggable; dummy URL configured; later steps run on release"
+  fi
+}
 
 step "fetch attempt with network on (dummy URL fails; error paths must not log it)"
 network on

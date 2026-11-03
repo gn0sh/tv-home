@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -59,6 +60,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
@@ -79,6 +81,7 @@ import tvhome.core.apps.LauncherApp
 import tvhome.core.assistant.AskCopy
 import tvhome.core.ui.CALENDAR_TILE_LABEL
 import tvhome.core.ui.CalendarTile
+import tvhome.core.feeds.WatchTarget
 import tvhome.core.ui.HomeTheme
 import tvhome.core.ui.IdleState
 import tvhome.core.ui.OledTokens
@@ -131,6 +134,9 @@ fun HomeScreen(
     layout: SavedLayout,
     onLayoutChange: (SavedLayout) -> Unit,
     entry: HomeEntry = HomeEntry(0, null),
+    /** M7-F6 Quiet mode; null until the stored value has loaded (titles stay hidden until then). */
+    quiet: Boolean? = false,
+    onQuietToggle: () -> Unit = {},
 ) {
     // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
     var open by rememberSaveable { mutableStateOf<String?>(null) }
@@ -257,6 +263,19 @@ fun HomeScreen(
     val idle = rememberIdleController()
     LaunchedEffect(entry.seq) { if (entry.seq != 0) idle.wake() }
     val idleState = idle.state.value
+    // M7-F5: the Watch pill's target, reported by the hero (homeGlance owns the rule); null hides the pill.
+    var watch by remember { mutableStateOf<WatchTarget?>(null) }
+    val watchPill = remember { FocusRequester() }
+    val quietPill = remember { FocusRequester() }
+    // watch-pill-focus-loss: the pill can vanish while focused (the game ended); focus moves on to Quiet, else Ask.
+    var watchFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(watch == null) {
+        if (watch == null && watchFocused) {
+            watchFocused = false
+            if (!focusSoon(quietPill)) focusSoon(askTile)
+        }
+    }
+    val context = LocalContext.current
     val shown = if (idleState == IdleState.DIM) theme.dimmed() else theme
     Box(
         Modifier
@@ -274,7 +293,7 @@ fun HomeScreen(
         // the second would reach the activity.
         // Composed only after the first frame (cold-start budget, AC8): the hero's theme, clock and receivers cost about
         // 0.8 s on the emulator's first frame; the tiles come first and the hero appears one frame later.
-        if (heroReady) HeroLayer(idle.state, idle.drift)
+        if (heroReady) HeroLayer(idle.state, idle.drift, quiet = quiet != false, onWatch = { watch = it })
         CompositionLocalProvider(LocalImageAlpha provides if (idleState == IdleState.DIM) OledTokens.DIM_IMAGE_ALPHA else 1f) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = Tokens.MARGIN_H_DP.dp, vertical = Tokens.MARGIN_V_DP.dp),
@@ -295,6 +314,29 @@ fun HomeScreen(
             contentAlignment = Alignment.BottomCenter,
         ) {
             AskButton(shown, askTile, up = calendar, onFocused = {}, onClick = { open = DOCK_ASK })
+        }
+        // R1 focus order in the dock band: Calendar > Ask > Watch (game day only) > Quiet (last). Right of the Ask pill,
+        // right-aligned in the same band; Up from either returns to the Calendar tile, like Ask.
+        Box(
+            Modifier.fillMaxSize().padding(end = Tokens.MARGIN_H_DP.dp, bottom = (Tokens.MARGIN_V_DP + dockPillInset(theme)).dp),
+            contentAlignment = Alignment.BottomEnd,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(PILL_GAP_DP.dp), verticalAlignment = Alignment.CenterVertically) {
+                watch?.let { w ->
+                    DockPill(
+                        shown, label = "Watch ${w.network}", description = WATCH_DESC_PREFIX + w.network,
+                        requester = watchPill, up = calendar, maxWidthDp = WATCH_PILL_MAX_DP, active = false,
+                        // The focus loss that comes with the pill's removal (watch already null) must not clear the flag.
+                        onFocus = { f -> if (f) watchFocused = true else if (watch != null) watchFocused = false },
+                    ) { InstalledApps.launchPackage(context, w.packageName) }
+                }
+                val on = quiet == true
+                DockPill(
+                    shown, label = if (on) "Quiet on" else "Quiet", description = if (on) QUIET_DESC_ON else QUIET_DESC_OFF,
+                    requester = quietPill, up = calendar, maxWidthDp = QUIET_PILL_MAX_DP, active = on,
+                    onClick = onQuietToggle,
+                )
+            }
         }
         }
         if (idleState == IdleState.NEAR_BLACK) NearBlackLayer(idle.drift)
@@ -635,6 +677,62 @@ private fun AskButton(theme: HomeTheme, requester: FocusRequester, up: FocusRequ
         Text(AskCopy.TILE_LABEL, color = color(theme.text), fontSize = Tokens.SECONDARY_SP.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
+
+/**
+ * A dock-band pill (M7 Watch and Quiet): focusable, OK clicks, same fill, ring and scale as the Ask pill. [active] marks
+ * a pill that is switched on (Quiet) with the focus-ring colour as its text. The description names it for TalkBack and
+ * the emulator QA.
+ */
+@Composable
+private fun DockPill(
+    theme: HomeTheme,
+    label: String,
+    description: String,
+    requester: FocusRequester,
+    up: FocusRequester,
+    maxWidthDp: Int,
+    active: Boolean,
+    onFocus: (Boolean) -> Unit = {},
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .height(ASK_BUTTON_H_DP.dp)
+            .widthIn(min = PILL_MIN_DP.dp, max = maxWidthDp.dp)
+            .graphicsLayer {
+                val s = if (focused) FOCUS_SCALE else 1f
+                scaleX = s; scaleY = s
+            }
+            .clip(shape)
+            .background(color(if (focused) theme.focusFill else theme.tile), shape)
+            .then(if (focused) Modifier.border(Tokens.RING_DP.dp, color(theme.focusRing), shape) else Modifier)
+            .focusRequester(requester)
+            .focusProperties { this.up = up }
+            .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label, color = color(if (active) theme.focusRing else theme.text), fontSize = Tokens.SECONDARY_SP.sp,
+            fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clearAndSetSemantics { },
+        )
+    }
+}
+
+/** Descriptions of the Watch and Quiet pills, read by the emulator QA check (scripts/ci/emulator-qa.sh). */
+const val WATCH_DESC_PREFIX = "Watch the game on "
+const val QUIET_DESC_ON = "Quiet mode, on. Event titles are hidden."
+const val QUIET_DESC_OFF = "Quiet mode, off. Turn on to hide event titles."
+
+private const val PILL_GAP_DP = 16
+private const val PILL_MIN_DP = 140
+private const val WATCH_PILL_MAX_DP = 240
+private const val QUIET_PILL_MAX_DP = 170
 
 private const val ASK_BUTTON_W_DP = 250
 private const val ASK_BUTTON_H_DP = 56

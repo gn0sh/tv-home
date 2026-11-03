@@ -73,6 +73,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import tvhome.core.feeds.FeedsSnapshot
 import tvhome.core.feeds.GameDay
+import tvhome.core.feeds.GamePhase
+import tvhome.core.feeds.WatchMap
+import tvhome.core.feeds.WatchTarget
 import tvhome.core.feeds.LiveFeeds
 import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelView
@@ -106,6 +109,16 @@ const val HERO_NOW_DESC_PREFIX = "Hero now: "
  */
 const val HERO_IDLE_TAG_PREFIX = "hero_idle_"
 
+/** Test tag of the Quiet marker in the top strip (uiautomator resource-id), read by the emulator QA check. */
+const val HERO_QUIET_TAG = "hero_quiet"
+
+/** The visible Quiet marker (spec M7-7.1). */
+const val QUIET_MARKER = "Quiet"
+
+private const val GAME_LIVE = "Live"
+private const val GAME_TODAY = "Today"
+private const val GAME_FINAL = "Final"
+
 /** Content description prefix of the context card, read by the emulator QA check. */
 const val HERO_CARD_DESC_PREFIX = "Hero card: "
 
@@ -117,10 +130,17 @@ const val HERO_CARD_DESC_PREFIX = "Hero card: "
  *
  * It owns the minute clock, so the countdown and the theme re-evaluate at each tick without recomposing the home
  * screen. [idle] dims the backdrop and text (DIM; NEAR_BLACK is drawn over everything by [NearBlackLayer]); [drift]
- * moves the top strip and the hero text, read in the layer phase only.
+ * moves the top strip and the hero text, read in the layer phase only. [quiet] (M7-F6) hides event titles in every
+ * string; [onWatch] reports the Watch pill's target (M7-F5) to the dock, which is outside the hero.
  */
 @Composable
-fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modifier = Modifier) {
+fun HeroLayer(
+    idle: State<IdleState>,
+    drift: State<DriftOffset>,
+    quiet: Boolean,
+    onWatch: (WatchTarget?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val now by rememberMinuteClock()
     val graph = remember(context) { (context.applicationContext as TvHomeApp).graph }
@@ -148,9 +168,14 @@ fun HeroLayer(idle: State<IdleState>, drift: State<DriftOffset>, modifier: Modif
     val is24h = DateFormat.is24HourFormat(context)
     val zone = ZoneId.systemDefault()
     val instant = Instant.now()
-    val glance = remember(now, snap, agenda, settings, is24h) {
-        homeGlance(GlanceInputs(instant, zone, is24h, snap, settings.switches, settings.hasLocation, agenda, settings.travel))
+    val glance = remember(now, snap, agenda, settings, is24h, quiet) {
+        // isInstalled reads a set built on IO (HeroSettings.read): no package manager call on the main thread.
+        homeGlance(GlanceInputs(
+            instant, zone, is24h, snap, settings.switches, settings.hasLocation, agenda, settings.travel,
+            quiet = quiet, watchMap = settings.watchMap, isInstalled = { it in settings.installed },
+        ))
     }
+    LaunchedEffect(glance.watch) { onWatch(glance.watch) }
     val weather = (view(snap.weather, PanelPolicies.WEATHER, settings.switches.weather, instant) as? PanelView.Shown)?.value
     val game = if (settings.switches.games) GameDay.select(snap.games?.value.orEmpty(), instant, zone) else null
     // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).
@@ -184,13 +209,22 @@ private const val FEEDS_START_DELAY_MS = 1500L
 private class HeroInk(val text: Int, val secondary: Int)
 
 /** The adb-set settings the hero reads ([FeedSettings]). */
-private data class HeroSettings(val switches: PanelSwitches, val hasLocation: Boolean, val travel: List<TravelRule>) {
+private data class HeroSettings(
+    val switches: PanelSwitches,
+    val hasLocation: Boolean,
+    val travel: List<TravelRule>,
+    val watchMap: WatchMap = WatchMap.EMPTY,
+    /** The watch map's packages that have a TV launch intent, checked once a minute on IO. */
+    val installed: Set<String> = emptySet(),
+) {
     companion object {
         val NONE = HeroSettings(PanelSwitches(), hasLocation = false, travel = emptyList())
 
-        /** Disk on first use: call off the main thread. */
+        /** Disk and package manager: call off the main thread. */
         fun read(context: Context) = HeroSettings(
             FeedSettings.switches(context), FeedSettings.location(context) != null, FeedSettings.travelRules(context),
+            FeedSettings.watchMap(context),
+            FeedSettings.watchPackages(context).filterTo(HashSet()) { InstalledApps.canLaunch(context, it) },
         )
     }
 }
@@ -235,6 +269,13 @@ private fun HeroTopStrip(g: HomeGlance, theme: HeroTheme, ink: HeroInk, dim: Boo
         Row(Modifier.weight(1f, fill = false), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
             Text(g.clock, color = rgb(ink.text), fontSize = GlanceTokens.CLOCK_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(g.date, color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, maxLines = 1)
+            if (g.quiet) {
+                // M7-F6: the visible Quiet marker (titles show as "Busy").
+                Text(
+                    QUIET_MARKER, color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, modifier = Modifier.testTag(HERO_QUIET_TAG),
+                )
+            }
             val badge = theme.badge
             if (badge != null && dim) {
                 // DIM: no bright pill, just the dim grey text (7:1 on the dimmed field, GlanceTokensTest).
@@ -311,16 +352,40 @@ private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier) {
                 )
                 card.until?.let { Text(it, color = rgb(c), fontSize = GlanceTokens.ALERT_UNTIL_SP.sp, maxLines = 1) }
             }
-            is ContextCard.Game -> Text(
-                card.line,
-                color = rgb(ink.text),
-                fontSize = GlanceTokens.CARD_SP.sp,
-                lineHeight = (GlanceTokens.CARD_SP + 6).sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.semantics { contentDescription = HERO_CARD_DESC_PREFIX + card.line },
-            )
+            is ContextCard.Game -> Column(
+                Modifier.semantics(mergeDescendants = true) { contentDescription = HERO_CARD_DESC_PREFIX + card.line },
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    when (card.phase) { GamePhase.LIVE -> GAME_LIVE; GamePhase.FINAL -> GAME_FINAL; GamePhase.UPCOMING -> GAME_TODAY },
+                    color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                )
+                Text(
+                    card.line,
+                    color = rgb(ink.text),
+                    fontSize = GlanceTokens.CARD_SP.sp,
+                    lineHeight = (GlanceTokens.CARD_SP + 6).sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // Spec M7-4.5: morning weather arc, or evening tomorrow's first event and the overnight low.
+            is ContextCard.TimeOfDay -> Column(
+                Modifier.semantics(mergeDescendants = true) {
+                    contentDescription = HERO_CARD_DESC_PREFIX + listOfNotNull(card.heading, card.text, card.detail).joinToString(" ")
+                },
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(card.heading, color = rgb(ink.secondary), fontSize = GlanceTokens.DATE_SP.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(
+                    card.text, color = rgb(ink.text), fontSize = GlanceTokens.CARD_SP.sp, lineHeight = (GlanceTokens.CARD_SP + 6).sp,
+                    fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                card.detail?.let {
+                    Text(it, color = rgb(ink.secondary), fontSize = GlanceTokens.HERO_LINE2_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
     }
 }

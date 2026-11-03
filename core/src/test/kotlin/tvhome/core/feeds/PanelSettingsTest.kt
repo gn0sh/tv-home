@@ -121,3 +121,43 @@ class IdleTestSettingTest {
         )) assertNull(SettingsValidator.idleTest(v), "$v")
     }
 }
+
+class WatchAndQuietSettingTest {
+    @Test fun watchMapAcceptsExactFormsOnly() {
+        assertEquals("ESPN+=com.espn.gtv" to "", SettingsValidator.watchMap(mapOf("networks" to "ESPN+=com.espn.gtv")))
+        assertEquals("ESPN+=com.espn.gtv;YouTube=com.google.android.youtube.tv" to "predators=ESPN+",
+            SettingsValidator.watchMap(mapOf("networks" to "ESPN+=com.espn.gtv;YouTube=com.google.android.youtube.tv", "defaults" to "predators=ESPN+")))
+        val refused = listOf<Map<String, Any?>>(
+            emptyMap(), mapOf("defaults" to "predators=ESPN+"),
+            mapOf("networks" to ""), mapOf("networks" to "ESPN+"), mapOf("networks" to "=com.espn.gtv"), mapOf("networks" to "ESPN+="),
+            mapOf("networks" to "ESPN+=com.espn.gtv;"), mapOf("networks" to "ESPN+=not a package"), mapOf("networks" to "ESPN+=nodots"),
+            mapOf("networks" to "ESPN+=com." + "a".repeat(100)), mapOf("networks" to "x".repeat(41) + "=com.a.b"),
+            mapOf("networks" to " ESPN+=com.a.b"), mapOf("networks" to "ES\nPN=com.a.b"),
+            mapOf("networks" to "ESPN+=com.a.b;espn+=com.c.d"),
+            mapOf("networks" to (1..33).joinToString(";") { "n$it=com.a.b$it" }),
+            mapOf("networks" to "ESPN+=com.a.b", "defaults" to "Predators=ESPN+"),
+            mapOf("networks" to "ESPN+=com.a.b", "defaults" to (1..9).joinToString(";") { "t$it=ESPN+" }),
+            mapOf("networks" to "ESPN+=com.a.b", "defaults" to "predators=ESPN+;predators=Peacock"),
+            mapOf("networks" to "ESPN+=com.a.b", "defaults" to 1), mapOf("networks" to 1),
+            mapOf("networks" to "ESPN+=com.a.b", "x" to "y"),
+        )
+        for (v in refused) assertNull(SettingsValidator.watchMap(v), "$v")
+        assertEquals(32, (1..32).joinToString(";") { "n$it=com.a.b$it" }.let { SettingsValidator.watchMap(mapOf("networks" to it)) }?.first?.split(';')?.size)
+    }
+
+    @Test fun storedWatchMapParsesToTheSameTargets() {
+        val (n, d) = SettingsValidator.watchMap(mapOf("networks" to "ESPN+=com.espn.gtv", "defaults" to "predators=ESPN+"))!!
+        assertEquals("WatchMap(1 networks, 1 defaults)", WatchMap.parse(n, d).toString())
+        assertEquals(setOf("com.espn.gtv", "com.google.android.youtube.tv"),
+            SettingsValidator.watchPackages("ESPN+=com.espn.gtv;YouTube=com.google.android.youtube.tv;Bad=not ok"))
+        assertEquals(emptySet<String>(), SettingsValidator.watchPackages(null))
+    }
+
+    @Test fun quietIsABooleanOnly() {
+        assertEquals(true, SettingsValidator.quiet(mapOf("on" to true)))
+        assertEquals(false, SettingsValidator.quiet(mapOf("on" to false)))
+        for (v in listOf<Map<String, Any?>>(mapOf("on" to "true"), mapOf("on" to 1), emptyMap(), mapOf("on" to true, "x" to 1))) {
+            assertNull(SettingsValidator.quiet(v), "$v")
+        }
+    }
+}

@@ -49,8 +49,11 @@ fun nextEvent(day: AgendaDay, now: Instant, zone: ZoneId): Pair<LocalTime, Strin
     return null
 }
 
-/** The one place that decides what the Calendar tile shows for each [AgendaState]. */
-fun calendarTile(state: AgendaState, now: Instant, zone: ZoneId, is24h: Boolean): CalendarTile {
+/**
+ * The one place that decides what the Calendar tile shows for each [AgendaState]. With [quiet] on the next event's
+ * title is "Busy" in both the text and the spoken description; the time stays (spec M7-7.2).
+ */
+fun calendarTile(state: AgendaState, now: Instant, zone: ZoneId, is24h: Boolean, quiet: Boolean = false): CalendarTile {
     val today = now.atZone(zone).toLocalDate()
     val date = formatDate(today)
     val spoken = "$CALENDAR_TILE_LABEL, ${formatDateLong(today)}"
@@ -65,7 +68,7 @@ fun calendarTile(state: AgendaState, now: Instant, zone: ZoneId, is24h: Boolean)
         val noteSpoken = note?.let { " $it." }.orEmpty()
         if (next == null) return CalendarTile(date, null, NO_MORE_TODAY, false, note, "$spoken. $NO_MORE_TODAY.$noteSpoken")
         val time = formatTime(next.first, is24h)
-        val title = next.second.trim().ifEmpty { Copy.NO_TITLE }
+        val title = QuietMode.title(next.second, quiet, max = Int.MAX_VALUE)
         return CalendarTile(date, time, title, false, note, "$spoken. Next: $time, $title.$noteSpoken")
     }
     return when (state) {

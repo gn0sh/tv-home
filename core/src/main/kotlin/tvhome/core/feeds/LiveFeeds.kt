@@ -84,7 +84,14 @@ class LiveFeeds(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val switches: () -> PanelSwitches = { PanelSwitches() },
     private val caches: ((String) -> CacheFile)? = null,
+    /** The schedule adapter per team; by default one [LeagueSchedule] per team with its season file in [caches]. */
+    private val sources: ((TeamConfig) -> ScheduleSource)? = null,
 ) {
+    private val scheduleSources = HashMap<String, ScheduleSource>()
+    private fun sourceFor(team: TeamConfig): ScheduleSource = scheduleSources.getOrPut(team.key) {
+        sources?.invoke(team) ?: GameSources.forTeam(team, fetcher, caches?.let { c -> runCatching { c(GameSources.cacheId(team)) }.getOrNull() }, io)
+    }
+
     private val state = MutableStateFlow(FeedsSnapshot())
     val snapshot: StateFlow<FeedsSnapshot> get() = state
 
@@ -162,8 +169,9 @@ class LiveFeeds(
         var allOk = true
         var anyOk = false
         for (team in teams) {
-            val games = fetcher.fetch(team.scheduleUrl(clock()))?.let { raw -> withContext(io) { Schedules.parse(team, raw, clock()) } }
-            if (games != null) { perTeam[team.key] = Stamped(games, clock()); anyOk = true } else allOk = false
+            val result = try { sourceFor(team).games(clock()) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Throwable) { null }
+            // Games from the season fallback are shown, but the refresh counts as failed so the back-off applies.
+            if (result != null) { perTeam[team.key] = Stamped(result.games, result.at ?: clock()); anyOk = true; if (result.fromFallback) allOk = false } else allOk = false
         }
         val held = teams.mapNotNull { t -> perTeam[t.key]?.let { t to it } }
         if (held.isEmpty()) return allOk

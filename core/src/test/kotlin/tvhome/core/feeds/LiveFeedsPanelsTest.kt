@@ -201,4 +201,24 @@ class LiveFeedsPanelsTest {
         runSuspend { lf.loadCaches() }
         assertSame(fresh, lf.snapshot.value.weather)
     }
+
+    /**
+     * Emulator Q1 root cause (job 125648452241): the alerts cache exactly as emulator-qa.sh plants it is shown while
+     * offline, but with the network up the first alerts fetch is due at once, and a good (empty) NWS answer replaces
+     * the planted Tornado Warning in memory and on disk. Correct per ADR 0008 (a fresh good fetch beats a cache), so Q1
+     * must really be offline.
+     */
+    @Test fun plantedQaAlertCacheShowsOfflineAndAGoodFetchReplacesIt() {
+        val until = t0.plus(Duration.ofMinutes(90))
+        val planted = """{"v":1,"at":"$t0","data":{"alerts":[{"event":"Tornado Warning","severity":"Extreme","kind":"OVERRIDE","until":"$until"}]}}"""
+        val offline = mapOf("weather" to MemFile(), "alerts" to MemFile(planted), "games" to MemFile())
+        runFor(2) { sl -> feeds(Fake(), files = offline, sleep = sl) }.also { lf ->
+            assertEquals(listOf("Tornado Warning"), lf.snapshot.value.alerts!!.value.alerts.map { it.event })
+        }
+        assertEquals(planted, offline.getValue("alerts").text, "a failed fetch leaves the planted cache alone")
+        val online = mapOf("weather" to MemFile(), "alerts" to MemFile(planted), "games" to MemFile())
+        val lf = runFor(2) { sl -> feeds(Fake(all().apply { put("api.weather.gov", emptyAlerts) }), files = online, sleep = sl) }
+        assertTrue(lf.snapshot.value.alerts!!.value.alerts.isEmpty(), "the good empty fetch replaced the planted alert")
+        assertFalse(online.getValue("alerts").text!!.contains("Tornado Warning"), "and overwrote the planted file")
+    }
 }

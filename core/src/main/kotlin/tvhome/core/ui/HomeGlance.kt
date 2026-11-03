@@ -2,9 +2,12 @@ package tvhome.core.ui
 
 import tvhome.core.feeds.FeedsSnapshot
 import tvhome.core.feeds.GameDay
+import tvhome.core.feeds.GamePhase
 import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.PanelView
+import tvhome.core.feeds.WatchMap
+import tvhome.core.feeds.WatchTarget
 import tvhome.core.feeds.view
 import tvhome.core.state.AgendaState
 import java.time.Instant
@@ -53,6 +56,9 @@ data class GlanceInputs(
     val travel: List<TravelRule> = emptyList(),
     val brief: String? = null,
     val quiet: Boolean = false,
+    /** Network name to app, and whether an app is installed (both read on the caller's thread; keep them cheap). */
+    val watchMap: WatchMap = WatchMap.EMPTY,
+    val isInstalled: (String) -> Boolean = { false },
 )
 
 /**
@@ -68,6 +74,8 @@ data class HomeGlance(
     val brief: String?,
     val quiet: Boolean,
     val items: Set<GlanceItem>,
+    /** The Watch pill (dock band): today's live or upcoming game, an app mapped for it, and that app installed. Else null. */
+    val watch: WatchTarget? = null,
 ) {
     override fun toString(): String = "HomeGlance($clock, $date, chip=$chip, $nowNext, card=${card?.javaClass?.simpleName}, items=$items)"
 }
@@ -89,7 +97,9 @@ fun homeGlance(i: GlanceInputs): HomeGlance {
     val chip = listOfNotNull(weather?.chip, suffix).joinToString(" · ").ifEmpty { null }
 
     val game = if (i.switches.games) GameDay.select(i.feeds.games?.value.orEmpty(), i.now, i.zone) else null
-    val card = contextCard(alerts, game, i.now, i.zone, i.is24h)
+    val timeOfDay = timeOfDayCard(weather, i.agenda, i.now, i.zone, i.quiet, i.is24h)
+    val watch = game?.takeIf { it.game.phase != GamePhase.FINAL }?.let { i.watchMap.watch(it, i.isInstalled) }
+    val card = contextCard(alerts, game, i.now, i.zone, i.is24h, timeOfDay, i.watchMap, watch)
     val nn = nowNext(i.agenda, i.now, i.zone, i.travel, i.quiet, i.is24h)
     val brief = i.brief?.trim()?.ifEmpty { null }
 
@@ -97,7 +107,7 @@ fun homeGlance(i: GlanceInputs): HomeGlance {
         if (chip != null) add(GlanceItem.CHIP)
         when (card) {
             is ContextCard.Alert -> add(GlanceItem.ALERT_CARD)
-            is ContextCard.Game -> add(GlanceItem.CARD)
+            is ContextCard.Game, is ContextCard.TimeOfDay -> add(GlanceItem.CARD)
             null -> Unit
         }
         if (nn != null) add(GlanceItem.NOW_1)
@@ -114,5 +124,6 @@ fun homeGlance(i: GlanceInputs): HomeGlance {
         brief = brief.takeIf { GlanceItem.BRIEF in kept },
         quiet = i.quiet,
         items = kept,
+        watch = watch,
     )
 }

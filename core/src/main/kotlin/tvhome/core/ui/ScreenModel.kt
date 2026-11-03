@@ -82,21 +82,21 @@ fun formatDateLong(d: LocalDate): String =
     d.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH) + " " + d.dayOfMonth + " " +
         d.month.getDisplayName(TextStyle.FULL, Locale.ENGLISH)
 
-private fun rowOf(label: TimeLabel, title: String, is24h: Boolean): RowModel {
+private fun rowOf(label: TimeLabel, title: String, is24h: Boolean, hideTitles: Boolean): RowModel {
     val time = when (label) {
         TimeLabel.AllDay -> Copy.ALL_DAY
         TimeLabel.Continues -> Copy.CONTINUES
         is TimeLabel.Starts -> formatTime(label.time, is24h)
     }
-    val shown = title.trim().ifEmpty { Copy.NO_TITLE }
+    val shown = QuietMode.title(title, hideTitles, max = Int.MAX_VALUE)
     return RowModel(time, shown, "$time, $shown")
 }
 
-private fun dayOf(heading: String, day: AgendaDay, is24h: Boolean) = DayModel(
+private fun dayOf(heading: String, day: AgendaDay, is24h: Boolean, hideTitles: Boolean) = DayModel(
     heading = heading,
     date = formatDate(day.date),
     headingDescription = "$heading, ${formatDateLong(day.date)}",
-    rows = day.items.map { rowOf(it.label, it.title, is24h) },
+    rows = day.items.map { rowOf(it.label, it.title, is24h, hideTitles) },
 )
 
 /**
@@ -117,15 +117,18 @@ fun initialFocusIndex(today: AgendaDay, tomorrow: AgendaDay, nowLocal: LocalTime
  * yet", where "Can't reach calendar" would be untrue. An offline launch is fed to `reduce()` as a failed OFFLINE
  * fetch by `AgendaSession`, so it is CANT_REACH. A non-emphasised Stale looks like Ok (design: a failure with
  * data under 60 min old is silent).
+ *
+ * [hideTitles] (Quiet mode, M7-7.2): every row title and its spoken description is "Busy"; times stay. Callers pass
+ * `quiet != false`, so titles stay hidden while the stored Quiet value is still loading.
  */
-fun screenModel(state: AgendaState, now: Instant, zone: ZoneId, is24h: Boolean): ScreenModel = when (state) {
+fun screenModel(state: AgendaState, now: Instant, zone: ZoneId, is24h: Boolean, hideTitles: Boolean = false): ScreenModel = when (state) {
     AgendaState.NotSetUp -> ScreenModel.Message(Copy.NOT_SET_UP_TITLE, Copy.NOT_SET_UP_DETAIL)
     AgendaState.CantReach -> ScreenModel.Message(Copy.CANT_REACH_TITLE, Copy.CANT_REACH_DETAIL)
     AgendaState.Unreadable -> ScreenModel.Message(AgendaState.Unreadable.TITLE, AgendaState.Unreadable.DETAIL)
     AgendaState.Loading -> ScreenModel.Message(Copy.LOADING_TITLE, null)
-    is AgendaState.Ok -> agenda(state.today, state.tomorrow, AgeLine(state.ageText, false, Copy.LIVE_FRESH), null, now, zone, is24h)
+    is AgendaState.Ok -> agenda(state.today, state.tomorrow, AgeLine(state.ageText, false, Copy.LIVE_FRESH), null, now, zone, is24h, hideTitles)
     is AgendaState.NothingScheduled ->
-        agenda(state.today, state.tomorrow, AgeLine(state.ageText, false, Copy.LIVE_FRESH), null, now, zone, is24h)
+        agenda(state.today, state.tomorrow, AgeLine(state.ageText, false, Copy.LIVE_FRESH), null, now, zone, is24h, hideTitles)
     is AgendaState.Stale -> {
         val footer = if (!state.emphasised) null else when (state.cause) {
             StaleCause.CANT_REACH -> Copy.FOOTER_CANT_REACH
@@ -133,7 +136,7 @@ fun screenModel(state: AgendaState, now: Instant, zone: ZoneId, is24h: Boolean):
             StaleCause.OVERDUE -> null
         }
         val live = if (state.emphasised) Copy.LIVE_STALE else Copy.LIVE_FRESH
-        agenda(state.today, state.tomorrow, AgeLine(state.ageText, state.emphasised, live), footer, now, zone, is24h)
+        agenda(state.today, state.tomorrow, AgeLine(state.ageText, state.emphasised, live), footer, now, zone, is24h, hideTitles)
     }
 }
 
@@ -145,9 +148,10 @@ private fun agenda(
     now: Instant,
     zone: ZoneId,
     is24h: Boolean,
+    hideTitles: Boolean,
 ) = ScreenModel.Agenda(
-    today = dayOf(Copy.TODAY, today, is24h),
-    tomorrow = dayOf(Copy.TOMORROW, tomorrow, is24h),
+    today = dayOf(Copy.TODAY, today, is24h, hideTitles),
+    tomorrow = dayOf(Copy.TOMORROW, tomorrow, is24h, hideTitles),
     age = age,
     footer = footer,
     initialFocus = initialFocusIndex(today, tomorrow, now.atZone(zone).toLocalTime()),

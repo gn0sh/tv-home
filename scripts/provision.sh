@@ -20,6 +20,10 @@ Non-secret settings (not secrets, so plain adb arguments are fine; a refused val
   Travel rule:       adb shell content insert --uri $P/travel --bind keyword:s:Dentist --bind minutes:i:20
                      (keyword 1-40 chars, minutes 1-180, at most 10 rules; same keyword replaces)
   Clear travel:      adb shell content delete --uri $P/travel
+  Watch map:         adb shell content insert --uri $P/watch --bind networks:s:'ESPN+=com.espn.gtv;Peacock=com.peacocktv.peacockandroid' --bind defaults:s:'predators=ESPN+'
+                     (up to 32 networks and 8 team defaults; names up to 40 chars; any bad entry refuses all)
+  Clear watch map:   adb shell content delete --uri $P/watch
+  Quiet mode:        adb shell content insert --uri $P/quiet --bind on:b:true      (or false)
 TXT
 }
 
