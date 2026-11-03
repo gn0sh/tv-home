@@ -33,9 +33,30 @@ $m = Get-ManifestInfo $QaApk
 Check '1 package is com.gnosh.tvhome' ($m.Package -ceq 'com.gnosh.tvhome') "got $($m.Package)"
 Check '1 qa APK is read as debuggable' ($m.Debuggable -eq $true)
 $blk = Get-SigningBlockCerts $QaApk
-$all = @($blk.v2) + @($blk.v3)
+Check '2 signing block reader has v2, v3 and v31 lists' ($blk.ContainsKey('v2') -and $blk.ContainsKey('v3') -and $blk.ContainsKey('v31'))
+$all = @($blk.v2) + @($blk.v3) + @($blk.v31)
 Check '2 signing block has a certificate' ($all.Count -ge 1)
-Check '2 every v2/v3 cert equals the apksigner digest' (@($all | Where-Object { $_ -cne $exp }).Count -eq 0) "got $($all -join ',')"
+Check '2 every v2/v3/v3.1 cert equals the apksigner digest' (@($all | Where-Object { $_ -cne $exp }).Count -eq 0) "got $($all -join ',')"
+
+# links in incoming are not APKs; tool lookup skips incoming and fetch-*
+$tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ('tvl-' + [Guid]::NewGuid().ToString('N'))
+$Incoming = Join-Path $tmpRoot 'incoming'
+New-Item -ItemType Directory -Force -Path $Incoming | Out-Null
+Copy-Item $QaApk (Join-Path $Incoming 'real.apk')
+$linked = $false
+try { New-Item -ItemType SymbolicLink -Path (Join-Path $Incoming 'link.apk') -Target $QaApk | Out-Null; $linked = $true } catch { Write-Host "SKIP  symbolic links not allowed here: $($_.Exception.Message)" }
+if ($linked) {
+    $got = @(Get-IncomingApks)
+    Check '3 a symbolic link in incoming is not counted as an APK' ($got.Count -eq 1 -and $got[0].Name -ceq 'real.apk') (($got | ForEach-Object { $_.Name }) -join ',')
+}
+$Tools = $tmpRoot
+foreach ($d in @('incoming', 'fetch-1', 'sdk\platform-tools')) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $tmpRoot $d) | Out-Null
+    Set-Content -Path (Join-Path $tmpRoot "$d\adb.exe") -Value 'x'
+}
+$found = @(Find-ToolFile @('adb.exe'))
+Check '4 tool lookup skips incoming and fetch-*' ($found.Count -eq 1 -and $found[0].FullName -like '*sdk\platform-tools\adb.exe') (($found | ForEach-Object { $_.FullName }) -join ',')
+Remove-Item $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 # 3, 4 and the real path's refusal: run the whole script as a child with a private LOCALAPPDATA
 $savedLocal = $env:LOCALAPPDATA

@@ -42,10 +42,16 @@ $Incoming = Join-Path $Tools 'incoming'
 $Done = Join-Path $Incoming 'installed'
 $Config = Join-Path $Tools 'tv-home-install.json'
 $LastRun = Join-Path $Tools 'installed-run.txt'
+$Work = $null    # private temp folder holding the copy of the APK that is checked and installed
+
+function Clear-Work {
+    if ($Work -and (Test-Path -LiteralPath $Work)) { Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue }
+}
 
 function Fail([string]$msg) {
     Write-Host ''
     Write-Host "NOT INSTALLED. $msg" -ForegroundColor Red
+    Clear-Work
     exit 1
 }
 
@@ -70,7 +76,8 @@ function Format-Sha256([byte[]]$der) {
     return (($h | ForEach-Object { $_.ToString('X2') }) -join ':')
 }
 
-# Signer certificates from the APK Signature Scheme v2 (0x7109871a) and v3 (0xf05368c0) blocks. Returns SHA-256 lists.
+# Signer certificates from the APK Signature Scheme v2 (0x7109871a), v3 (0xf05368c0) and v3.1 (0x1b93ad61) blocks.
+# Returns SHA-256 lists in a hashtable with keys v2, v3 and v31.
 # This reads which certificate the APK claims; Android itself checks the signature when the APK is installed.
 function Get-SigningBlockCerts([string]$Path) {
     $fs = [IO.File]::Open($Path, 'Open', 'Read', 'Read')
@@ -92,7 +99,7 @@ function Get-SigningBlockCerts([string]$Path) {
         $blk = Read-At $fs ($cdOff - $size - 8) ($size + 8)
         if ((U64 $blk 0) -ne $size) { throw 'signing block sizes differ' }
         $end = $size + 8 - 24
-        $res = @{ v2 = @(); v3 = @() }
+        $res = @{ v2 = @(); v3 = @(); v31 = @() }
         $pos = 8
         while ($pos + 12 -le $end) {
             $plen = U64 $blk $pos
@@ -100,7 +107,7 @@ function Get-SigningBlockCerts([string]$Path) {
             $valStart = $pos + 12
             $valEnd = $pos + 8 + $plen
             if ($plen -lt 4 -or $valEnd -gt $end) { throw 'odd signing block entry' }
-            $key = if ($id -eq 0x7109871a) { 'v2' } elseif ($id -eq 0xf05368c0) { 'v3' } else { $null }
+            $key = if ($id -eq 0x7109871a) { 'v2' } elseif ($id -eq 0xf05368c0) { 'v3' } elseif ($id -eq 0x1b93ad61) { 'v31' } else { $null }
             if ($key) {
                 $seqLen = U32 $blk $valStart
                 $p = $valStart + 4
@@ -127,9 +134,19 @@ function Get-SigningBlockCerts([string]$Path) {
     } finally { $fs.Dispose() }
 }
 
+# Finds a tool under the tools folder, but never inside incoming\ or a fetch-* download folder (files that came from a
+# download must not be able to stand in for apksigner or adb).
+function Find-ToolFile([string[]]$Names) {
+    $root = $Tools.TrimEnd('\', '/')
+    @(Get-ChildItem $Tools -Recurse -File -Include $Names -ErrorAction SilentlyContinue | Where-Object {
+        $rel = $_.FullName.Substring($root.Length).Trim('\', '/')
+        $dirs = @($rel -split '[\\/]' | Select-Object -SkipLast 1)
+        @($dirs | Where-Object { $_ -ieq 'incoming' -or $_ -like 'fetch-*' }).Count -eq 0
+    })
+}
+
 function Get-ApksignerCert([string]$Path) {
-    $signer = Get-ChildItem $Tools -Recurse -Include 'apksigner.bat', 'apksigner.jar' -ErrorAction SilentlyContinue |
-        Sort-Object { $_.Extension -ne '.bat' } | Select-Object -First 1
+    $signer = Find-ToolFile @('apksigner.bat', 'apksigner.jar') | Sort-Object { $_.Extension -ne '.bat' } | Select-Object -First 1
     if (-not $signer) { return $null }
     $java = Get-Command java -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($signer.Extension -eq '.jar') {
@@ -220,7 +237,9 @@ function Invoke-Tool([string]$Exe, [string[]]$Argv) {
 }
 
 function Get-IncomingApks {
-    @(Get-ChildItem $Incoming -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq '.apk' })
+    # Links (ReparsePoint, 0x400) are not APKs: they could point anywhere.
+    @(Get-ChildItem $Incoming -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -ieq '.apk' -and (([int]$_.Attributes -band 0x400) -eq 0) })
 }
 
 # ---- fetch from the newest successful push-to-main run, with gh ------------------------------------------------
@@ -255,7 +274,7 @@ function Get-LatestMainApk {
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
     $dl = Invoke-Tool $gh.Source @('run', 'download', $id, '--repo', $GhRepo, '--name', $ArtifactName, '--dir', $tmp)
     if ($dl.Code -ne 0) { Fail 'gh could not download the APK (builds are kept 7 days; push a new build if this one is older).' }
-    $found = @(Get-ChildItem $tmp -Recurse -File | Where-Object { $_.Extension -ieq '.apk' })
+    $found = @(Get-ChildItem $tmp -Recurse -File | Where-Object { $_.Extension -ieq '.apk' -and (([int]$_.Attributes -band 0x400) -eq 0) })
     if ($found.Count -ne 1) { Remove-Item $tmp -Recurse -Force; Fail "The build held $($found.Count) APK files, expected exactly one." }
     Move-Item $found[0].FullName (Join-Path $Incoming ('tv-home-' + $id + '.apk'))
     Remove-Item $tmp -Recurse -Force
@@ -272,8 +291,13 @@ try {
     if ($apks.Count -eq 0 -and $Fetch) { $fetchedRun = Get-LatestMainApk; $apks = @(Get-IncomingApks) }
     if ($apks.Count -eq 0) { Fail "No APK in $Incoming . Double-click Install TV Home (it fetches the newest one), or put the single .apk there." }
     if ($apks.Count -gt 1) { Fail "$($apks.Count) APK files are in $Incoming ; there must be exactly one. Nothing was installed. Tell the team which is the right one." }
-    $apk = $apks[0].FullName
-    Write-Host "APK: $apk"
+    $orig = $apks[0].FullName
+    Write-Host "APK: $orig"
+    # Check and install one private copy, so the file in incoming\ cannot be swapped between the checks and adb.
+    $Work = Join-Path ([IO.Path]::GetTempPath()) ('tvi-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $Work | Out-Null
+    $apk = Join-Path $Work 'tv-home.apk'
+    Copy-Item -LiteralPath $orig -Destination $apk
 
     # --- signing certificate ---
     $certs = Get-ApksignerCert $apk
@@ -281,8 +305,8 @@ try {
     if ($null -eq $certs) {
         $how = 'signing block'
         $blk = Get-SigningBlockCerts $apk
-        $certs = @($blk.v2) + @($blk.v3)
-        if (@($blk.v2).Count -gt 1 -or @($blk.v3).Count -gt 1) { Fail 'The APK has more than one signer.' }
+        $certs = @($blk.v2) + @($blk.v3) + @($blk.v31)
+        if (@($blk.v2).Count -gt 1 -or @($blk.v3).Count -gt 1 -or @($blk.v31).Count -gt 1) { Fail 'The APK has more than one signer.' }
     }
     if (@($certs).Count -eq 0) { Fail 'The APK carries no readable signing certificate (an unsigned build?).' }
     foreach ($c in $certs) {
@@ -296,10 +320,10 @@ try {
     if ($m.Debuggable) { Fail 'The APK is a debuggable build.' }
     Write-Host "Package is $Package and the build is not debuggable." -ForegroundColor Green
 
-    if ($DryRun) { Write-Host 'DRY RUN OK: every check passed; adb was not used.'; exit 0 }
+    if ($DryRun) { Write-Host 'DRY RUN OK: every check passed; adb was not used.'; Clear-Work; exit 0 }
 
     # --- adb and the TV ---
-    $adbItem = Get-ChildItem $Tools -Recurse -Filter adb.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    $adbItem = Find-ToolFile @('adb.exe') | Select-Object -First 1
     if (-not $adbItem) { Fail "adb.exe not found under $Tools (the tv-home install puts it there)." }
     if (-not (Test-Path $Config)) {
         (@{ serial = $DefaultSerial } | ConvertTo-Json) | Set-Content -Path $Config -Encoding ASCII
@@ -324,7 +348,8 @@ try {
     }
     New-Item -ItemType Directory -Force -Path $Done | Out-Null
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    Move-Item $apk (Join-Path $Done ($stamp + '-' + (Split-Path $apk -Leaf)))
+    Move-Item -LiteralPath $orig -Destination (Join-Path $Done ($stamp + '-' + (Split-Path $orig -Leaf)))
+    Clear-Work
     if ($fetchedRun) { Set-Content -Path $LastRun -Value $fetchedRun -Encoding ASCII }
     Write-Host ''
     Write-Host 'DONE. TV Home is installed on the TV. On the TV, open TV Home (or press Home if you turned that on): it is the new version, and your calendar and settings are still there.' -ForegroundColor Green

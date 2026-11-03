@@ -159,7 +159,7 @@ setting goes into the list in `scripts/tv-setting.ps1`, not into an adb line for
 ## Install a new TV Home release (one double-click)
 After the team says a build is ready and you have merged it: double-click **Install TV Home.cmd** in the `scripts` folder of the tv-home folder.
 It fetches the newest green build from `main` with the GitHub CLI (`gh`, signed in once with `gh auth login`), checks it is signed with your key and is the right non-debug app, and installs it on the TV. The last line says **DONE** when it worked; otherwise it says **NOT INSTALLED** and why, and changes nothing on the TV.
-No `gh`? Download the `tv-home-release-apk` file from the newest green run at https://github.com/gn0sh/tv-home/actions/workflows/android.yml , unzip it, put the one `.apk` in `%LOCALAPPDATA%\tv-home-tools\incoming`, and double-click again. The TV's address is in `%LOCALAPPDATA%\tv-home-tools\tv-home-install.json` (made on first run).
+No `gh`? Download the `tv-home-release-apk` file from the newest green run on main (a push to main, not a pull request) at https://github.com/gn0sh/tv-home/actions/workflows/android.yml , unzip it, put the one `.apk` in `%LOCALAPPDATA%\tv-home-tools\incoming`, and double-click again. The TV's address is in `%LOCALAPPDATA%\tv-home-tools\tv-home-install.json` (made on first run).
 
 ## Home button (optional; you choose)
 As installed, the dashboard changes nothing about Home. To switch it on, in PowerShell from the tv-home folder (it
