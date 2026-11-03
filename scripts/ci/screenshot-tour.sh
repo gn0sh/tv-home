@@ -335,8 +335,11 @@ pill_text() { { grep -oE 'text="Watch( on [^"]*)?"' <<<"$UI" | head -1 | sed 's/
 focus_pill() {
   key DPAD_DOWN; key DPAD_RIGHT; key DPAD_RIGHT; key DPAD_RIGHT
   look
-  FOCUSED=$({ grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | head -1 | grep -oE 'content-desc="[^"]*"' | sed 's/^content-desc="//; s/"$//'; } || true)
-  echo "tour: focused node content-desc: '$FOCUSED'"
+  # Every focused node (the Compose host View reports focused too), and the node that carries the pill's description.
+  { grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | sed -E 's/ (bounds|index|package|checkable|checked|enabled|scrollable|long-clickable|password|selected)="[^"]*"//g; s/^/tour: focused: /'; } || true
+  { grep -oE '<node[^>]*content-desc="Watch the game on [^>]*>' <<<"$UI" | sed -E 's/ (index|package|checkable|checked|enabled|scrollable|long-clickable|password|selected)="[^"]*"//g; s/^/tour: pill node: /'; } || true
+  FOCUSED=$({ grep -oE '<node[^>]* focused="true"[^>]*>' <<<"$UI" | grep -oE 'content-desc="Watch the game on [^"]*"' | head -1 | sed 's/^content-desc="//; s/"$//'; } || true)
+  echo "tour: focused pill description: '$FOCUSED'"
   echo "tour: Ask node: $({ grep -oE 'content-desc="Ask Claude[^"]*"' <<<"$UI" | head -1; } || true)"
   echo "tour: Quiet node: $({ grep -oE 'content-desc="Quiet mode[^"]*"' <<<"$UI" | head -1; } || true)"
 }
