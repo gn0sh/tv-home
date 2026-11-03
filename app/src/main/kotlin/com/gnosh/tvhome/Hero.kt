@@ -192,8 +192,9 @@ fun HeroLayer(
     val snap by (feeds?.snapshot ?: emptyFeeds).collectAsState()
     val agenda by graph.session.state.collectAsState()
     // The adb-set settings, read off the main thread once a minute (SharedPreferences: memory after the first read).
-    val settings by produceState(HeroSettings.NONE, now) {
-        value = withContext(Dispatchers.IO) { runCatching { HeroSettings.read(context) }.getOrDefault(HeroSettings.NONE) }
+    // Starts from the last read in this process (memory, no disk), so a recreated activity has its location at once.
+    val settings by produceState(HeroSettings.last ?: HeroSettings.NONE, now) {
+        value = withContext(Dispatchers.IO) { runCatching { HeroSettings.read(context) }.getOrDefault(HeroSettings.EMPTY) }
     }
     val is24h = DateFormat.is24HourFormat(context)
     val zone = ZoneId.systemDefault()
@@ -256,10 +257,17 @@ fun HeroLayer(
     val weather = (view(snap.weather, PanelPolicies.WEATHER, settings.switches.weather, instant) as? PanelView.Shown)?.value
     val game = if (settings.switches.games) GameDay.select(snap.games?.value.orEmpty(), instant, zone) else null
     // The real sky at the weather location, on the minute tick only (a few dozen trig calls). Null without a location:
-    // the scenes keep the clock buckets and the sun its old fixed spot (never a guessed sky).
-    val sky = remember(now, settings.location) { settings.location?.let { SkyNow.of(instant, zone, it.lat, it.lon) } }
-    // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only).
-    val resolved = HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game, sky?.position)
+    // the scenes keep the clock buckets and the sun its old fixed spot (never a guessed sky). Until the settings have
+    // been read once, whether there is a location is unknown: the backdrop waits ([HeroBackdrop] settled), so a cold
+    // start never shows the clock's scene and then the sky's (sky-cold-start-flash).
+    val sky = remember(now, settings.location) { settings.location?.let { SkyNow.of(instant, it.lat, it.lon) } }
+    // Game day beats holiday beats time of day; weather never changes the theme (chip and overlay only). The last sky
+    // scene feeds the dead band at the scene lines (HeroTheme.at).
+    val lastScene = remember { SceneMemo() }
+    val resolved = remember(now, game, sky) {
+        HeroTheme.resolve(now.toLocalDate(), now.toLocalTime(), game, sky?.position, lastScene.theme)
+            .also { if (game == null) lastScene.theme = it }
+    }
     val sun = rememberUpdatedState(remember(sky, resolved.motif) { heroSun(sky, resolved.motif) })
     val dim = idle.value == IdleState.DIM
     val ink = HeroInk(
@@ -270,6 +278,7 @@ fun HeroLayer(
     Box(modifier.fillMaxSize().testTag(HERO_IDLE_TAG_PREFIX + idle.value.name)) {
         HeroBackdrop(
             resolved, weather?.precipNow,
+            settled = settings.loaded,
             sun = { sun.value },
             scrimAlpha = { if (idle.value == IdleState.DIM) 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS else GlanceTokens.SCRIM_ALPHA },
             modifier = Modifier.fillMaxWidth().fillMaxHeight(HERO_BACKDROP_FRACTION),
@@ -321,6 +330,9 @@ const val DOCK_BRIEF_TAG = "dock_brief"
 
 private const val FEEDS_START_DELAY_MS = 1500L
 
+/** The theme shown last minute, outside game day: the dead band's memory (written in a remember block only). */
+private class SceneMemo(var theme: HeroTheme? = null)
+
 /** The text colours the hero draws with: the theme's, or the DIM grey. */
 private class HeroInk(val text: Int, val secondary: Int)
 
@@ -333,16 +345,25 @@ private data class HeroSettings(
     val watchMap: WatchMap = WatchMap.EMPTY,
     /** The watch map's packages that have a TV launch intent, checked once a minute on IO. */
     val installed: Set<String> = emptySet(),
+    /** False until the settings have been read once: whether a location is set is not known yet. */
+    val loaded: Boolean = true,
 ) {
     companion object {
-        val NONE = HeroSettings(PanelSwitches(), location = null, travel = emptyList())
+        /** Not read yet. */
+        val NONE = HeroSettings(PanelSwitches(), location = null, travel = emptyList(), loaded = false)
+
+        /** Read, but the read failed: the defaults, shown as they are. */
+        val EMPTY = NONE.copy(loaded = true)
+
+        /** The last successful read in this process. */
+        @Volatile var last: HeroSettings? = null
 
         /** Disk and package manager: call off the main thread. */
         fun read(context: Context) = HeroSettings(
             FeedSettings.switches(context), FeedSettings.location(context), FeedSettings.travelRules(context),
             FeedSettings.watchMap(context),
             FeedSettings.watchPackages(context).filterTo(HashSet()) { InstalledApps.canLaunch(context, it) },
-        )
+        ).also { last = it }
     }
 }
 
@@ -528,7 +549,10 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  * - The image is drawn with the theme's own gradient over it at [TINT_ALPHA] when the theme is not the one the image was
  *   rendered for (Thanksgiving and Valentine's share SUNSET, New Year and July 4 share STARS, every team shares GAME).
  * - The sun scenes' images (DAWN, DAY, SUNSET) have no sun: [sun] places it where the real sun is (core SunArc, moved on
- *   the minute tick only), clipped to the sky above the art's hills (BackdropSkyline). Null [sun]: no sun.
+ *   the minute tick only), clipped to the sky above the art's hills (BackdropSkyline), only over the decoded image and
+ *   fading in with it. Null [sun]: no sun.
+ * - Until [settled] (the hero's settings read once, so whether a location is set is known), only the screen background
+ *   is drawn and nothing is decoded: no clock scene that the real sky then replaces.
  * - The rain and snow particles are drawn on top of the image.
  * - A black scrim ([scrimAlpha], read in the draw phase) goes over everything but the bottom fade (M7, R3).
  * - Only Christmas animates (slow snowfall), plus the rain or snow overlay while it is falling now. The loop ticks about 15 times a second with a delay, not every vsync, and
@@ -536,12 +560,20 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
  *   reach an idle state; it also honours the user's "remove animations" choice).
  */
 @Composable
-private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, sun: () -> SunSpot?, scrimAlpha: () -> Float, modifier: Modifier) {
+private fun HeroBackdrop(
+    theme: HeroTheme,
+    precip: Precip?,
+    settled: Boolean,
+    sun: () -> SunSpot?,
+    scrimAlpha: () -> Float,
+    modifier: Modifier,
+) {
     val context = LocalContext.current
     val frozen = remember(context) { animationsFrozen(context) }
     var ready by remember { mutableStateOf(false) }
     val tick = remember { mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(settled) {
+        if (!settled) return@LaunchedEffect // the scene is not known yet (no location read): nothing is decoded
         withFrameNanos { } // the first frame has been drawn with the plain gradient
         ready = true
     }
@@ -586,7 +618,8 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, sun: () -> SunSpot?,
                 val sky = sunLook?.let { skyPath(art, BackdropSkyline.of(theme.motif)) }
                 var sunCache: Pair<SunSpot, SunBrushes>? = null
                 onDrawBehind {
-                    drawRect(base)
+                    // Until the settings are read, the plain screen background: the scene is not known yet.
+                    if (settled) drawRect(base) else drawRect(rgb(Tokens.BACKGROUND))
                     // Read in the draw phase only: a decode or a crossfade step redraws this layer, nothing else.
                     val image = backdrop?.takeIf { it.motif == theme.motif }?.image
                     val alpha = if (image == null) 0f else imageAlpha.value
@@ -608,11 +641,12 @@ private fun HeroBackdrop(theme: HeroTheme, precip: Precip?, sun: () -> SunSpot?,
                     }
                     // The sun scenes' art has no sun: it is drawn where the real one is (read in the draw phase, so the
                     // minute's move redraws this layer only), clipped to the sky above the hills.
-                    val spot = if (ready && sunLook != null && sky != null) sun() else null
+                    // Only over the decoded image, fading in with it (sun-clip-fallback): never on the bare gradient.
+                    val spot = if (image != null && alpha > 0f && sunLook != null && sky != null) sun() else null
                     if (spot != null && sunLook != null && sky != null) {
                         val brushes = sunCache?.takeIf { it.first == spot }?.second
                             ?: sunBrushes(sunLook, art.at(spot), art.px(sunLook.radius)).also { sunCache = spot to it }
-                        clipPath(sky) { drawRealSun(sunLook, brushes) }
+                        clipPath(sky) { drawRealSun(sunLook, brushes, alpha) }
                     }
                     if (ready) {
                         // Weather motif overlay (never a theme change): particles only when it is falling now.
@@ -756,12 +790,12 @@ private fun sunBrushes(look: SunLook, c: Offset, r: Float) = SunBrushes(
     streak = look.streak?.let { Brush.radialGradient(listOf(rgb(it, 0.45f), rgb(it, 0f)), c, r * 3f) },
 )
 
-private fun DrawScope.drawRealSun(look: SunLook, b: SunBrushes) {
+private fun DrawScope.drawRealSun(look: SunLook, b: SunBrushes, alpha: Float) {
     // Low sun: a warm band along the horizon, the art's old stretched glow (3 radii tall, 24 wide).
-    b.streak?.let { s -> scale(8f, 1f, pivot = b.c) { drawCircle(s, b.r * 3f, b.c) } }
-    drawCircle(b.wide, b.r * 9f, b.c)
-    drawCircle(b.near, b.r * 2.6f, b.c)
-    drawCircle(rgb(look.core), b.r, b.c)
+    b.streak?.let { s -> scale(8f, 1f, pivot = b.c) { drawCircle(s, b.r * 3f, b.c, alpha = alpha) } }
+    drawCircle(b.wide, b.r * 9f, b.c, alpha = alpha)
+    drawCircle(b.near, b.r * 2.6f, b.c, alpha = alpha)
+    drawCircle(rgb(look.core), b.r, b.c, alpha = alpha)
 }
 
 private fun DrawScope.drawClouds(alpha: Float) {
