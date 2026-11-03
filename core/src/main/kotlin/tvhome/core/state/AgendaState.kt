@@ -5,6 +5,7 @@ import tvhome.core.agenda.agendaWindow
 import tvhome.core.agenda.WEEK_DAYS
 import tvhome.core.agenda.buildAgenda
 import tvhome.core.agenda.buildDays
+import tvhome.core.agenda.dedupeEvents
 import tvhome.core.agenda.fetchWindow
 import tvhome.core.calendar.FetchResult
 import tvhome.core.calendar.InstantRange
@@ -118,9 +119,11 @@ fun reduce(hasSecret: Boolean, cache: CachedAgenda?, lastFetch: FetchResult?, no
         lastFetch.error.isUnreadable() -> StaleCause.UNREADABLE
         else -> StaleCause.CANT_REACH
     }
-    val (today, tomorrow) = buildAgenda(usable.events, now, zone)
+    // calendar-dedupe: one appointment in the feed twice shows once, on home Now/Next, the tile, the Board and the brief.
+    val events = dedupeEvents(usable.events)
+    val (today, tomorrow) = buildAgenda(events, now, zone)
     val empty = today.items.isEmpty() && tomorrow.items.isEmpty()
-    val week = buildDays(usable.events, now, zone, WEEK_DAYS, usable.window.end)
+    val week = buildDays(events, now, zone, WEEK_DAYS, usable.window.end)
     if (!failed && ageSec <= STALE_AFTER_MIN * 60) {
         val text = ageText(minutes)
         return if (empty) AgendaState.NothingScheduled(today, tomorrow, usable.fetchedAt, text, week)
