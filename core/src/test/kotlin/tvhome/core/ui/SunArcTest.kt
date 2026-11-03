@@ -104,4 +104,15 @@ class SunArcTest {
         assertTrue(kotlin.math.abs(java.time.Duration.between(java.time.Instant.parse("2026-11-02T17:14:05Z"), sunrise).seconds) < 120, "$sunrise")
         assertNotNull(SunArc.place(akl, flat))
     }
+
+    @Test fun transitIsTheMiddleOfTheArc() {
+        // sun-x-noon: the arc spans X_RISE..X_SET (right of the calm title wash), so the transit (11:33 AM CST in
+        // Clarksville, not clock noon) is its midpoint, about 0.74 of the image; 12:00 PM is a little past it.
+        val mid = (SunArc.X_RISE + SunArc.X_SET) / 2
+        for (date in listOf(LocalDate.of(2026, 11, 3), LocalDate.of(2026, 6, 21), LocalDate.of(2026, 3, 8))) {
+            val day = tvhome.core.sky.Sun.day(date, central, lat, lon)
+            assertEquals(mid, SunArc.place(SkyNow.of(day.noon, lat, lon), flat)!!.x, 0.01f, "$date")
+        }
+        assertTrue(SunArc.place(sky(2026, 11, 3, 12), flat)!!.x in mid..mid + 0.03f)
+    }
 }
