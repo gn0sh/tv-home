@@ -1,0 +1,98 @@
+name: assist-probe
+
+# Throwaway (branch assist-probe, never merged): builds the qa APK with the assist/key probe in app/src/qa and runs
+# scripts/ci/assist-probe.sh on two emulator images. Made-up data only; no secrets referenced. Actions pinned as in
+# android.yml.
+
+on:
+  push:
+    branches: [assist-probe]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assist-probe
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  APP_DEP_VERIFICATION: strict
+
+jobs:
+  build:
+    name: qa APK with the probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: true
+      - name: Build qa APK
+        run: |
+          set -euo pipefail
+          scripts/ci/gradle-quiet.sh "$RUNNER_TEMP/assemble-qa.log" \
+            --dependency-verification="$APP_DEP_VERIFICATION" :app:assembleQa
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/qa/*.apk)
+          [ "${#apks[@]}" -eq 1 ] || { echo "::error::expected exactly one qa APK, found ${#apks[@]}"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/apk" && cp "${apks[0]}" "$RUNNER_TEMP/apk/probe-qa.apk"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: probe-qa-apk
+          path: ${{ runner.temp }}/apk/probe-qa.apk
+          retention-days: 1
+
+  probe:
+    name: probe (${{ matrix.target }}, API 34)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [android-tv, google-tv]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: probe-qa-apk
+          path: ${{ runner.temp }}/apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Free disk space for the AVD
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost /usr/local/lib/node_modules \
+            "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
+      - name: Probe
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: ${{ matrix.target }}
+          arch: x86
+          profile: tv_1080p
+          force-avd-creation: false
+          disk-size: 4096M
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          disable-animations: true
+          script: scripts/ci/assist-probe.sh "$RUNNER_TEMP/apk/probe-qa.apk" "$RUNNER_TEMP/shots"

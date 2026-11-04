@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- assist-probe (throwaway branch, never merged; qa build only): can the app hold ROLE_ASSISTANT, and which remote
+     keys reach it? Logs to logcat tags AssistProbe and KeyProbe. No network, no data, no secrets. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".probe.AssistProbeActivity"
+            android:exported="true"
+            android:label="Assist probe"
+            android:theme="@android:style/Theme.DeviceDefault">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.speech.action.WEB_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEARCH_LONG_PRESS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.speech.action.VOICE_SEARCH_HANDS_FREE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- A second TV launcher entry named "Ask Claude" (opens the app's Ask screen), to see whether the star button's
+             app choice lists it. -->
+        <activity-alias
+            android:name=".probe.AskClaudeEntry"
+            android:exported="true"
+            android:label="Ask Claude"
+            android:targetActivity=".AgendaActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <service
+            android:name=".probe.ProbeVoiceService"
+            android:exported="true"
+            android:label="Assist probe"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/probe_voice_interaction" />
+        </service>
+        <service
+            android:name=".probe.ProbeSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <service
+            android:name=".probe.ProbeRecognitionService"
+            android:exported="true"
+            android:label="Assist probe">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/probe_recognition" />
+        </service>
+
+        <service
+            android:name=".probe.KeyProbeService"
+            android:exported="true"
+            android:label="Key probe"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/probe_keys" />
+        </service>
+    </application>
+</manifest>
