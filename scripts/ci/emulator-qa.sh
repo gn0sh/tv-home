@@ -439,8 +439,18 @@ grep -qF "$PKG" <<<"$holders" || fail "mic: $PKG is not the assistant role holde
 sh_ settings get secure voice_interaction_service | tr -d '\r' | tee "$OUT/mic-voice-service.txt"
 rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
 echo "with the role: voice_recognition_service: $rec"
-[[ $rec == "$REC" || $rec == "$PKG/.ClaudeRecognitionService" ]] || fail "mic: voice_recognition_service is not our forwarding recognizer (got: $rec)"
-pass "mic: the role points voice_recognition_service at the forwarding ClaudeRecognitionService"
+# The role may or may not repoint the default recognizer (the API 34 TV image keeps Google's). Either is fine; anything
+# else is not.
+MIC_REC_OURS=0
+if [[ $rec == "$REC" || $rec == "$PKG/.ClaudeRecognitionService" ]]; then
+  MIC_REC_OURS=1
+  pass "mic: the role pointed voice_recognition_service at our forwarding ClaudeRecognitionService"
+elif [[ $rec == "$prev_rec" ]]; then
+  pass "mic: the role left voice_recognition_service unchanged ($rec)"
+  note "mic: other apps keep Google's recognizer unchanged on this image; the forwarding recognizer is not used here"
+else
+  fail "mic: voice_recognition_service changed to something that is neither its old value nor ours (before: $prev_rec, now: $rec)"
+fi
 # No force-stop from here on: it would unbind the voice service.
 sh_ input keyevent KEYCODE_ASSIST; sleep 4
 if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; fail "mic: KEYCODE_ASSIST with the role did not open the app"; fi
@@ -460,6 +470,10 @@ no_app_crash_yet "mic-to-claude"
 # M7 block while the qa APK is installed (mic_round_trip below), and only if the image has a Google recognizer.
 mic_round_trip() {
   local recs google probe
+  if [[ ${MIC_REC_OURS:-0} != 1 ]]; then
+    note "mic round trip skipped: the assistant role did not repoint voice_recognition_service, so other apps keep Google's recognizer unchanged"
+    return 0
+  fi
   recs=$(sh_ cmd package query-services --brief -a android.speech.RecognitionService | tr -d '\r' | grep '/' | grep -v "$PKG/" || true)
   google=$(grep -E 'com\.google\.android\.(katniss|googlequicksearchbox|tts|as)/' <<<"$recs" | head -1 || true)
   if [[ -z $google ]]; then
