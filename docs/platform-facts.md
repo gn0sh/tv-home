@@ -35,7 +35,7 @@ IPs come from DHCP and can drift. No secrets belong in this file.
 |---|---|---|
 | HOME, SEARCH and ASSIST key events never reach an app, not even an accessibility key filter | Verified (API 34 emulator in CI) | `docs/status.md` blockers, PR #15 CI |
 | The stock launcher wins HOME: a HOME alias plus `set-home-activity` loses to its priority-2 HOME filter | Verified (API 34 emulator in CI) | Same; so the app watches for the TV home and then opens the dashboard (a brief flash of the TV's home first) |
-| The mic button cannot be taken over; it stays Google Assistant | Verified (platform limit) | `docs/status.md` stage line |
+| The mic (ASSIST) key cannot be intercepted by an app, but the app holding `android.app.role.ASSISTANT` receives it: with com.gnosh.tvhome as the holder, the mic button opens Ask Claude | Verified on Brian's Google TV Streamer (Android 14), 2026-11-04 | Role set with adb (`cmd role add-role-holder`); the Streamer's Settings > Apps has no "Default apps" picker. PR #31; CI emulator step too |
 | Behaviour on Brian's real Google TV (launcherx, Home watch) | Unverified | The on-TV checks in spec M3.1 are open |
 | Replacing the Google TV OS is not worthwhile (locked bootloader, DRM apps lose HD or stop working) | Judgment from research | Advice to Brian, memory 2026-11-01 21:25Z |
 
