@@ -177,13 +177,40 @@ an app; after that, Home opens the dashboard again.
 
 How it works: "Dashboard Home button" in the TV's accessibility settings notices when the TV's own home comes up and
 opens the dashboard. It is told which app comes to the front, never what is on screen, and keeps nothing. (Google TV does not let
-another app be the real home, and the system handles the Home and mic keys before any app could catch them, so the
-mic button stays Google Assistant; Ask Claude is on the dashboard and on the PC remote.) If you ever "Force stop" the
+another app be the real home, and the system handles the Home key before any app could catch it. The mic button
+can open Claude instead: see "Use the mic button for Claude" below.) If you ever "Force stop" the
 dashboard in the TV's app settings, Android switches it off; run `-TurnOn` again.
 
 To undo: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessibility service you turned on.
 By hand, with the remote: press Home twice quickly, open Settings from the TV's own home, then System >
 Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.
+
+## Use the mic button for Claude (optional)
+The remote's mic button can open Ask Claude instead of Google Assistant. With the remote:
+1. Press Home twice quickly (if the Home button is switched on), open Settings (the gear, top right).
+2. Go to **Settings > Apps > Default apps > Digital assistant app**.
+3. Pick **TV Home**. In the list it may be called **Agenda** or **Ask Claude** (the app's name on the TV; not yet
+   checked on the TV).
+
+Press the mic button: Ask Claude opens and starts listening. Speak your question as usual.
+
+**What moves with it:** Google voice search moves too. While this is set, the mic button no longer opens Google
+Assistant or Google's voice search, and "Hey Google" style voice commands for the TV won't work. Other apps that have
+their own mic icon (for example a search box in a streaming app) may also stop taking voice input (not yet checked).
+
+**To undo:** the same path, **Settings > Apps > Default apps > Digital assistant app**, and pick **Google** again.
+Uninstalling the dashboard also gives the button back to Google.
+
+## Star button opens Claude (optional)
+The star button on the remote can open Ask Claude straight away, as its own tile ("Ask Claude", with a star banner).
+The menu names below are **unverified** (from Google's help pages for the Google TV Streamer remote, not checked on
+the TV); look for the nearest match:
+1. Open Settings (the gear, top right).
+2. Go to **Settings > Remotes & accessories > Customize star button** (may be called **Customize remote buttons**
+   or **Shortcut button**). *Unverified.*
+3. Pick **Ask Claude** from the app list (not "Agenda": that opens the dashboard). *Unverified.*
+
+Press the star button: Ask Claude opens and starts listening. To undo, the same menu, pick another app or **None**.
 
 ## Home screen panels: switches, TV profile, travel times (optional)
 None of these are secrets, so they are plain adb commands (connect first, as in steps 1 and 2). A value the TV does

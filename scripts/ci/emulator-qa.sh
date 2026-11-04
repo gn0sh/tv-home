@@ -188,9 +188,12 @@ inst=$(a install --no-incremental -r -g "$APK" 2>&1 | tr -d '\r') && irc=0 || ir
 echo "$inst"
 if [[ $irc -ne 0 ]] || ! grep -q 'Success' <<<"$inst"; then fail "adb install failed (exit $irc)"; fi
 sh_ pm path "$PKG" | grep -q '^package:' || fail "$PKG not installed"
-r=$(sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER "$PKG" | tr -d '\r' | tail -1)
-[[ $r == "$MAIN" || $r == "$PKG/com.gnosh.tvhome.AgendaActivity" ]] || fail "LEANBACK_LAUNCHER does not resolve to AgendaActivity (got: $r)"
-pass "installed; LEANBACK_LAUNCHER resolves to $r"
+# mic-to-claude: two launcher entries now (the app, and the "Ask Claude" alias the star button can open), so list
+# them instead of resolving one (resolve-activity would give the chooser).
+r=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER "$PKG" | tr -d '\r')
+grep -qE "^ *($MAIN|$PKG/com\.gnosh\.tvhome\.AgendaActivity)\$" <<<"$r" || fail "LEANBACK_LAUNCHER has no AgendaActivity entry (got: $r)"
+grep -qE "^ *$PKG/(\.|com\.gnosh\.tvhome\.)AskClaudeEntry\$" <<<"$r" || fail "LEANBACK_LAUNCHER has no Ask Claude entry (got: $r)"
+pass "installed; LEANBACK_LAUNCHER lists AgendaActivity and AskClaudeEntry"
 # snow-uiautomator-idle: the Christmas hero animates; uiautomator waits for an idle UI. The app stops its animation when
 # the system animator scale is 0, so freeze it for the whole run.
 sh_ settings put global animator_duration_scale 0 >/dev/null 2>&1 || warn "could not set animator_duration_scale 0; uiautomator dumps may time out on an animated hero"
@@ -403,6 +406,45 @@ fi
 pass "M1b: one Back with focus on the Ask button leaves the app"
 note "M1b speech input, the Claude API call, answers, Open and the follow-up are NOT VERIFIED here: no API key or recognizer on the emulator (JVM tests in :core cover the logic; the device check is Brian's)"
 no_app_crash_yet "M1b ask"
+
+step "mic-to-claude: with the assistant role, the remote's mic (KEYCODE_ASSIST) opens Ask Claude; role restored after"
+ROLE=android.app.role.ASSISTANT
+prev_roles=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ' || true)
+echo "assistant role holders before: ${prev_roles:-<none>}"
+restore_role() {
+  sh_ cmd role remove-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || true
+  for h in $prev_roles; do sh_ cmd role add-role-holder --user 0 "$ROLE" "$h" 0 >/dev/null 2>&1 || warn "could not give the assistant role back to $h"; done
+  sh_ cmd role set-bypassing-role-qualification false >/dev/null 2>&1 || true
+}
+# The Ask entry also works by intent alone (no role): ACTION_ASSIST goes to AssistActivity, which opens Ask Claude.
+sh_ am force-stop "$PKG"; sh_ input keyevent KEYCODE_HOME; sleep 2
+sh_ am start -W -a android.intent.action.ASSIST -n "$PKG/com.gnosh.tvhome.AssistActivity" >/dev/null; sleep 3
+in_front || fail "mic: ACTION_ASSIST to AssistActivity did not bring the app up"
+expect_text "mic-assist-intent" "Ask Claude full screen"
+pass "mic: ACTION_ASSIST opens Ask Claude"
+sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1
+sh_ input keyevent KEYCODE_HOME; sleep 2
+if ! sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1; then
+  sh_ cmd role set-bypassing-role-qualification true >/dev/null 2>&1 || true
+  sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || { restore_role; fail "mic: could not give $PKG the assistant role"; }
+  warn "mic: the role needed set-bypassing-role-qualification (the app did not qualify on its own)"
+fi
+sleep 3
+holders=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r')
+grep -qF "$PKG" <<<"$holders" || { restore_role; fail "mic: $PKG is not the assistant role holder (got: $holders)"; }
+sh_ settings get secure voice_interaction_service | tr -d '\r' | tee "$OUT/mic-voice-service.txt"
+# No force-stop from here on: it would unbind the voice service.
+sh_ input keyevent KEYCODE_ASSIST; sleep 4
+if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; restore_role; fail "mic: KEYCODE_ASSIST with the role did not open the app"; fi
+xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-mic-assist.xml"
+grep -qF "Ask Claude full screen" <<<"$xml" || { restore_role; fail "mic: KEYCODE_ASSIST did not show the Ask Claude screen"; }
+pass "mic: KEYCODE_ASSIST with the role opens Ask Claude"
+sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1
+restore_role
+after=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ')
+grep -qF "$PKG" <<<"$after" && fail "mic: the assistant role was not taken back from $PKG"
+pass "mic: assistant role restored (now: ${after:-<none>})"
+no_app_crash_yet "mic-to-claude"
 
 # Return to our home screen from an app we opened. Third-party apps may consume Back (YouTube TV shows an exit
 # dialog), so Back is tried first and then the app is force-stopped; either way our task must be underneath and resume.

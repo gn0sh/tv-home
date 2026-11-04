@@ -24,6 +24,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tvhome.core.assistant.AskEngine
+import tvhome.core.assistant.EntryRoute
 import tvhome.core.assistant.OpenTarget
 import tvhome.core.assistant.askAppsOf
 import tvhome.core.ui.HomeTheme
@@ -53,11 +54,14 @@ class AgendaActivity : ComponentActivity() {
     /** M7-F6 Quiet mode, read on IO each time the screen starts (so an adb toggle applies); null until then. */
     private var quiet by mutableStateOf<Boolean?>(null)
 
-    /** M3: [ACTION_ASK] opens Ask Claude, [ACTION_BOARD] the Board; anything else (Home, the launcher entry) shows the row. */
-    private fun targetOf(intent: Intent?): String? = when (intent?.action) {
-        ACTION_ASK -> HomeEntry.ASK
-        ACTION_BOARD -> HomeEntry.BOARD
-        else -> null
+    /**
+     * M3 / mic-to-claude ([EntryRoute]): [ACTION_ASK], the assist and voice command actions, and the "Ask Claude"
+     * launcher entry open Ask Claude; [ACTION_BOARD] the Board; anything else (Home, the Agenda entry) shows the row.
+     */
+    private fun targetOf(intent: Intent?): String? = when (EntryRoute.target(intent?.action, intent?.component?.className)) {
+        EntryRoute.Target.ASK -> HomeEntry.ASK
+        EntryRoute.Target.BOARD -> HomeEntry.BOARD
+        null -> null
     }
 
     /**
@@ -181,13 +185,13 @@ class AgendaActivity : ComponentActivity() {
 
     companion object {
         /** Opens Ask Claude, listening (the PC remote or adb; the mic key cannot be caught, PR #15). Any app could send it; it only shows the Ask view. */
-        const val ACTION_ASK = "com.gnosh.tvhome.action.ASK"
+        const val ACTION_ASK = EntryRoute.ACTION_ASK
 
         /**
          * Opens the Board (adb and the emulator screenshot tour). Like [ACTION_ASK] any app could send it; it only shows
          * the Board, with Quiet applied (titles hidden until the stored Quiet value has loaded).
          */
-        const val ACTION_BOARD = "com.gnosh.tvhome.action.BOARD"
+        const val ACTION_BOARD = EntryRoute.ACTION_BOARD
 
         /** Shows the home row, focus on the first tile (sent by [HomeWatchService] when the TV's own home comes up). */
         const val ACTION_HOME = "com.gnosh.tvhome.action.HOME"
