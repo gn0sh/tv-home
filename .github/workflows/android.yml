@@ -256,13 +256,18 @@ jobs:
           printf '%s\n' \
             android.permission.ACCESS_NETWORK_STATE \
             android.permission.INTERNET \
+            android.permission.RECORD_AUDIO \
             com.gnosh.tvhome.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION | sort -u > "$RUNNER_TEMP/perms.expected"
           diff "$RUNNER_TEMP/perms.expected" "$RUNNER_TEMP/perms.actual" \
             || { echo "::error::merged manifest permissions differ from the allowed set"; fail=1; }
 
           # Every exported component: name and permission. Allowed: our two activities and provider (DUMP-guarded except
           # the launcher activity), AndroidX's profileinstaller receiver (also DUMP-guarded) and the M3 Home watch
-          # service (bound by the system only).
+          # service (bound by the system only). mic-to-claude adds five: AssistActivity (ASSIST/VOICE_COMMAND only, no UI)
+          # and the "Ask Claude" launcher alias (both open like the launcher activity, so no permission); the voice
+          # interaction and session services (BIND_VOICE_INTERACTION, system only); and the recognition service, which
+          # must be bindable by any app's SpeechRecognizer, so it has no permission and forwards to Google's recognizer.
+          # RECORD_AUDIO (above) is for that forwarding: the target checks the whole attribution chain.
           "$apkanalyzer" manifest print "$APK" | python3 -c '
           import sys, xml.etree.ElementTree as ET
           A = "{http://schemas.android.com/apk/res/android}"
@@ -276,9 +281,14 @@ jobs:
           ' > "$RUNNER_TEMP/exported.actual"
           cat > "$RUNNER_TEMP/exported.expected" <<'EOF'
           activity com.gnosh.tvhome.AgendaActivity -
+          activity com.gnosh.tvhome.AssistActivity -
           activity com.gnosh.tvhome.ProvisionActivity android.permission.DUMP
+          activity-alias com.gnosh.tvhome.AskClaudeEntry -
           provider com.gnosh.tvhome.ProvisionProvider android.permission.DUMP
           receiver androidx.profileinstaller.ProfileInstallReceiver android.permission.DUMP
+          service com.gnosh.tvhome.ClaudeRecognitionService -
+          service com.gnosh.tvhome.ClaudeSessionService android.permission.BIND_VOICE_INTERACTION
+          service com.gnosh.tvhome.ClaudeVoiceService android.permission.BIND_VOICE_INTERACTION
           service com.gnosh.tvhome.HomeWatchService android.permission.BIND_ACCESSIBILITY_SERVICE
           EOF
           sed -i 's/^ *//' "$RUNNER_TEMP/exported.expected"

@@ -4,6 +4,11 @@
     <!-- M1 permissions: nothing else. Never QUERY_ALL_PACKAGES. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- mic-to-claude (stub-recognizer-default): the assistant role makes ClaudeRecognitionService the TV's default
+         speech recognizer; it forwards to Google's recognizer, whose permission check runs over the attribution chain
+         and so needs this app to hold RECORD_AUDIO too. The app never opens the microphone itself and never asks for
+         this at runtime: it is granted in the TV's app settings only if the mic button is moved to Claude. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- M2 tile row: see only apps with a TV launcher entry (package visibility). This is not a permission and grants
          nothing else; QUERY_ALL_PACKAGES stays out. -->
@@ -16,6 +21,10 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
+        </intent>
+        <!-- mic-to-claude: lets ClaudeRecognitionService find the recognizer it forwards to. Visibility only. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 
@@ -45,6 +54,72 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- mic-to-claude: a second TV launcher entry named "Ask Claude" with its own banner, so the remote's star button
+             (or any launcher) can open Ask Claude directly. Same activity; EntryRoute sends this entry to the Ask view. -->
+        <activity-alias
+            android:name=".AskClaudeEntry"
+            android:exported="true"
+            android:label="@string/ask_entry_label"
+            android:banner="@drawable/banner_ask"
+            android:targetActivity=".AgendaActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- mic-to-claude: the assist / voice command entry. No UI: it opens Ask Claude, listening, and finishes. Like
+             ACTION_ASK any app may start it; it only opens the Ask view. -->
+        <activity
+            android:name=".AssistActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- mic-to-claude: the digital assistant services (only the system may bind the first two). They do nothing
+             until Brian picks this app as the TV's digital assistant (docs/user/tv-home-setup.md). No hotword. -->
+        <service
+            android:name=".ClaudeVoiceService"
+            android:exported="true"
+            android:label="@string/assistant_label"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction" />
+        </service>
+        <service
+            android:name=".ClaudeSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+        <!-- Required by the role (which makes it the default recognizer); forwards every request to another installed
+             recognizer (Google's first) and relays the callbacks. -->
+        <service
+            android:name=".ClaudeRecognitionService"
+            android:exported="true"
+            android:label="@string/assistant_label">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/recognition_service" />
+        </service>
 
         <!-- M3 Home: an accessibility service that watches only for the TV's own home screen coming up and then
              brings the dashboard to the front (HomeWatchService; res/xml/home_watch.xml). No window content, no key

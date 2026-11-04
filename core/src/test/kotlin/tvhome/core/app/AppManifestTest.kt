@@ -39,26 +39,36 @@ class AppManifestTest {
         assertNull(application.attr("requestLegacyExternalStorage"))
     }
 
-    @Test fun onlyTheTwoNetworkPermissions() {
+    /** The two network permissions, plus RECORD_AUDIO for the forwarding recognizer (mic-to-claude) and nothing else. */
+    @Test fun onlyTheNetworkPermissionsAndRecordAudio() {
         val perms = manifest.kids("uses-permission").map { it.attr("name") }.toSet()
-        assertEquals(setOf("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"), perms)
+        assertEquals(
+            setOf("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.RECORD_AUDIO"),
+            perms,
+        )
+        // RECORD_AUDIO is never requested at runtime, and nothing in the app opens the microphone itself.
+        File(app, "src/main/kotlin").walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { f ->
+            val t = f.readText()
+            for (bad in listOf("requestPermissions", "RequestPermission", "AudioRecord", "MediaRecorder")) assertFalse(t.contains(bad), "${f.name}: $bad")
+        }
     }
 
     /**
      * M2: package visibility is "apps with a TV launcher entry", plus (M3) the TV's home activities for
      * HomeWatchService; no <package> or <provider> entries.
      */
-    @Test fun queriesOnlyLeanbackLauncherAndHomeIntents() {
+    @Test fun queriesOnlyLeanbackLauncherHomeAndRecognizerIntents() {
         val q = manifest.kids("queries").single()
         assertTrue(q.kids("package").isEmpty() && q.kids("provider").isEmpty())
         val intents = q.kids("intent")
-        intents.forEach {
-            assertEquals(listOf("android.intent.action.MAIN"), it.kids("action").map { a -> a.attr("name") })
-            assertTrue(it.kids("data").isEmpty())
-        }
+        intents.forEach { assertTrue(it.kids("data").isEmpty()) }
         assertEquals(
-            listOf("android.intent.category.LEANBACK_LAUNCHER", "android.intent.category.HOME"),
-            intents.map { it.kids("category").single().attr("name") },
+            listOf(
+                "android.intent.action.MAIN android.intent.category.LEANBACK_LAUNCHER",
+                "android.intent.action.MAIN android.intent.category.HOME",
+                "android.speech.RecognitionService",
+            ),
+            intents.map { i -> (i.kids("action") + i.kids("category")).joinToString(" ") { it.attr("name") ?: "" } },
         )
     }
 
@@ -74,8 +84,7 @@ class AppManifestTest {
 
     /** M3 Home watch: window-state events only, bound by the system only, no window content, no key filtering. */
     @Test fun homeWatchOnlySeesWindowChanges() {
-        val svc = application.kids("service").single()
-        assertEquals(".HomeWatchService", svc.attr("name"))
+        val svc = component("service", ".HomeWatchService")
         assertEquals("android.permission.BIND_ACCESSIBILITY_SERVICE", svc.attr("permission"))
         assertEquals(
             listOf("android.accessibilityservice.AccessibilityService"),
@@ -130,13 +139,76 @@ class AppManifestTest {
 
     @Test fun everyComponentIsListedAndAllElseIsAbsent() {
         assertEquals(
-            setOf(".AgendaActivity", ".ProvisionActivity"),
+            setOf(".AgendaActivity", ".ProvisionActivity", ".AssistActivity"),
             application.kids("activity").map { it.attr("name") }.toSet(),
         )
         assertEquals(listOf(".ProvisionProvider"), application.kids("provider").map { it.attr("name") })
-        assertEquals(listOf(".HomeWatchService"), application.kids("service").map { it.attr("name") })
+        assertEquals(
+            setOf(".HomeWatchService", ".ClaudeVoiceService", ".ClaudeSessionService", ".ClaudeRecognitionService"),
+            application.kids("service").map { it.attr("name") }.toSet(),
+        )
         assertTrue(application.kids("receiver").isEmpty())
-        assertTrue(application.kids("activity-alias").isEmpty())
+        assertEquals(listOf(".AskClaudeEntry"), application.kids("activity-alias").map { it.attr("name") })
+    }
+
+    // ---- mic-to-claude ---------------------------------------------------------------------------------------------
+
+    /** The "Ask Claude" launcher entry: an alias of the main activity, its own label and 320x180 banner. */
+    @Test fun askClaudeEntryIsALauncherAlias() {
+        val a = component("activity-alias", ".AskClaudeEntry")
+        assertEquals(".AgendaActivity", a.attr("targetActivity"))
+        assertEquals("true", a.attr("exported"))
+        val f = a.kids("intent-filter").single()
+        assertEquals(listOf("android.intent.action.MAIN"), f.kids("action").map { it.attr("name") })
+        assertEquals(listOf("android.intent.category.LEANBACK_LAUNCHER"), f.kids("category").map { it.attr("name") })
+        assertEquals("@drawable/banner_ask", a.attr("banner"))
+        val png = File(app, "src/main/res/drawable-xhdpi/banner_ask.png").readBytes()
+        assertEquals(320, java.nio.ByteBuffer.wrap(png, 16, 4).int); assertEquals(180, java.nio.ByteBuffer.wrap(png, 20, 4).int)
+        val strings = File(app, "src/main/res/values/strings.xml").readText()
+        assertTrue(strings.contains("<string name=\"ask_entry_label\">Ask Claude</string>"))
+        // The alias name EntryRoute routes to Ask.
+        assertEquals("com.gnosh.tvhome" + a.attr("name"), tvhome.core.assistant.EntryRoute.ASK_ENTRY)
+    }
+
+    /** The assist entry: only ASSIST and VOICE_COMMAND, no UI, no recents, no history. */
+    @Test fun assistActivityOnlyTakesAssistAndVoiceCommand() {
+        val a = component("activity", ".AssistActivity")
+        assertEquals(
+            tvhome.core.assistant.EntryRoute.ASSIST_ACTIONS,
+            a.kids("intent-filter").flatMap { it.kids("action") }.map { it.attr("name") }.toSet(),
+        )
+        a.kids("intent-filter").forEach { assertEquals(listOf("android.intent.category.DEFAULT"), it.kids("category").map { c -> c.attr("name") }) }
+        assertEquals("@android:style/Theme.NoDisplay", a.attr("theme"))
+        assertEquals("true", a.attr("excludeFromRecents")); assertEquals("true", a.attr("noHistory"))
+    }
+
+    /** The voice services: bindable only by the system, assist only (no hotword), pointing at declared classes. */
+    @Test fun voiceServicesAreSystemBoundAndAssistOnly() {
+        for (n in listOf(".ClaudeVoiceService", ".ClaudeSessionService")) {
+            assertEquals("android.permission.BIND_VOICE_INTERACTION", component("service", n).attr("permission"), n)
+        }
+        val v = component("service", ".ClaudeVoiceService")
+        assertEquals(listOf("android.service.voice.VoiceInteractionService"), v.kids("intent-filter").single().kids("action").map { it.attr("name") })
+        assertEquals("@xml/voice_interaction", v.kids("meta-data").single().attr("resource"))
+        val cfg = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(File(app, "src/main/res/xml/voice_interaction.xml")).documentElement
+        assertEquals("com.gnosh.tvhome.ClaudeSessionService", cfg.attr("sessionService"))
+        assertEquals("com.gnosh.tvhome.ClaudeRecognitionService", cfg.attr("recognitionService"))
+        assertEquals("true", cfg.attr("supportsAssist"))
+        assertEquals("false", cfg.attr("supportsLaunchVoiceAssistFromKeyguard"))
+        assertEquals("false", cfg.attr("supportsLocalInteraction"))
+        for (bad in listOf("settingsActivity", "supportsHotwordDetection")) assertNull(cfg.attr(bad), bad)
+        val r = component("service", ".ClaudeRecognitionService")
+        assertEquals(listOf("android.speech.RecognitionService"), r.kids("intent-filter").single().kids("action").map { it.attr("name") })
+        assertEquals("@xml/recognition_service", r.kids("meta-data").single().attr("resource"))
+        // No hotword or audio capture anywhere in the app code; assist context (screen, screenshot) is refused; the
+        // session has no window; the recognizer forwards instead of failing everyone.
+        val src = File(app, "src/main/kotlin/com/gnosh/tvhome/ClaudeVoiceService.kt").readText()
+        assertEquals(2, Regex("""disabledShowContext = .*SHOW_WITH_ASSIST or .*SHOW_WITH_SCREENSHOT""").findAll(src).count())
+        assertTrue(src.contains("setUiEnabled(false)"))
+        assertTrue(src.contains("RecognizerChoice.pick(") && src.contains("SpeechRecognizer.createSpeechRecognizer("))
+        for (bad in listOf("AlwaysOnHotwordDetector", "createAlwaysOnHotwordDetector", "AudioRecord", "MediaRecorder")) assertFalse(src.contains(bad), bad)
+        for (x in listOf("voice_interaction", "recognition_service")) assertTrue(File(app, "src/main/res/xml/$x.xml").isFile)
     }
 
     @Test fun referencedResourcesExist() {

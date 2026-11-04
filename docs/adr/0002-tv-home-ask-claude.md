@@ -46,7 +46,7 @@ calendar URL. Prefer no new accounts.
 Brian chose "start now (lean)": a general assistant he can talk to from the dock, which can also open shows. What was
 built, and where it differs from the decisions above:
 - **Tile and view:** an Ask Claude tile in the dock after Calendar; OK opens a full-screen Ask view (BackHandler, one
-  Back to leave, conversation dropped on leaving). Speech via the system `RecognizerIntent` dialog (no RECORD_AUDIO);
+  Back to leave, conversation dropped on leaving). Speech via the system `RecognizerIntent` dialog (Ask itself needs no RECORD_AUDIO; mic-to-claude adds it only for the forwarding recognizer);
   if there is none, a text field. The transcript is shown with Send / Edit / Cancel before anything is sent.
 - **Call:** raw HTTPS to `/v1/messages` with OkHttp in `:core` (`AnthropicClient`), the fallback named under
   Alternatives, instead of the SDK and a new `:assistant-claude` module: smaller APK, no R8 rules. Non-streaming,

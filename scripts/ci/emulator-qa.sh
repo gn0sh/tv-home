@@ -169,6 +169,7 @@ on_exit() {
   local rc=$?
   idle_cleanup
   declare -F m3_cleanup >/dev/null && m3_cleanup
+  declare -F restore_role >/dev/null && restore_role   # qa-role-restore-trap: never leave the assistant role on us
   declare -F m7_offline >/dev/null && m7_offline off   # m7-dns-restore-on-exit: a failed Q1 must not leave DNS broken
   final_scan || rc=1
   exit $rc
@@ -188,9 +189,12 @@ inst=$(a install --no-incremental -r -g "$APK" 2>&1 | tr -d '\r') && irc=0 || ir
 echo "$inst"
 if [[ $irc -ne 0 ]] || ! grep -q 'Success' <<<"$inst"; then fail "adb install failed (exit $irc)"; fi
 sh_ pm path "$PKG" | grep -q '^package:' || fail "$PKG not installed"
-r=$(sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER "$PKG" | tr -d '\r' | tail -1)
-[[ $r == "$MAIN" || $r == "$PKG/com.gnosh.tvhome.AgendaActivity" ]] || fail "LEANBACK_LAUNCHER does not resolve to AgendaActivity (got: $r)"
-pass "installed; LEANBACK_LAUNCHER resolves to $r"
+# mic-to-claude: two launcher entries now (the app, and the "Ask Claude" alias the star button can open), so list
+# them instead of resolving one (resolve-activity would give the chooser).
+r=$(sh_ cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER "$PKG" | tr -d '\r')
+grep -qE "^ *($MAIN|$PKG/com\.gnosh\.tvhome\.AgendaActivity)\$" <<<"$r" || fail "LEANBACK_LAUNCHER has no AgendaActivity entry (got: $r)"
+grep -qE "^ *$PKG/(\.|com\.gnosh\.tvhome\.)AskClaudeEntry\$" <<<"$r" || fail "LEANBACK_LAUNCHER has no Ask Claude entry (got: $r)"
+pass "installed; LEANBACK_LAUNCHER lists AgendaActivity and AskClaudeEntry"
 # snow-uiautomator-idle: the Christmas hero animates; uiautomator waits for an idle UI. The app stops its animation when
 # the system animator scale is 0, so freeze it for the whole run.
 sh_ settings put global animator_duration_scale 0 >/dev/null 2>&1 || warn "could not set animator_duration_scale 0; uiautomator dumps may time out on an animated hero"
@@ -403,6 +407,97 @@ fi
 pass "M1b: one Back with focus on the Ask button leaves the app"
 note "M1b speech input, the Claude API call, answers, Open and the follow-up are NOT VERIFIED here: no API key or recognizer on the emulator (JVM tests in :core cover the logic; the device check is Brian's)"
 no_app_crash_yet "M1b ask"
+
+step "mic-to-claude: with the assistant role, the remote's mic (KEYCODE_ASSIST) opens Ask Claude; role restored after"
+ROLE=android.app.role.ASSISTANT
+REC="$PKG/com.gnosh.tvhome.ClaudeRecognitionService"
+prev_roles=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ' || true)
+prev_rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
+echo "before: assistant role holders: ${prev_roles:-<none>}; voice_recognition_service: $prev_rec"
+ROLE_TAKEN=0
+# qa-role-restore-trap: on_exit calls this too, so a failure anywhere after the role is taken still gives it back.
+restore_role() {
+  [[ ${ROLE_TAKEN:-0} == 1 ]] || return 0
+  ROLE_TAKEN=0
+  timeout 30 adb shell cmd role remove-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || true
+  for h in $prev_roles; do timeout 30 adb shell cmd role add-role-holder --user 0 "$ROLE" "$h" 0 >/dev/null 2>&1 || echo "::warning::could not give the assistant role back to $h"; done
+}
+# The Ask entry also works by intent alone (no role): ACTION_ASSIST goes to AssistActivity, which opens Ask Claude.
+sh_ am force-stop "$PKG"; sh_ input keyevent KEYCODE_HOME; sleep 2
+sh_ am start -W -a android.intent.action.ASSIST -n "$PKG/com.gnosh.tvhome.AssistActivity" >/dev/null; sleep 3
+in_front || fail "mic: ACTION_ASSIST to AssistActivity did not bring the app up"
+expect_text "mic-assist-intent" "Ask Claude full screen"
+pass "mic: ACTION_ASSIST opens Ask Claude"
+sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1
+sh_ input keyevent KEYCODE_HOME; sleep 2
+# qa-bypass-masks-qualification: no bypass. If the app does not qualify for the role on its own, that is the bug.
+ROLE_TAKEN=1   # set before the call: a half-applied add is still undone
+sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || fail "mic: add-role-holder refused $PKG (the app does not qualify for the assistant role)"
+sleep 3
+holders=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r')
+grep -qF "$PKG" <<<"$holders" || fail "mic: $PKG is not the assistant role holder (got: $holders)"
+sh_ settings get secure voice_interaction_service | tr -d '\r' | tee "$OUT/mic-voice-service.txt"
+rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
+echo "with the role: voice_recognition_service: $rec"
+# The role may or may not repoint the default recognizer (the API 34 TV image keeps Google's). Either is fine; anything
+# else is not.
+MIC_REC_OURS=0
+if [[ $rec == "$REC" || $rec == "$PKG/.ClaudeRecognitionService" ]]; then
+  MIC_REC_OURS=1
+  pass "mic: the role pointed voice_recognition_service at our forwarding ClaudeRecognitionService"
+elif [[ $rec == "$prev_rec" ]]; then
+  pass "mic: the role left voice_recognition_service unchanged ($rec)"
+  note "mic: other apps keep Google's recognizer unchanged on this image; the forwarding recognizer is not used here"
+else
+  fail "mic: voice_recognition_service changed to something that is neither its old value nor ours (before: $prev_rec, now: $rec)"
+fi
+# No force-stop from here on: it would unbind the voice service.
+sh_ input keyevent KEYCODE_ASSIST; sleep 4
+if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; fail "mic: KEYCODE_ASSIST with the role did not open the app"; fi
+xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-mic-assist.xml"
+grep -qF "Ask Claude full screen" <<<"$xml" || fail "mic: KEYCODE_ASSIST did not show the Ask Claude screen"
+pass "mic: KEYCODE_ASSIST with the role opens Ask Claude"
+sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1
+restore_role
+sleep 2
+after=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ')
+grep -qF "$PKG" <<<"$after" && fail "mic: the assistant role was not taken back from $PKG"
+after_rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
+[[ $after_rec == "$prev_rec" ]] || warn "mic: voice_recognition_service after restore is '$after_rec', before it was '$prev_rec'"
+pass "mic: assistant role restored (now: ${after:-<none>}; voice_recognition_service: $after_rec)"
+no_app_crash_yet "mic-to-claude"
+# forwarding-unproven-on-device: the round trip needs the qa APK's RecognizerProbeActivity, so it runs inside the
+# M7 block while the qa APK is installed (mic_round_trip below), and only if the image has a Google recognizer.
+mic_round_trip() {
+  local recs google probe
+  if [[ ${MIC_REC_OURS:-0} != 1 ]]; then
+    note "mic round trip skipped: the assistant role did not repoint voice_recognition_service, so other apps keep Google's recognizer unchanged"
+    return 0
+  fi
+  recs=$(sh_ cmd package query-services --brief -a android.speech.RecognitionService | tr -d '\r' | grep '/' | grep -v "$PKG/" || true)
+  google=$(grep -E 'com\.google\.android\.(katniss|googlequicksearchbox|tts|as)/' <<<"$recs" | head -1 || true)
+  if [[ -z $google ]]; then
+    note "mic round trip NOT VERIFIED: this emulator image has no Google recognizer (recognizers: ${recs:-none}); check by hand on the TV (setup doc: YouTube voice search)"
+    return 0
+  fi
+  echo "mic round trip: Google recognizer $google"
+  ROLE_TAKEN=1
+  sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || fail "mic round trip: add-role-holder refused the qa APK"
+  sleep 3
+  sh_ am start -W -n "$PKG/com.gnosh.tvhome.RecognizerProbeActivity" >/dev/null; sleep 12
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-mic-round-trip.xml"
+  probe=$(grep -oE 'recognizer-probe: [a-z]+( [0-9a-z]+)?' <<<"$xml" | tail -1 || true)
+  sh_ input keyevent KEYCODE_BACK; sleep 1
+  restore_role
+  echo "mic round trip: ${probe:-<no probe text>}"
+  case $probe in
+    "recognizer-probe: ready"|"recognizer-probe: partial"|"recognizer-probe: results") ;;
+    "recognizer-probe: error 5"|"recognizer-probe: error 9") fail "mic round trip: forwarding failed ($probe; 5 = ERROR_CLIENT, 9 = ERROR_INSUFFICIENT_PERMISSIONS)" ;;
+    "recognizer-probe: error "[0-9]*) ;;   # e.g. no match or speech timeout: Google's recognizer took the forwarded request
+    *) fail "mic round trip: no usable probe result (${probe:-none})" ;;
+  esac
+  pass "mic round trip: SpeechRecognizer through ClaudeRecognitionService reached $google ($probe)"
+}
 
 # Return to our home screen from an app we opened. Third-party apps may consume Back (YouTube TV shows an exit
 # dialog), so Back is tried first and then the app is force-stopped; either way our task must be underneath and resume.
@@ -1151,7 +1246,7 @@ fi
     esac
     pass "q2: Down from Calendar reached the Ask pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
-    [[ ${cur%%|*} == "Watch the game on YouTube" ]] || fail "q2: Right from Ask reached '${cur%%|*}', not the Watch pill"
+    [[ ${cur%%|*} =~ ^Watch\ the\ game\ on\ YouTube(,\ opens\ .+)?$ ]] || fail "q2: Right from Ask reached '${cur%%|*}', not the Watch pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
     [[ ${cur%%|*} == "Quiet mode, off"* ]] || fail "q2: Right from Watch reached '${cur%%|*}', not the Quiet pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
@@ -1199,6 +1294,7 @@ fi
   sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
   m7_offline off
   network on
+  mic_round_trip
   if [[ $m7_mode == root ]]; then
     a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
   else
