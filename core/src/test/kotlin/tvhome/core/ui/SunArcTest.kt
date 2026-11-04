@@ -40,14 +40,15 @@ class SunArcTest {
         assertNull(SunArc.place(sky(2026, 11, 3, 17, 30), flat)) // after civil dusk
     }
 
-    @Test fun neverAboveTheTopOrLeftOfTheCalmZoneAllYear() {
+    @Test fun sunStaysInsideTheArcAndUnderTheTopAllYear() {
         var d = LocalDate.of(2026, 1, 1)
         while (d.year == 2026) {
             for (h in 0..23) for (m in listOf(0, 30)) {
                 val s = SunArc.place(SkyNow.of(d.atTime(h, m).atZone(central).toInstant(), lat, lon), flat)
                     ?: continue
                 assertTrue(s.y >= SunArc.Y_TOP - 1e-4f, "$d $h:$m y ${s.y}")
-                assertTrue(s.x in 0.52f..0.96f, "$d $h:$m x ${s.x}")
+                // The arc reaches 0.06..0.94 at most: the 1.1 clamp on each side of X_RISE..X_SET (twilight beyond rise/set).
+                assertTrue(s.x in (0.06f - 1e-4f)..(0.94f + 1e-4f), "$d $h:$m x ${s.x}")
             }
             d = d.plusDays(7)
         }
@@ -106,13 +107,68 @@ class SunArcTest {
     }
 
     @Test fun transitIsTheMiddleOfTheArc() {
-        // sun-x-noon: the arc spans X_RISE..X_SET (right of the calm title wash), so the transit (11:33 AM CST in
-        // Clarksville, not clock noon) is its midpoint, about 0.74 of the image; 12:00 PM is a little past it.
+        // The transit (11:33 AM CST in Clarksville, not clock noon) is the centre of the screen; 12:00 PM is just past.
         val mid = (SunArc.X_RISE + SunArc.X_SET) / 2
         for (date in listOf(LocalDate.of(2026, 11, 3), LocalDate.of(2026, 6, 21), LocalDate.of(2026, 3, 8))) {
             val day = tvhome.core.sky.Sun.day(date, central, lat, lon)
             assertEquals(mid, SunArc.place(SkyNow.of(day.noon, lat, lon), flat)!!.x, 0.01f, "$date")
         }
-        assertTrue(SunArc.place(sky(2026, 11, 3, 12), flat)!!.x in mid..mid + 0.03f)
+        assertEquals(0.5f, mid, 1e-6f)
+        assertTrue(SunArc.place(sky(2026, 11, 3, 12), flat)!!.x in mid..mid + 0.08f)
+    }
+
+    @Test fun nashvilleNovember4FollowsTheSkyLeftToRight() {
+        // Brian's report (2026-11-04 20:39Z, 2:39 PM CST): the sun was drawn at x 0.85, by the sunset end of the old
+        // 0.56-0.92 arc. Facing south it is south-west (azimuth 229), 22 degrees up, past its 38-degree peak.
+        val nash = 36.16 to -86.78
+        fun at(t: String) = SkyNow.of(java.time.Instant.parse("2026-11-04T$t"), nash.first, nash.second)
+        val day = at("17:30:00Z").day
+        val rise = SunArc.place(SkyNow.of(day.sunrise!!, nash.first, nash.second), flat)!!
+        val noon = SunArc.place(SkyNow.of(day.noon, nash.first, nash.second), flat)!!
+        val pm = SunArc.place(at("20:39:00Z"), flat)!!
+        val set = SunArc.place(SkyNow.of(day.sunset!!, nash.first, nash.second), flat)!!
+        assertEquals(SunArc.X_RISE, rise.x, 0.01f) // east, on the left
+        assertEquals(0.5f, noon.x, 0.01f)
+        assertEquals(SunArc.Y_TOP, noon.y, 0.001f)
+        assertEquals(SunArc.X_SET, set.x, 0.01f) // west, on the right
+        val p = at("20:39:00Z").position
+        assertEquals(229.4, p.azimuth, 1.0)
+        assertEquals(21.8, p.elevation, 0.5)
+        assertTrue(!p.morning)
+        // Right of centre by its share of the afternoon's azimuth span, and lower than noon, above the horizon.
+        assertEquals(0.77f, pm.x, 0.02f)
+        // The flat test skyline is at 0.6: clearly below noon and clearly above that horizon.
+        assertTrue(pm.y > noon.y + 0.03f && pm.y < 0.6f - 0.03f, "y ${pm.y}")
+        assertTrue(rise.x < noon.x && noon.x < pm.x && pm.x < set.x)
+        // 9 AM is left of centre: the morning sun is in the east half.
+        assertTrue(SunArc.place(at("15:00:00Z"), flat)!!.x < 0.5f)
+    }
+
+    @Test fun twilightClampsJustBeyondTheEnds() {
+        // Before sunrise and after sunset, until HIDDEN_BELOW, the sun sits just past the ends, never beyond 1.1x.
+        val day = sky(2026, 11, 4, 12).day
+        val early = SunArc.place(SkyNow.of(day.sunrise!!.minusSeconds(8 * 60), lat, lon), flat)!!
+        val late = SunArc.place(SkyNow.of(day.sunset!!.plusSeconds(8 * 60), lat, lon), flat)!!
+        assertTrue(early.x < SunArc.X_RISE && early.x >= 0.06f - 1e-4f, "early x ${early.x}")
+        assertTrue(late.x > SunArc.X_SET && late.x <= 0.94f + 1e-4f, "late x ${late.x}")
+        assertTrue(early.y > 0.6f && late.y > 0.6f) // under the horizon line: the app clips them
+        assertNull(SunArc.place(SkyNow.of(day.sunset!!.plusSeconds(40 * 60), lat, lon), flat)) // well down: no sun
+    }
+
+    @Test fun azimuthWrapsAroundNorth() {
+        // Sydney: the transit is due north (azimuth near 0/360), so azimuths on either side straddle 360. The
+        // formula mirrors as facing north: sunrise (east) on the right, sunset on the left, transit at the centre.
+        val syd = -33.87 to 151.21
+        val probe = SkyNow.of(java.time.Instant.parse("2026-11-04T02:00:00Z"), syd.first, syd.second)
+        val day = probe.day
+        fun x(at: java.time.Instant) = SunArc.place(SkyNow.of(at, syd.first, syd.second), flat)!!.x
+        assertTrue(probe.noonAzimuth < 10.0 || probe.noonAzimuth > 350.0, "noon azimuth ${probe.noonAzimuth}")
+        assertEquals(0.5f, x(day.noon), 0.01f)
+        assertEquals(SunArc.X_SET, x(day.sunrise!!), 0.01f)
+        assertEquals(SunArc.X_RISE, x(day.sunset!!), 0.01f)
+        // Ten minutes either side of the transit cross 360 without a jump.
+        val a = x(day.noon.minusSeconds(600))
+        val b = x(day.noon.plusSeconds(600))
+        assertTrue(kotlin.math.abs(a - b) < 0.1f && a > 0.4f && b < 0.6f, "$a $b")
     }
 }
