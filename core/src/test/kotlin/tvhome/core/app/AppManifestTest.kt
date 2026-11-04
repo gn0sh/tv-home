@@ -139,7 +139,7 @@ class AppManifestTest {
 
     @Test fun everyComponentIsListedAndAllElseIsAbsent() {
         assertEquals(
-            setOf(".AgendaActivity", ".ProvisionActivity", ".AssistActivity"),
+            setOf(".AgendaActivity", ".ProvisionActivity", ".AssistActivity", ".OpenTrampolineActivity"),
             application.kids("activity").map { it.attr("name") }.toSet(),
         )
         assertEquals(listOf(".ProvisionProvider"), application.kids("provider").map { it.attr("name") })
@@ -168,6 +168,22 @@ class AppManifestTest {
         assertTrue(strings.contains("<string name=\"ask_entry_label\">Ask Claude</string>"))
         // The alias name EntryRoute routes to Ask.
         assertEquals("com.gnosh.tvhome" + a.attr("name"), tvhome.core.assistant.EntryRoute.ASK_ENTRY)
+    }
+
+    /** overlay-open-fix: the voice overlay's Open trampoline is not exported, has no filters and no UI. */
+    @Test fun openTrampolineIsPrivateAndInvisible() {
+        val a = component("activity", ".OpenTrampolineActivity")
+        assertEquals("false", a.attr("exported"))
+        assertTrue(a.kids("intent-filter").isEmpty())
+        assertEquals("@android:style/Theme.NoDisplay", a.attr("theme"))
+        assertEquals("true", a.attr("excludeFromRecents")); assertEquals("true", a.attr("noHistory"))
+        val src = File(app, "src/main/kotlin/com/gnosh/tvhome/OpenTrampolineActivity.kt").readText()
+        assertTrue(src.contains("OpenFilter.accepts(target.`package`, target.component?.packageName, packageName)") && src.contains("OpenFilter.flags("))
+        // The release and debug QA hooks never plant anything; only the qa build type reads a planted exchange.
+        for (bt in listOf("release", "debug")) {
+            val hook = File(app, "src/$bt/kotlin/com/gnosh/tvhome/VoiceQaHook.kt").readText()
+            assertTrue(hook.contains("QaPlanted? = null"), bt)
+        }
     }
 
     /** The assist entry: only ASSIST and VOICE_COMMAND, no UI, no recents, no history. */

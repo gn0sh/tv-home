@@ -112,6 +112,12 @@ class VoiceOverlay(
     /** Back: ends the session from any state. */
     fun back() { state = OverlayState.Done }
 
+    /** answer-fade: a key on the card, or focus moving to Open, restarts the answer's fade. */
+    fun keepShowing() {
+        val s = state as? OverlayState.Answer ?: return
+        state = OverlayState.Answer(s.reply, now())
+    }
+
     /** Open was pressed and the app launched. */
     fun opened() { if (state is OverlayState.Answer) state = OverlayState.Done }
 

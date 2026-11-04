@@ -24,6 +24,7 @@ import android.speech.SpeechRecognizer
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -40,6 +41,7 @@ import kotlinx.coroutines.withContext
 import tvhome.core.assistant.AskApp
 import tvhome.core.assistant.AskEngine
 import tvhome.core.assistant.AskOutcome
+import tvhome.core.assistant.AskReply
 import tvhome.core.assistant.OverlayEffect
 import tvhome.core.assistant.OverlayState
 import tvhome.core.assistant.VoiceError
@@ -70,6 +72,8 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
     private var job: Job? = null
     /** The Open plan for the current answer, worked out on IO before the answer is drawn. */
     private var openPlan: OpenPlan? = null
+    /** qa builds only (VoiceQaHook): Open the old way, straight from the session, to show the platform blocks it. */
+    private var qaDirectOpen = false
     private var views: OverlayViews? = null
     private val tick = Runnable { machine?.let { if (it.tick()) render(it) else schedule(it) } }
 
@@ -119,6 +123,20 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
             val e = (ctx.applicationContext as TvHomeApp).graph.newAskEngine { apps }
             engine = e
             if (machine !== m) return@launch
+            // qa builds only: a planted exchange instead of the microphone and the API (release: always null).
+            VoiceQaHook.planted(ctx)?.let { p ->
+                qaDirectOpen = p.directOpen
+                m.final(p.transcript) ?: return@launch
+                val outcome = AskReply.parse(p.replyJson, apps)?.let { AskOutcome.Answer(it, canFollowUp = false) } ?: AskOutcome.Unworkable
+                val plan = (outcome as? AskOutcome.Answer)?.reply?.open?.let { t ->
+                    withContext(Dispatchers.IO) { runCatching { InstalledApps.planOpen(ctx, t) }.getOrNull() }
+                }
+                if (machine !== m) return@launch
+                openPlan = plan
+                m.outcome(outcome)
+                render(m)
+                return@launch
+            }
             if (!e.checkKey()) return@launch fail(m, VoiceError.NO_KEY)
             val target = googleRecognizer(ctx) ?: return@launch fail(m, VoiceError.NO_RECOGNIZER)
             listen(m, target)
@@ -205,8 +223,8 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
                 val open = s.reply.open
                 val plan = openPlan
                 if (open != null && plan != null) {
-                    v?.showOpen("Open ${open.app.label}") {
-                        if (plan.launch()) {
+                    v?.showOpen(open.app.label, onActivity = { keepShowing(m) }) {
+                        if (if (qaDirectOpen) openDirect(plan) else openFromSession(plan)) {
                             m.opened()
                             render(m)
                         } else {
@@ -222,6 +240,13 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
                 return
             }
         }
+        schedule(m)
+    }
+
+    /** answer-fade: a key on the card or focus on Open restarts the fade. */
+    private fun keepShowing(m: VoiceOverlay) {
+        if (machine !== m) return
+        m.keepShowing()
         schedule(m)
     }
 
@@ -264,6 +289,30 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
         recognizer?.let { runCatching { it.cancel() }; runCatching { it.destroy() } }
         recognizer = null
     }
+
+    /**
+     * overlay-open-fix: Open goes through the voice session's documented route, startAssistantActivity, onto our
+     * non-exported, no-UI [OpenTrampolineActivity], which is then the foreground activity and starts the Open intent.
+     * Hypothesis (not proven; the emulator opened the app either way): a plain startActivity from the session's service
+     * context can be dropped as a background activity start without an exception. False only when this start fails.
+     * Each attempt goes to [OpenLog] with its route, never the title.
+     */
+    private fun openFromSession(plan: OpenPlan): Boolean {
+        val target = plan.intent ?: return false.also { OpenLog.record(context, "session", plan.route, "no_intent") }
+        val ok = runCatching {
+            startAssistantActivity(
+                Intent(context, OpenTrampolineActivity::class.java)
+                    .putExtra(OpenTrampolineActivity.EXTRA_TARGET, target)
+                    .putExtra(OpenTrampolineActivity.EXTRA_ROUTE, plan.route),
+            )
+            true
+        }.getOrDefault(false)
+        OpenLog.record(context, "session", plan.route, if (ok) "assistant_started" else "assistant_failed")
+        return ok
+    }
+
+    private fun openDirect(plan: OpenPlan): Boolean =
+        plan.launch().also { OpenLog.record(context, "session", plan.route, if (it) "direct_started" else "direct_failed") }
 
     private fun openFullScreen() {
         // The assistant's own start path first; the plain start as a fallback (the bound voice service may start it).
@@ -362,32 +411,50 @@ private class OverlayViews(private val context: Context) {
         this.status.visibility = if (status == null) View.GONE else View.VISIBLE
         this.body.text = body.orEmpty()
         this.body.visibility = if (body == null) View.GONE else View.VISIBLE
-        open.visibility = View.GONE
-        open.setOnClickListener(null)
-        hint.visibility = View.GONE
+        clearOpen()
         if (pulsing) startPulse() else stopPulse()
         panel.requestFocus()
     }
 
     /**
-     * overlay-open-autofocus: Open is never focused for Brian. Focus stays on the card (OK there does nothing); a
-     * deliberate Right or Down moves to Open, then OK opens. The hint says so.
+     * overlay-open-autofocus, ok-on-card-noop: Open is never focused for Brian, and never launches on one press. Focus
+     * starts on the card; OK there (or Right/Down) moves focus to Open and the hint says to press OK again; OK on Open
+     * opens. Two presses keep the accidental-launch guard. Any key on the card, or focus on Open, calls [onActivity].
      */
-    fun showOpen(label: String, onOpen: () -> Unit) {
-        open.text = label
+    fun showOpen(appLabel: String, onActivity: () -> Unit, onOpen: () -> Unit) {
+        open.text = "Open $appLabel"
         open.visibility = View.VISIBLE
         open.setOnClickListener { onOpen() }
-        hint.text = "\u2192 $label"
+        hint.text = "Press OK or \u2192 to open $appLabel"
         hint.visibility = View.VISIBLE
         panel.nextFocusDownId = open.id
         panel.nextFocusRightId = open.id
         open.nextFocusUpId = panel.id
         open.nextFocusLeftId = panel.id
+        panel.setOnClickListener { open.requestFocus() } // OK on the card: to Open, never a launch
+        open.setOnFocusChangeListener { _, has ->
+            if (has) {
+                hint.text = "Press OK again to open $appLabel"
+                onActivity()
+            }
+        }
+        val keys = View.OnKeyListener { _, _, e -> if (e.action == KeyEvent.ACTION_DOWN) onActivity(); false }
+        panel.setOnKeyListener(keys)
+        open.setOnKeyListener(keys)
         panel.requestFocus()
     }
 
     fun reset() {
         stopPulse()
+        clearOpen()
+    }
+
+    private fun clearOpen() {
+        panel.setOnClickListener(null)
+        panel.isClickable = false
+        panel.setOnKeyListener(null)
+        open.setOnKeyListener(null)
+        open.onFocusChangeListener = null
         hint.visibility = View.GONE
         open.visibility = View.GONE
         open.setOnClickListener(null)
@@ -418,4 +485,9 @@ private class OverlayViews(private val context: Context) {
         val CLAUDE_ORANGE = Color.rgb(217, 119, 87)
         val PANEL_BG = Color.argb(235, 16, 20, 24)
     }
+}
+
+/** A planted exchange for the qa build's VoiceQaHook (release and debug never make one). */
+internal class QaPlanted(val transcript: String, val replyJson: String, val directOpen: Boolean) {
+    override fun toString() = "QaPlanted(direct=$directOpen)"
 }

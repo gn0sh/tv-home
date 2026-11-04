@@ -69,6 +69,18 @@
             </intent-filter>
         </activity-alias>
 
+        <!-- overlay-open-fix: the voice overlay's Open goes through here (VoiceInteractionSession.startAssistantActivity,
+             the documented route for a voice session), so the app launch comes from a foreground activity. Whether a
+             plain start from the session is blocked as a background launch is a hypothesis, not proven. Not exported:
+             only this app can start it. No UI. -->
+        <activity
+            android:name=".OpenTrampolineActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+
         <!-- mic-to-claude: the assist / voice command entry. No UI: it opens Ask Claude, listening, and finishes. Like
              ACTION_ASK any app may start it; it only opens the Ask view. -->
         <activity

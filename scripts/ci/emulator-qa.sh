@@ -543,6 +543,64 @@ pass "mic: assistant role restored (now: ${after:-<none>}; voice_recognition_ser
 no_app_crash_yet "mic-to-claude"
 # forwarding-unproven-on-device: the round trip needs the qa APK's RecognizerProbeActivity, so it runs inside the
 # M7 block while the qa APK is installed (mic_round_trip below), and only if the image has a Google recognizer.
+# overlay-open-fix: the overlay's Open must start the app. Needs the qa APK (its VoiceQaHook reads a planted reply in
+# place of the microphone and the API), so it runs in the M7 block while that APK is installed. "direct" is the old
+# startActivity from the session (reported only: a background-launch block is a hypothesis); "assistant" is the fix,
+# startAssistantActivity onto OpenTrampolineActivity, and must open, with Right then OK and with OK then OK.
+mic_open_check() {
+  local tgt=com.google.android.youtube.tv route lines xml ok bal
+  if ! sh_ pm path "$tgt" 2>/dev/null | grep -q '^package:'; then
+    note "overlay Open NOT VERIFIED: $tgt is not installed on this image"; return 0
+  fi
+  sh_ pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
+  ROLE_TAKEN=1
+  sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || fail "overlay Open: add-role-holder refused the qa APK"
+  for _ in $(seq 1 30); do sh_ dumpsys activity services "$PKG" | tr -d '\r' | grep -q 'ClaudeVoiceService' && break; sleep 1; done
+  local pass_ keys
+  # Passes: the old route with Right then OK; the fix with Right then OK; the fix with OK then OK (ok-on-card-noop:
+  # the first OK moves focus to Open and the hint says to press OK again; the second opens).
+  for pass_ in direct:right assistant:right assistant:ok; do
+    route=${pass_%%:*}; keys=${pass_##*:}
+    m7_put qa-voice.json <<EOF2
+{"transcript":"something to watch","route":"$route","reply":"{\\"answer\\":\\"Try Planet Earth.\\",\\"open\\":{\\"app_package\\":\\"$tgt\\",\\"title\\":\\"Planet Earth\\"}}"}
+EOF2
+    sh_ am force-stop "$tgt"
+    sh_ input keyevent KEYCODE_HOME; sleep 3
+    lines=$(wc -l < "$OUT/logcat-stream.txt" 2>/dev/null || echo 0)
+    sh_ input keyevent KEYCODE_ASSIST
+    xml=""
+    for _ in $(seq 1 10); do sleep 1; xml=$(ui_text); grep -qF 'Open YouTube' <<<"$xml" && break; done
+    printf '%s\n' "$xml" > "$OUT/ui-overlay-open-$route-$keys.xml"
+    grep -qF 'Open YouTube' <<<"$xml" || fail "overlay Open ($pass_): the answer card with Open YouTube did not show"
+    grep -qF 'Press OK or' <<<"$xml" || fail "overlay Open ($pass_): the card's hint does not say how to open"
+    if [[ $keys == ok ]]; then
+      sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 1
+      xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-overlay-open-$route-$keys-1.xml"
+      resumed | head -1 | grep -qF "$tgt/" && fail "overlay Open (OK, OK): the first OK already opened $tgt (it must only move to Open)"
+      grep -qF 'Press OK again' <<<"$xml" || fail "overlay Open (OK, OK): after the first OK the hint does not say to press OK again"
+    else
+      sh_ input keyevent KEYCODE_DPAD_RIGHT; sleep 1
+    fi
+    sh_ input keyevent KEYCODE_DPAD_CENTER; sleep 6
+    ok=""; resumed | head -1 | grep -qF "$tgt/" && ok=1
+    bal=$(tail -n +"$((lines + 1))" "$OUT/logcat-stream.txt" 2>/dev/null | grep -iE 'Background activity launch blocked|BAL_BLOCK|Abort background activity start' | head -3 || true)
+    echo "overlay Open ($pass_): target resumed=${ok:-no}; BAL log: ${bal:-<none>}"
+    echo "overlay Open ($pass_): app open log: $(sh_ "run-as $PKG sh -c 'tail -n 3 no_backup/open-log.txt'" 2>/dev/null | tr -d '\r' | tr '\n' '|')"
+    if [[ $route == direct ]]; then
+      if [[ -z $ok ]]; then note "overlay Open (direct, old route): did not open${bal:+ (BAL log above)}"
+      else note "overlay Open (direct, old route) opened $tgt here: the emulator does not reproduce a background-launch block (cause unproven)"; fi
+    else
+      [[ -n $ok ]] || fail "overlay Open (assistant route, $keys): $tgt is not resumed ($(resumed | head -1))"
+      [[ -z $bal ]] || fail "overlay Open (assistant route, $keys): a background activity launch was blocked: $bal"
+      pass "overlay Open: $( [[ $keys == ok ]] && echo 'OK, OK' || echo 'Right, OK' ) on the card opened $tgt through OpenTrampolineActivity (no BAL block)"
+    fi
+    sh_ am force-stop "$tgt"
+  done
+  m7_rm qa-voice.json
+  restore_role
+  sh_ input keyevent KEYCODE_HOME; sleep 2
+  no_app_crash_yet "overlay open"
+}
 mic_round_trip() {
   local recs google probe
   if [[ ${MIC_REC_OURS:-0} != 1 ]]; then
@@ -1370,6 +1428,7 @@ fi
   m7_offline off
   network on
   mic_round_trip
+  [[ $m7_mode == runas ]] && mic_open_check
   if [[ $m7_mode == root ]]; then
     a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
   else

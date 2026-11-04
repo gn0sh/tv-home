@@ -130,7 +130,7 @@ class InstalledApps {
                 @Suppress("DEPRECATION")
                 pm.resolveActivity(i, 0) != null
             }.getOrDefault(false)
-            fun plan(description: String, intent: Intent) = OpenPlan(description) {
+            fun plan(description: String, intent: Intent, route: String) = OpenPlan(description, Intent(intent), route) {
                 try {
                     context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     true
@@ -144,12 +144,12 @@ class InstalledApps {
                 val view = Intent(Intent.ACTION_VIEW, Uri.parse(link)).setPackage(pkg)
                 // The link's host is shown, so Brian sees where a link points before pressing Open.
                 val host = runCatching { Uri.parse(link).host }.getOrNull()?.removePrefix("www.").orEmpty()
-                if (resolves(view)) return plan("Opens \u201C${target.title}\u201D directly in $label ($host).", view)
+                if (resolves(view)) return plan("Opens \u201C${target.title}\u201D directly in $label ($host).", view, "deep_link")
             }
             val search = Intent(Intent.ACTION_SEARCH).setPackage(pkg).putExtra(SearchManager.QUERY, target.title)
-            if (resolves(search)) return plan("Opens $label's search for \u201C${target.title}\u201D.", search)
+            if (resolves(search)) return plan("Opens $label's search for \u201C${target.title}\u201D.", search, "search")
             val home = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
-            if (home != null) return plan("Opens $label's home. Look for \u201C${target.title}\u201D there.", home)
+            if (home != null) return plan("Opens $label's home. Look for \u201C${target.title}\u201D there.", home, "home")
             return OpenPlan("$label can't be opened.") { false }
         }
 
