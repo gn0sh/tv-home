@@ -104,12 +104,13 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
             return
         }
         // overlay-mic-after-timeout: the machine says when to let go of the mic and stop the request.
-        val m = VoiceOverlay({ SystemClock.elapsedRealtime() }) { effect ->
+        // Named: a trailing lambda would bind to the last constructor parameter (errorMs), not to effects.
+        val m = VoiceOverlay(now = { SystemClock.elapsedRealtime() }, effects = { effect: OverlayEffect ->
             when (effect) {
                 OverlayEffect.RELEASE_RECOGNIZER -> releaseRecognizer()
                 OverlayEffect.CANCEL_REQUEST -> { job?.cancel(); job = null }
             }
-        }
+        })
         machine = m
         render(m)
         job = scope.launch {
