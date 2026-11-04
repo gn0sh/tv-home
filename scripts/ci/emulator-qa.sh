@@ -488,11 +488,25 @@ grep -qF "$other/" <<<"$(resumed | head -1)" || fail "overlay: Back on the overl
 pass "overlay: Back dismisses the card and $other carries on"
 # Fallback: without RECORD_AUDIO the mic button opens the full-screen Ask view (as before voice-overlay).
 sh_ pm revoke "$PKG" android.permission.RECORD_AUDIO || fail "overlay: could not revoke RECORD_AUDIO (test setup)"
-sleep 4
+# qa-fallback-stale-xml: revoking kills the app; wait (up to 30 s) until the system has bound the voice service again.
+bound=""
+for _ in $(seq 1 30); do
+  if sh_ dumpsys activity services "$PKG" | tr -d '\r' | grep -q 'ClaudeVoiceService'; then bound=1; break; fi
+  sleep 1
+done
+[[ -n $bound ]] || { sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || true; fail "overlay: the voice service was not bound again within 30 s of revoking RECORD_AUDIO"; }
 sh_ input keyevent KEYCODE_HOME; sleep 2
-sh_ input keyevent KEYCODE_ASSIST; sleep 5
+sh_ input keyevent KEYCODE_ASSIST
+# Fresh dumps after the press, until the full-screen view shows (up to 15 s).
+xml=""
+for _ in $(seq 1 15); do
+  sleep 1
+  in_front || continue
+  xml=$(ui_text)
+  grep -qF "Ask Claude full screen" <<<"$xml" && break
+done
+printf '%s\n' "$xml" > "$OUT/ui-mic-assist.xml"
 if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || true; fail "mic: KEYCODE_ASSIST without RECORD_AUDIO did not open the app"; fi
-xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-mic-assist.xml"
 grep -qF "Ask Claude full screen" <<<"$xml" || { sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || true; fail "mic: KEYCODE_ASSIST without RECORD_AUDIO did not show the full-screen Ask view"; }
 pass "mic: without RECORD_AUDIO, KEYCODE_ASSIST falls back to the full-screen Ask view"
 sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1

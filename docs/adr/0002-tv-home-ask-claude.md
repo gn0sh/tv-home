@@ -121,10 +121,15 @@ Assumptions and decisions:
    the microphone, so Google's recognizer may record.
 4. **Send at once:** the final transcript goes straight to the same AskEngine (key check, daily cap, error mapping,
    no logging, toString redaction). No confirmation step on this path; the full-screen view keeps its Send step.
-   One question per press (no follow-up on the overlay).
+   One question per press (no follow-up on the overlay). Back, a timeout or a new press while the question is out
+   cancels the HTTP call at once (the coroutine cancels the OkHttp call), but a question already sent still counts
+   toward the daily cap: the cap is taken before the call, and only refusals before Claude did any work are given back.
+   Leaving the listening step always releases the recognizer, so the microphone never stays open after a timeout.
 5. **Answer card:** the answer text; fades after about 20 s (errors after 8 s). Back dismisses it and ends the
-   session. If the reply names an app, a focused **Open** button uses the same launch rules (InstalledApps.planOpen).
-   Nothing launches without Open (decision 3 holds).
+   session. If the reply names an app, an **Open** button uses the same launch rules (InstalledApps.planOpen, worked
+   out on IO). Open is never focused for him: focus stays on the card (OK there does nothing), a hint "→ Open <app>"
+   shows, and opening needs a deliberate Right or Down onto Open, then OK. Nothing launches without Open (decision 3
+   holds).
 6. **Errors:** no key, cap reached, offline, busy, rejected, no recognizer, mic denied, nothing heard: one short line
    on the same card. Without RECORD_AUDIO the mic button falls back to the full-screen Ask view as before.
 7. **Unchanged:** the dock tile and the star-button alias still open the full-screen Ask view. disabledShowContext

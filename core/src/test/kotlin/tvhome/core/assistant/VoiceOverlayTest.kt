@@ -117,3 +117,53 @@ class VoiceOverlayTest {
         assertEquals(VoiceError.OFFLINE, (offline.state as OverlayState.Error).error)
     }
 }
+
+class VoiceOverlayEffectsTest {
+    private var t = 0L
+    private val seen = mutableListOf<OverlayEffect>()
+    private fun overlay() = VoiceOverlay({ t }, { seen += it })
+    private val reply = AskReply("ok", null)
+
+    /** overlay-mic-after-timeout: a listen timeout releases the recognizer (and cancels any request). */
+    @Test fun listenTimeoutReleasesTheMicAndCancels() {
+        val o = overlay()
+        assertTrue(seen.isEmpty())
+        t += VoiceOverlay.LISTEN_TIMEOUT_MS; o.tick()
+        assertEquals(listOf(OverlayEffect.RELEASE_RECOGNIZER, OverlayEffect.CANCEL_REQUEST), seen)
+    }
+
+    @Test fun sendingReleasesTheMicButKeepsTheRequest() {
+        val o = overlay()
+        o.final("q")
+        assertEquals(listOf(OverlayEffect.RELEASE_RECOGNIZER), seen)
+    }
+
+    @Test fun leavingSendingCancelsTheRequest() {
+        for (end in listOf<(VoiceOverlay) -> Unit>(
+            { it.outcome(AskOutcome.Answer(reply, true)) },
+            { it.outcome(AskOutcome.CantReach) },
+            { t += VoiceOverlay.SEND_TIMEOUT_MS; it.tick() },
+            { it.back() },
+        )) {
+            seen.clear()
+            val o = overlay(); o.final("q"); seen.clear()
+            end(o)
+            assertTrue(OverlayEffect.CANCEL_REQUEST in seen, "$seen")
+            assertTrue(OverlayEffect.RELEASE_RECOGNIZER in seen, "$seen")
+        }
+    }
+
+    @Test fun backAndErrorsWhileListeningReleaseTheMic() {
+        for (end in listOf<(VoiceOverlay) -> Unit>({ it.back() }, { it.speechError(7) }, { it.fail(VoiceError.NO_KEY) }, { it.final("") })) {
+            seen.clear()
+            val o = overlay()
+            end(o)
+            assertEquals(listOf(OverlayEffect.RELEASE_RECOGNIZER, OverlayEffect.CANCEL_REQUEST), seen)
+        }
+    }
+
+    @Test fun partialTextKeepsListening() {
+        val o = overlay(); o.partial("a"); o.partial("ab")
+        assertTrue(seen.isEmpty(), "$seen")
+    }
+}

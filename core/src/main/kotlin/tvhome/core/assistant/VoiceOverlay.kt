@@ -47,15 +47,30 @@ sealed interface OverlayState {
     object Done : OverlayState { override fun toString() = "Done" }
 }
 
+/**
+ * What the session must do when the state changes (overlay-mic-after-timeout): leaving Listening releases the
+ * recognizer (no microphone after a timeout, an error, Back or the answer), leaving Sending cancels the request.
+ */
+enum class OverlayEffect { RELEASE_RECOGNIZER, CANCEL_REQUEST }
+
 class VoiceOverlay(
     private val now: () -> Long,
+    /** Run for every state change, before the new state is drawn. */
+    private val effects: (OverlayEffect) -> Unit = {},
     val listenTimeoutMs: Long = LISTEN_TIMEOUT_MS,
     val sendTimeoutMs: Long = SEND_TIMEOUT_MS,
     val answerMs: Long = ANSWER_MS,
     val errorMs: Long = ERROR_MS,
 ) {
     var state: OverlayState = OverlayState.Listening("", now())
-        private set
+        private set(next) {
+            val changed = field::class != next::class
+            field = next
+            // On each change of step: every step but Listening holds no recognizer, every step but Sending runs no
+            // request (leaving Listening also cancels the setup work: key check, app list).
+            if (changed && next !is OverlayState.Listening) effects(OverlayEffect.RELEASE_RECOGNIZER)
+            if (changed && next !is OverlayState.Sending) effects(OverlayEffect.CANCEL_REQUEST)
+        }
 
     val isDone: Boolean get() = state === OverlayState.Done
 

@@ -39,6 +39,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tvhome.core.assistant.AskApp
 import tvhome.core.assistant.AskEngine
+import tvhome.core.assistant.AskOutcome
+import tvhome.core.assistant.OverlayEffect
 import tvhome.core.assistant.OverlayState
 import tvhome.core.assistant.VoiceError
 import tvhome.core.assistant.VoiceOverlay
@@ -66,6 +68,8 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
     private var apps: List<AskApp> = emptyList()
     private var recognizer: SpeechRecognizer? = null
     private var job: Job? = null
+    /** The Open plan for the current answer, worked out on IO before the answer is drawn. */
+    private var openPlan: OpenPlan? = null
     private var views: OverlayViews? = null
     private val tick = Runnable { machine?.let { if (it.tick()) render(it) else schedule(it) } }
 
@@ -99,7 +103,13 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
             main.postDelayed({ runCatching { hide() } }, HIDE_AFTER_MS)
             return
         }
-        val m = VoiceOverlay({ SystemClock.elapsedRealtime() })
+        // overlay-mic-after-timeout: the machine says when to let go of the mic and stop the request.
+        val m = VoiceOverlay({ SystemClock.elapsedRealtime() }) { effect ->
+            when (effect) {
+                OverlayEffect.RELEASE_RECOGNIZER -> releaseRecognizer()
+                OverlayEffect.CANCEL_REQUEST -> { job?.cancel(); job = null }
+            }
+        }
         machine = m
         render(m)
         job = scope.launch {
@@ -171,8 +181,14 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
         val e = engine ?: return fail(m, VoiceError.UNWORKABLE)
         job = scope.launch {
             val outcome = e.ask(question)
+            // overlay-planopen-main: the package manager lookups for Open run on IO, next to the outcome.
+            val ctx = context
+            val plan = (outcome as? AskOutcome.Answer)?.reply?.open?.let { t ->
+                withContext(Dispatchers.IO) { runCatching { InstalledApps.planOpen(ctx, t) }.getOrNull() }
+            }
             if (machine !== m) return@launch
-            m.outcome(outcome)
+            openPlan = plan
+            m.outcome(outcome) // leaves Sending: cancels this job, so nothing suspends after this line
             render(m)
         }
     }
@@ -186,9 +202,9 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
             is OverlayState.Answer -> {
                 v?.show(status = null, body = s.reply.answer, pulsing = false, wide = true)
                 val open = s.reply.open
-                val plan = open?.let { runCatching { InstalledApps.planOpen(context, it) }.getOrNull() }
+                val plan = openPlan
                 if (open != null && plan != null) {
-                    v?.showOpen("Open in ${open.app.label}") {
+                    v?.showOpen("Open ${open.app.label}") {
                         if (plan.launch()) {
                             m.opened()
                             render(m)
@@ -239,6 +255,7 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
         releaseRecognizer()
         machine = null
         engine = null
+        openPlan = null
         views?.reset()
     }
 
@@ -298,10 +315,16 @@ private class OverlayViews(private val context: Context) {
         ellipsize = TextUtils.TruncateAt.END
         visibility = View.GONE
     }
-    private val open = Button(context).apply { visibility = View.GONE; isAllCaps = false }
+    private val open = Button(context).apply { id = View.generateViewId(); visibility = View.GONE; isAllCaps = false }
+    private val hint = TextView(context).apply {
+        setTextColor(Color.argb(200, 255, 255, 255))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        visibility = View.GONE
+    }
     private var pulse: ValueAnimator? = null
 
     val panel = LinearLayout(context).apply {
+        id = View.generateViewId()
         orientation = LinearLayout.VERTICAL
         background = GradientDrawable().apply { cornerRadius = dp(16f).toFloat(); setColor(PANEL_BG) }
         setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
@@ -316,6 +339,7 @@ private class OverlayViews(private val context: Context) {
         }
         addView(header)
         addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f) })
+        addView(hint, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f) })
         addView(open, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f) })
     }
 
@@ -334,19 +358,31 @@ private class OverlayViews(private val context: Context) {
         this.body.visibility = if (body == null) View.GONE else View.VISIBLE
         open.visibility = View.GONE
         open.setOnClickListener(null)
+        hint.visibility = View.GONE
         if (pulsing) startPulse() else stopPulse()
         panel.requestFocus()
     }
 
+    /**
+     * overlay-open-autofocus: Open is never focused for Brian. Focus stays on the card (OK there does nothing); a
+     * deliberate Right or Down moves to Open, then OK opens. The hint says so.
+     */
     fun showOpen(label: String, onOpen: () -> Unit) {
         open.text = label
         open.visibility = View.VISIBLE
         open.setOnClickListener { onOpen() }
-        open.requestFocus()
+        hint.text = "\u2192 $label"
+        hint.visibility = View.VISIBLE
+        panel.nextFocusDownId = open.id
+        panel.nextFocusRightId = open.id
+        open.nextFocusUpId = panel.id
+        open.nextFocusLeftId = panel.id
+        panel.requestFocus()
     }
 
     fun reset() {
         stopPulse()
+        hint.visibility = View.GONE
         open.visibility = View.GONE
         open.setOnClickListener(null)
     }
