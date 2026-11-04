@@ -1,6 +1,7 @@
 package com.gnosh.tvhome
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.ContextParams
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -20,7 +21,7 @@ import tvhome.core.assistant.RecognizerChoice
 /**
  * mic-to-claude: the digital assistant services. With the app chosen as the TV's digital assistant (Settings > Apps >
  * Default apps > Digital assistant app; docs/user/tv-home-setup.md), the remote's mic button (ASSIST) shows a session
- * here, and the session opens Ask Claude, listening (ADR 0002's recognizer path). No hotword, no always-on listening:
+ * here, and the session shows the voice overlay over whatever is playing (ADR 0002 "Voice overlay"). No hotword, no always-on listening:
  * this service only routes the button.
  */
 class ClaudeVoiceService : VoiceInteractionService() {
@@ -31,43 +32,26 @@ class ClaudeVoiceService : VoiceInteractionService() {
     }
 }
 
-/** One session per button press; it has no window of its own. */
+/** One session per button press: the voice overlay (VoiceOverlaySession.kt), or the full-screen Ask as a fallback. */
 class ClaudeSessionService : VoiceInteractionSessionService() {
-    override fun onNewSession(args: Bundle?): VoiceInteractionSession = AskSession(this)
+    override fun onNewSession(args: Bundle?): VoiceInteractionSession = VoiceOverlaySession(this)
+}
 
-    private class AskSession(service: VoiceInteractionSessionService) : VoiceInteractionSession(service) {
-        private val main = Handler(Looper.getMainLooper())
-
-        override fun onCreate() {
-            super.onCreate()
-            disabledShowContext = SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT // assist-context-collected
-            setUiEnabled(false) // mic-session-window: no empty window over the listening dialog
-        }
-
-        override fun onShow(args: Bundle?, showFlags: Int) {
-            super.onShow(args, showFlags)
-            // The assistant's own start path first; the plain start as a fallback (the bound voice service may start it).
-            val opened = runCatching { startAssistantActivity(Intent(context, AssistActivity::class.java)); true }.getOrDefault(false)
-            if (!opened) {
-                runCatching {
-                    context.startActivity(
-                        Intent(context, AgendaActivity::class.java).setAction(AgendaActivity.ACTION_ASK).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
-                }
+/**
+ * Google's preinstalled recognizer (RecognizerChoice: system Google packages only, never ours), or null. Used by the
+ * forwarding recognizer and by the voice overlay, which listens with it directly.
+ */
+internal fun googleRecognizer(context: Context): ComponentName? {
+    val found = runCatching {
+        context.packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), PackageManager.MATCH_ALL)
+            .mapNotNull { it.serviceInfo }
+            .map {
+                val flags = it.applicationInfo?.flags ?: 0
+                val system = (flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
+                RecognizerChoice.Candidate(it.packageName, it.name, system)
             }
-            // Nothing to show here: close the session once the Ask screen has had time to come up.
-            main.postDelayed({ runCatching { hide() } }, HIDE_AFTER_MS)
-        }
-
-        override fun onHide() {
-            main.removeCallbacksAndMessages(null)
-            super.onHide()
-        }
-    }
-
-    private companion object {
-        const val HIDE_AFTER_MS = 1_500L
-    }
+    }.getOrDefault(emptyList())
+    return RecognizerChoice.pick(found, context.packageName)?.let { ComponentName(it.pkg, it.cls) }
 }
 
 /**
@@ -141,18 +125,7 @@ class ClaudeRecognitionService : RecognitionService() {
         const val STOP_GRACE_MS = 5_000L
     }
 
-    private fun target(): ComponentName? {
-        val found = runCatching {
-            packageManager.queryIntentServices(Intent(SERVICE_INTERFACE), PackageManager.MATCH_ALL)
-                .mapNotNull { it.serviceInfo }
-                .map {
-                    val flags = it.applicationInfo?.flags ?: 0
-                    val system = (flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
-                    RecognizerChoice.Candidate(it.packageName, it.name, system)
-                }
-        }.getOrDefault(emptyList())
-        return RecognizerChoice.pick(found, packageName)?.let { ComponentName(it.pkg, it.cls) }
-    }
+    private fun target(): ComponentName? = googleRecognizer(this)
 
     /** Relays the target's callbacks to our caller. Raw audio buffers are not relayed (we never handle audio). */
     private inner class Relay(private val cb: Callback) : RecognitionListener {

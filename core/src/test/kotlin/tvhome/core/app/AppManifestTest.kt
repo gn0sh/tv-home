@@ -203,9 +203,12 @@ class AppManifestTest {
         assertEquals("@xml/recognition_service", r.kids("meta-data").single().attr("resource"))
         // No hotword or audio capture anywhere in the app code; assist context (screen, screenshot) is refused; the
         // session has no window; the recognizer forwards instead of failing everyone.
-        val src = File(app, "src/main/kotlin/com/gnosh/tvhome/ClaudeVoiceService.kt").readText()
+        val src = File(app, "src/main/kotlin/com/gnosh/tvhome/ClaudeVoiceService.kt").readText() +
+            File(app, "src/main/kotlin/com/gnosh/tvhome/VoiceOverlaySession.kt").readText()
         assertEquals(2, Regex("""disabledShowContext = .*SHOW_WITH_ASSIST or .*SHOW_WITH_SCREENSHOT""").findAll(src).count())
-        assertTrue(src.contains("setUiEnabled(false)"))
+        // voice-overlay: the session window only for the overlay (RECORD_AUDIO granted), none on the full-screen fallback.
+        assertTrue(src.contains("setUiEnabled(overlayMode)"))
+        assertFalse(src.contains("TYPE_APPLICATION_OVERLAY")) // the session window only; SYSTEM_ALERT_WINDOW is kept out by the permission test
         assertTrue(src.contains("RecognizerChoice.pick(") && src.contains("SpeechRecognizer.createSpeechRecognizer("))
         for (bad in listOf("AlwaysOnHotwordDetector", "createAlwaysOnHotwordDetector", "AudioRecord", "MediaRecorder")) assertFalse(src.contains(bad), bad)
         for (x in listOf("voice_interaction", "recognition_service")) assertTrue(File(app, "src/main/res/xml/$x.xml").isFile)

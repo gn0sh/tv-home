@@ -1,5 +1,7 @@
 package tvhome.core.assistant
 
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -153,5 +155,21 @@ class AnthropicClientTest {
         assertEquals(ClaudeResult.Failed(ClaudeError.HTTP_STATUS), send(client(allowed = AnthropicClient::isPinned)))
         assertEquals(0, server.requestCount)
         assertEquals("AnthropicClient", AnthropicClient { FakeSecrets.API_KEY }.toString())
+    }
+
+    /** overlay-cancel-counted: cancelling the coroutine cancels the HTTP call at once, not after the timeout. */
+    @Test fun cancellingTheCoroutineCancelsTheCall() = runSuspend {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val c = client(timeoutMs = 30_000)
+        coroutineScope {
+            val job = launch(kotlinx.coroutines.Dispatchers.IO) { c.send(apps, turns) }
+            server.takeRequest(5, TimeUnit.SECONDS) ?: error("no request")
+            val t0 = System.nanoTime()
+            job.cancel()
+            job.join()
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            assertTrue(ms < 3_000, "cancel took $ms ms")
+            assertTrue(job.isCancelled)
+        }
     }
 }

@@ -408,7 +408,7 @@ pass "M1b: one Back with focus on the Ask button leaves the app"
 note "M1b speech input, the Claude API call, answers, Open and the follow-up are NOT VERIFIED here: no API key or recognizer on the emulator (JVM tests in :core cover the logic; the device check is Brian's)"
 no_app_crash_yet "M1b ask"
 
-step "mic-to-claude: with the assistant role, the remote's mic (KEYCODE_ASSIST) opens Ask Claude; role restored after"
+step "mic-to-claude / voice-overlay: with the assistant role, the mic (KEYCODE_ASSIST) shows the Ask Claude overlay over another app (full-screen Ask without RECORD_AUDIO); role restored after"
 ROLE=android.app.role.ASSISTANT
 REC="$PKG/com.gnosh.tvhome.ClaudeRecognitionService"
 prev_roles=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ' || true)
@@ -451,13 +451,88 @@ elif [[ $rec == "$prev_rec" ]]; then
 else
   fail "mic: voice_recognition_service changed to something that is neither its old value nor ours (before: $prev_rec, now: $rec)"
 fi
-# No force-stop from here on: it would unbind the voice service.
+# voice-overlay: with RECORD_AUDIO (installed with -g) the mic button shows the corner overlay over the app in front,
+# which stays resumed underneath; without it, the full-screen Ask view as before. No force-stop from here on: it would
+# unbind the voice service.
+other=com.google.android.youtube.tv
+if sh_ pm path "$other" 2>/dev/null | grep -q '^package:'; then
+  sh_ monkey -p "$other" -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1 || true
+else
+  other=com.android.tv.settings
+  sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true
+fi
+sleep 6
+under=$(resumed | head -1 | sed 's/^ *//')
+in_front && fail "overlay: test setup: the app in front is still ours ($under)"
+grep -qF "$other/" <<<"$under" || { other=$(grep -oE '[a-z][a-z0-9_.]+/' <<<"$under" | head -1 | tr -d /); warn "overlay: expected app not in front; using '$other' ($under)"; }
+[[ -n $other ]] || fail "overlay: no other app in front to test over"
+echo "overlay: app in front: $other"
+# overlay-fallback-branch: the session picks the overlay only with RECORD_AUDIO granted. The install grants it (-g),
+# but the earlier `pm clear` steps reset runtime permissions, so check and restore it here (Brian grants it once).
+ra=$(sh_ dumpsys package "$PKG" | tr -d '\r' | grep -m1 -E 'android.permission.RECORD_AUDIO: granted=' | sed 's/^ *//' || true)
+echo "overlay: before the press: ${ra:-RECORD_AUDIO not listed}"
+if ! grep -q 'granted=true' <<<"$ra"; then
+  note "overlay: RECORD_AUDIO was not granted (reset by pm clear); granting it as Brian did"
+  sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || fail "overlay: could not grant RECORD_AUDIO (test setup)"
+  bound=""
+  for _ in $(seq 1 30); do
+    if sh_ dumpsys activity services "$PKG" | tr -d '\r' | grep -q 'ClaudeVoiceService'; then bound=1; break; fi
+    sleep 1
+  done
+  [[ -n $bound ]] || fail "overlay: the voice service was not bound within 30 s of granting RECORD_AUDIO"
+  sh_ monkey -p "$other" -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1 || sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true
+  sleep 5
+  grep -qF "$other/" <<<"$(resumed | head -1)" || fail "overlay: test setup: $other is not in front again ($(resumed | head -1))"
+fi
 sh_ input keyevent KEYCODE_ASSIST; sleep 4
-if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; fail "mic: KEYCODE_ASSIST with the role did not open the app"; fi
-xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-mic-assist.xml"
-grep -qF "Ask Claude full screen" <<<"$xml" || fail "mic: KEYCODE_ASSIST did not show the Ask Claude screen"
-pass "mic: KEYCODE_ASSIST with the role opens Ask Claude"
+if in_front; then
+  # Which branch: the session's no-microphone fallback names itself in the system's activity-start log.
+  if grep -qF 'ASK_FALLBACK_NO_MIC' "$OUT/logcat-stream.txt" 2>/dev/null; then echo "diagnostic: the session took the no-RECORD_AUDIO fallback"
+  else echo "diagnostic: full screen without the session fallback marker (the system's own ACTION_ASSIST, or the session did not show)"; fi
+fi
+now=$(resumed | head -1 | sed 's/^ *//')
+grep -qF "$other/" <<<"$now" || fail "overlay: KEYCODE_ASSIST took $other out of the resumed state (now: $now)"
+in_front && fail "overlay: KEYCODE_ASSIST opened the full-screen app, not the overlay (now: $now)"
+pass "overlay: $other stays resumed underneath the mic button's session"
+xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-voice-overlay.xml"
+if ! grep -qF 'content-desc="Ask Claude overlay"' <<<"$xml"; then
+  sh_ dumpsys window windows | tr -d '\r' | grep -iE 'VoiceInteraction|mCurrentFocus' | head -5 || true
+  fail "overlay: the Ask Claude overlay panel is not showing after KEYCODE_ASSIST"
+fi
+pass "overlay: the corner panel shows over $other"
+# No API key and no Google recognizer on the emulator: the card must say so in one line, never hang listening.
+grep -qE "isn&apos;t set up|isn't set up|Voice input isn|Listening" <<<"$xml" || warn "overlay: unexpected card text (see ui-voice-overlay.xml)"
+note "overlay: speech (partial text, final result sent at once), the answer card, its 20 s fade and Open are NOT VERIFIED here: no recognizer or API key on the emulator (VoiceOverlay JVM tests cover the state machine; the device check is Brian's)"
+sh_ input keyevent KEYCODE_BACK; sleep 2
+xml=$(ui_text)
+grep -qF 'content-desc="Ask Claude overlay"' <<<"$xml" && fail "overlay: Back did not dismiss the overlay"
+grep -qF "$other/" <<<"$(resumed | head -1)" || fail "overlay: Back on the overlay reached $other (now: $(resumed | head -1))"
+pass "overlay: Back dismisses the card and $other carries on"
+# Fallback: without RECORD_AUDIO the mic button opens the full-screen Ask view (as before voice-overlay).
+sh_ pm revoke "$PKG" android.permission.RECORD_AUDIO || fail "overlay: could not revoke RECORD_AUDIO (test setup)"
+# qa-fallback-stale-xml: revoking kills the app; wait (up to 30 s) until the system has bound the voice service again.
+bound=""
+for _ in $(seq 1 30); do
+  if sh_ dumpsys activity services "$PKG" | tr -d '\r' | grep -q 'ClaudeVoiceService'; then bound=1; break; fi
+  sleep 1
+done
+[[ -n $bound ]] || { sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || true; fail "overlay: the voice service was not bound again within 30 s of revoking RECORD_AUDIO"; }
+sh_ input keyevent KEYCODE_HOME; sleep 2
+sh_ input keyevent KEYCODE_ASSIST
+# Fresh dumps after the press, until the full-screen view shows (up to 15 s).
+xml=""
+for _ in $(seq 1 15); do
+  sleep 1
+  in_front || continue
+  xml=$(ui_text)
+  grep -qF "Ask Claude full screen" <<<"$xml" && break
+done
+printf '%s\n' "$xml" > "$OUT/ui-mic-assist.xml"
+if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || true; fail "mic: KEYCODE_ASSIST without RECORD_AUDIO did not open the app"; fi
+grep -qF "Ask Claude full screen" <<<"$xml" || { sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || true; fail "mic: KEYCODE_ASSIST without RECORD_AUDIO did not show the full-screen Ask view"; }
+pass "mic: without RECORD_AUDIO, KEYCODE_ASSIST falls back to the full-screen Ask view"
 sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1
+sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || fail "overlay: could not grant RECORD_AUDIO back"
 restore_role
 sleep 2
 after=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ')
