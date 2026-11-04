@@ -188,13 +188,14 @@ Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.
 ## Use the mic button for Claude (optional)
 The remote's mic button can open Ask Claude instead of Google Assistant. The Google TV Streamer has no Settings
 picker for this (Settings > Apps has no "Default apps"), so it is set from the PC with adb:
-1. Connect from the PC (steps 1 and 2).
+1. Connect from the PC (steps 1 and 2). Your TV's address (for example `192.168.68.71:5555`) is shown on its
+   network debugging screen, and it can change, so check it there each time.
 2. In PowerShell, run these two lines (the first makes TV Home the assistant, the second allows it the microphone):
    ```
    & "$env:LOCALAPPDATA\tv-home-tools\platform-tools\adb.exe" shell cmd role add-role-holder --user 0 android.app.role.ASSISTANT com.gnosh.tvhome 0
    & "$env:LOCALAPPDATA\tv-home-tools\platform-tools\adb.exe" shell pm grant com.gnosh.tvhome android.permission.RECORD_AUDIO
    ```
-   Each prints nothing when it works.
+   Each prints nothing, or a short `Success`, when it works.
 3. Turn debugging off again (step 5).
 
 On a Google TV that does have the picker: **Settings > Apps > Default apps > Digital assistant app**, pick
