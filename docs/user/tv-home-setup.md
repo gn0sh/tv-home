@@ -186,29 +186,40 @@ By hand, with the remote: press Home twice quickly, open Settings from the TV's 
 Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.
 
 ## Use the mic button for Claude (optional)
-The remote's mic button can open Ask Claude instead of Google Assistant. With the remote:
-1. Press Home twice quickly (if the Home button is switched on), open Settings (the gear, top right).
-2. Go to **Settings > Apps > Default apps > Digital assistant app**.
-3. Pick **Ask Claude** (the assistant's name; the app itself shows as **Agenda** elsewhere on the TV).
-4. **Required**, once: allow the microphone, **Settings > Apps > Agenda > Permissions > Microphone > Allow**.
-   Without it, other apps' mic icons may stop working if Android switches their recognizer (see below). (Ask Claude itself
-   listens through Google's voice dialog and may work without it; not yet checked on the TV.)
+The remote's mic button can open Ask Claude instead of Google Assistant. The Google TV Streamer has no Settings
+picker for this (Settings > Apps has no "Default apps"), so it is set from the PC with adb:
+1. Connect from the PC (steps 1 and 2).
+2. In PowerShell, run these two lines (the first makes TV Home the assistant, the second allows it the microphone):
+   ```
+   & "$env:LOCALAPPDATA\tv-home-tools\platform-tools\adb.exe" shell cmd role add-role-holder --user 0 android.app.role.ASSISTANT com.gnosh.tvhome 0
+   & "$env:LOCALAPPDATA\tv-home-tools\platform-tools\adb.exe" shell pm grant com.gnosh.tvhome android.permission.RECORD_AUDIO
+   ```
+   Each prints nothing when it works.
+3. Turn debugging off again (step 5).
 
-Press the mic button: Ask Claude opens and starts listening. Speak your question as usual.
+On a Google TV that does have the picker: **Settings > Apps > Default apps > Digital assistant app**, pick
+**Ask Claude** (the app itself shows as **Agenda** elsewhere), then allow the microphone in **Settings > Apps > Agenda >
+Permissions > Microphone** (menu names not checked on a TV).
+
+Press the mic button: Ask Claude opens and starts listening (checked on the Streamer, 2026-11-04). Speak your question
+as usual.
 
 **What moves with it:** Google voice search moves too. While this is set, the mic button no longer opens Google
 Assistant or Google's voice search, and "Hey Google" style voice commands for the TV won't work. Apps that have their
 own mic icon (for example a search box in a streaming app) keep working. Usually the TV keeps Google's recognizer as
 the default for them (the Android 14 TV test image does). If Android does switch the default to the assistant's
 recognizer, TV Home passes each request straight on to Google's recognizer and hands back what it heard. TV Home never records or keeps the audio; Google's recognizer listens, as before. That pass-through needs the
-microphone permission from step 4.
+microphone permission (the second line in step 2).
 
 **Check it once:** with the mic button set to Claude, open YouTube, go to its search and use its mic icon. Say a
 word. If YouTube shows what you said, the pass-through works. If its mic does nothing or shows an error, check
-step 4; if that is on, set the assistant back to Google (below) and tell the team.
+the microphone line in step 2; if that ran, set the assistant back to Google (below) and tell the team.
 
-**To undo:** the same path, **Settings > Apps > Default apps > Digital assistant app**, and pick **Google** again.
-Uninstalling the dashboard also gives the button back to Google.
+**To undo:** connect from the PC and give the role back to Google Assistant:
+```
+& "$env:LOCALAPPDATA\tv-home-tools\platform-tools\adb.exe" shell cmd role add-role-holder --user 0 android.app.role.ASSISTANT com.google.android.katniss 0
+```
+(With the picker: the same path, pick **Google** again.) Uninstalling the dashboard also gives the button back to Google.
 
 ## Star button opens Claude (optional)
 The star button on the remote can open Ask Claude straight away, as its own tile ("Ask Claude", with a star banner).
