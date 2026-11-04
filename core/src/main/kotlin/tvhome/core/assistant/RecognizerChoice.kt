@@ -2,12 +2,14 @@ package tvhome.core.assistant
 
 /**
  * stub-recognizer-default: holding the assistant role makes our ClaudeRecognitionService the TV's default speech
- * recognizer, so it forwards each request to another installed recognizer. This picks which one: never our own
- * package (that would loop), Google's TV recognizer first, then other Google recognizers, then any other, in a fixed
- * order so the same TV always picks the same one.
+ * recognizer, so it forwards each request to another installed recognizer. This picks which one
+ * (recognizer-target-any-app): only a Google recognizer from PREFERRED that is a system app (preinstalled, or an
+ * update of one), in that order; never our own package (that would loop) and never any other app, which could
+ * otherwise collect what every app hears. No match means no forwarding (the caller gets ERROR_CLIENT).
  */
 object RecognizerChoice {
-    data class Candidate(val pkg: String, val cls: String)
+    /** [system]: the package is FLAG_SYSTEM or FLAG_UPDATED_SYSTEM_APP (read by the app from ApplicationInfo). */
+    data class Candidate(val pkg: String, val cls: String, val system: Boolean)
 
     /** Most preferred first: Android TV's Google recognizer, the Google app, Google's speech services, Android System Intelligence. */
     val PREFERRED = listOf(
@@ -19,8 +21,6 @@ object RecognizerChoice {
 
     fun pick(candidates: List<Candidate>, ownPackage: String): Candidate? =
         candidates
-            .filter { it.pkg.isNotBlank() && it.cls.isNotBlank() && it.pkg != ownPackage }
-            .minWithOrNull(
-                compareBy<Candidate>({ PREFERRED.indexOf(it.pkg).let { i -> if (i < 0) Int.MAX_VALUE else i } }, { it.pkg }, { it.cls }),
-            )
+            .filter { it.system && it.cls.isNotBlank() && it.pkg != ownPackage && it.pkg in PREFERRED }
+            .minWithOrNull(compareBy<Candidate>({ PREFERRED.indexOf(it.pkg) }, { it.cls }))
 }

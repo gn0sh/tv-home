@@ -3,6 +3,7 @@ package com.gnosh.tvhome
 import android.content.ComponentName
 import android.content.ContextParams
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -71,14 +72,18 @@ class ClaudeSessionService : VoiceInteractionSessionService() {
 
 /**
  * Required for the assistant role, which also makes it the TV's default speech recognizer (stub-recognizer-default).
- * It recognizes nothing itself: each request is forwarded to another installed recognizer (RecognizerChoice, Google's
- * first) and every callback is relayed back. The microphone is opened by that recognizer, not by us. Because the
+ * It recognizes nothing itself: each request is forwarded to Google's preinstalled recognizer (RecognizerChoice: system
+ * Google packages only) and every callback is relayed back. The microphone is opened by that recognizer, not by us. Because the
  * permission check runs over the whole attribution chain (us, then the calling app), forwarding needs RECORD_AUDIO
  * granted to this app; without it the target answers ERROR_INSUFFICIENT_PERMISSIONS, which is relayed as is.
  * With no other recognizer installed, a client gets an immediate error, never a hang.
  */
 class ClaudeRecognitionService : RecognitionService() {
     private var inner: SpeechRecognizer? = null
+    private val main = Handler(Looper.getMainLooper())
+
+    // mic-stop-leak: after a stop, give the target STOP_GRACE_MS to send results or an error, then let go of it.
+    private val releaseAfterStop = Runnable { release() }
 
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
         listener ?: return
@@ -89,9 +94,14 @@ class ClaudeRecognitionService : RecognitionService() {
             return
         }
         // Chain the caller's attribution so the target's RECORD_AUDIO check covers the app that really asked.
+        // attribution-fallback-open: never forward under our own attribution alone.
         val ctx = runCatching {
-            createContext(ContextParams.Builder().setNextAttribution(listener.callingAttributionSource).build())
-        }.getOrDefault(this)
+            createContext(ContextParams.Builder().setNextAttributionSource(listener.callingAttributionSource).build())
+        }.getOrNull()
+        if (ctx == null) {
+            runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) }
+            return
+        }
         val r = runCatching { SpeechRecognizer.createSpeechRecognizer(ctx, target) }.getOrNull()
         if (r == null) {
             runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) }
@@ -107,6 +117,8 @@ class ClaudeRecognitionService : RecognitionService() {
 
     override fun onStopListening(listener: Callback?) {
         runCatching { inner?.stopListening() }
+        main.removeCallbacks(releaseAfterStop)
+        if (inner != null) main.postDelayed(releaseAfterStop, STOP_GRACE_MS)
     }
 
     override fun onCancel(listener: Callback?) {
@@ -120,15 +132,24 @@ class ClaudeRecognitionService : RecognitionService() {
     }
 
     private fun release() {
+        main.removeCallbacks(releaseAfterStop)
         inner?.let { runCatching { it.destroy() } }
         inner = null
+    }
+
+    private companion object {
+        const val STOP_GRACE_MS = 5_000L
     }
 
     private fun target(): ComponentName? {
         val found = runCatching {
             packageManager.queryIntentServices(Intent(SERVICE_INTERFACE), PackageManager.MATCH_ALL)
                 .mapNotNull { it.serviceInfo }
-                .map { RecognizerChoice.Candidate(it.packageName, it.name) }
+                .map {
+                    val flags = it.applicationInfo?.flags ?: 0
+                    val system = (flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
+                    RecognizerChoice.Candidate(it.packageName, it.name, system)
+                }
         }.getOrDefault(emptyList())
         return RecognizerChoice.pick(found, packageName)?.let { ComponentName(it.pkg, it.cls) }
     }

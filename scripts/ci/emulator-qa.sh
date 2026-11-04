@@ -456,6 +456,34 @@ after_rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
 [[ $after_rec == "$prev_rec" ]] || warn "mic: voice_recognition_service after restore is '$after_rec', before it was '$prev_rec'"
 pass "mic: assistant role restored (now: ${after:-<none>}; voice_recognition_service: $after_rec)"
 no_app_crash_yet "mic-to-claude"
+# forwarding-unproven-on-device: the round trip needs the qa APK's RecognizerProbeActivity, so it runs inside the
+# M7 block while the qa APK is installed (mic_round_trip below), and only if the image has a Google recognizer.
+mic_round_trip() {
+  local recs google probe
+  recs=$(sh_ cmd package query-services --brief -a android.speech.RecognitionService | tr -d '\r' | grep '/' | grep -v "$PKG/" || true)
+  google=$(grep -E 'com\.google\.android\.(katniss|googlequicksearchbox|tts|as)/' <<<"$recs" | head -1 || true)
+  if [[ -z $google ]]; then
+    note "mic round trip NOT VERIFIED: this emulator image has no Google recognizer (recognizers: ${recs:-none}); check by hand on the TV (setup doc: YouTube voice search)"
+    return 0
+  fi
+  echo "mic round trip: Google recognizer $google"
+  ROLE_TAKEN=1
+  sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || fail "mic round trip: add-role-holder refused the qa APK"
+  sleep 3
+  sh_ am start -W -n "$PKG/com.gnosh.tvhome.RecognizerProbeActivity" >/dev/null; sleep 12
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-mic-round-trip.xml"
+  probe=$(grep -oE 'recognizer-probe: [a-z]+( [0-9a-z]+)?' <<<"$xml" | tail -1 || true)
+  sh_ input keyevent KEYCODE_BACK; sleep 1
+  restore_role
+  echo "mic round trip: ${probe:-<no probe text>}"
+  case $probe in
+    "recognizer-probe: ready"|"recognizer-probe: partial"|"recognizer-probe: results") ;;
+    "recognizer-probe: error 5"|"recognizer-probe: error 9") fail "mic round trip: forwarding failed ($probe; 5 = ERROR_CLIENT, 9 = ERROR_INSUFFICIENT_PERMISSIONS)" ;;
+    "recognizer-probe: error "[0-9]*) ;;   # e.g. no match or speech timeout: Google's recognizer took the forwarded request
+    *) fail "mic round trip: no usable probe result (${probe:-none})" ;;
+  esac
+  pass "mic round trip: SpeechRecognizer through ClaudeRecognitionService reached $google ($probe)"
+}
 
 # Return to our home screen from an app we opened. Third-party apps may consume Back (YouTube TV shows an exit
 # dialog), so Back is tried first and then the app is force-stopped; either way our task must be underneath and resume.
@@ -1252,6 +1280,7 @@ fi
   sh_ content delete --uri "content://$PKG.provision/location" >/dev/null 2>&1 || true
   m7_offline off
   network on
+  mic_round_trip
   if [[ $m7_mode == root ]]; then
     a unroot >/dev/null 2>&1 || true; a wait-for-device; sleep 2; m7_relog
   else

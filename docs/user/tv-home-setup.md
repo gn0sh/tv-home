@@ -190,8 +190,9 @@ The remote's mic button can open Ask Claude instead of Google Assistant. With th
 1. Press Home twice quickly (if the Home button is switched on), open Settings (the gear, top right).
 2. Go to **Settings > Apps > Default apps > Digital assistant app**.
 3. Pick **Ask Claude** (the assistant's name; the app itself shows as **Agenda** elsewhere on the TV).
-4. Once only: allow the microphone, **Settings > Apps > Agenda > Permissions > Microphone > Allow**. Without it,
-   other apps' mic icons stop working while Claude is the assistant (see below); Ask Claude itself works either way.
+4. **Required**, once: allow the microphone, **Settings > Apps > Agenda > Permissions > Microphone > Allow**.
+   Without it, other apps' mic icons stop working while Claude is the assistant (see below). (Ask Claude itself
+   listens through Google's voice dialog and may work without it; not yet checked on the TV.)
 
 Press the mic button: Ask Claude opens and starts listening. Speak your question as usual.
 
@@ -201,6 +202,10 @@ own mic icon (for example a search box in a streaming app) keep working: the TV 
 assistant's recognizer, and TV Home passes each request straight on to Google's recognizer and hands back what it
 heard. TV Home never records or keeps the audio; Google's recognizer listens, as before. This pass-through needs the
 microphone permission from step 4.
+
+**Check it once:** with the mic button set to Claude, open YouTube, go to its search and use its mic icon. Say a
+word. If YouTube shows what you said, the pass-through works. If its mic does nothing or shows an error, check
+step 4; if that is on, set the assistant back to Google (below) and tell the team.
 
 **To undo:** the same path, **Settings > Apps > Default apps > Digital assistant app**, and pick **Google** again.
 Uninstalling the dashboard also gives the button back to Google.

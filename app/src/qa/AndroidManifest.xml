@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- qa build only (CI emulator QA, never published): a tiny SpeechRecognizer client for the mic-to-claude round-trip
+     check (forwarding-unproven-on-device). Exported so `am start -n` from the shell can open it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".RecognizerProbeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true" />
+    </application>
+</manifest>
