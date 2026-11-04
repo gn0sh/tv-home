@@ -99,7 +99,7 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
         super.onShow(args, showFlags)
         stop()
         if (!overlayMode) {
-            openFullScreen()
+            openFullScreen() // only without RECORD_AUDIO; no recognizer still shows the overlay, with its error line
             main.postDelayed({ runCatching { hide() } }, HIDE_AFTER_MS)
             return
         }
@@ -267,7 +267,11 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
 
     private fun openFullScreen() {
         // The assistant's own start path first; the plain start as a fallback (the bound voice service may start it).
-        val opened = runCatching { startAssistantActivity(Intent(context, AssistActivity::class.java)); true }.getOrDefault(false)
+        // The action names why (no microphone): the system's own activity-start log shows it, so QA can tell this
+        // fallback from a plain ACTION_ASSIST. AssistActivity ignores the action and carries nothing over.
+        val opened = runCatching {
+            startAssistantActivity(Intent(context, AssistActivity::class.java).setAction(ACTION_FALLBACK_NO_MIC)); true
+        }.getOrDefault(false)
         if (!opened) {
             runCatching {
                 context.startActivity(
@@ -281,6 +285,7 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
 
     private companion object {
         const val HIDE_AFTER_MS = 1_500L
+        const val ACTION_FALLBACK_NO_MIC = "com.gnosh.tvhome.action.ASK_FALLBACK_NO_MIC"
     }
 }
 

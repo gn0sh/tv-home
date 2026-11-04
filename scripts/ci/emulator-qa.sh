@@ -467,7 +467,29 @@ in_front && fail "overlay: test setup: the app in front is still ours ($under)"
 grep -qF "$other/" <<<"$under" || { other=$(grep -oE '[a-z][a-z0-9_.]+/' <<<"$under" | head -1 | tr -d /); warn "overlay: expected app not in front; using '$other' ($under)"; }
 [[ -n $other ]] || fail "overlay: no other app in front to test over"
 echo "overlay: app in front: $other"
+# overlay-fallback-branch: the session picks the overlay only with RECORD_AUDIO granted. The install grants it (-g),
+# but the earlier `pm clear` steps reset runtime permissions, so check and restore it here (Brian grants it once).
+ra=$(sh_ dumpsys package "$PKG" | tr -d '\r' | grep -m1 -E 'android.permission.RECORD_AUDIO: granted=' | sed 's/^ *//' || true)
+echo "overlay: before the press: ${ra:-RECORD_AUDIO not listed}"
+if ! grep -q 'granted=true' <<<"$ra"; then
+  note "overlay: RECORD_AUDIO was not granted (reset by pm clear); granting it as Brian did"
+  sh_ pm grant "$PKG" android.permission.RECORD_AUDIO || fail "overlay: could not grant RECORD_AUDIO (test setup)"
+  bound=""
+  for _ in $(seq 1 30); do
+    if sh_ dumpsys activity services "$PKG" | tr -d '\r' | grep -q 'ClaudeVoiceService'; then bound=1; break; fi
+    sleep 1
+  done
+  [[ -n $bound ]] || fail "overlay: the voice service was not bound within 30 s of granting RECORD_AUDIO"
+  sh_ monkey -p "$other" -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1 || sh_ am start -W -a android.settings.SETTINGS >/dev/null 2>&1 || true
+  sleep 5
+  grep -qF "$other/" <<<"$(resumed | head -1)" || fail "overlay: test setup: $other is not in front again ($(resumed | head -1))"
+fi
 sh_ input keyevent KEYCODE_ASSIST; sleep 4
+if in_front; then
+  # Which branch: the session's no-microphone fallback names itself in the system's activity-start log.
+  if grep -qF 'ASK_FALLBACK_NO_MIC' "$OUT/logcat-stream.txt" 2>/dev/null; then echo "diagnostic: the session took the no-RECORD_AUDIO fallback"
+  else echo "diagnostic: full screen without the session fallback marker (the system's own ACTION_ASSIST, or the session did not show)"; fi
+fi
 now=$(resumed | head -1 | sed 's/^ *//')
 grep -qF "$other/" <<<"$now" || fail "overlay: KEYCODE_ASSIST took $other out of the resumed state (now: $now)"
 in_front && fail "overlay: KEYCODE_ASSIST opened the full-screen app, not the overlay (now: $now)"
