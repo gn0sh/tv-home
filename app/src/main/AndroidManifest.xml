@@ -4,6 +4,11 @@
     <!-- M1 permissions: nothing else. Never QUERY_ALL_PACKAGES. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- mic-to-claude (stub-recognizer-default): the assistant role makes ClaudeRecognitionService the TV's default
+         speech recognizer; it forwards to Google's recognizer, whose permission check runs over the attribution chain
+         and so needs this app to hold RECORD_AUDIO too. The app never opens the microphone itself and never asks for
+         this at runtime: it is granted in the TV's app settings only if the mic button is moved to Claude. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- M2 tile row: see only apps with a TV launcher entry (package visibility). This is not a permission and grants
          nothing else; QUERY_ALL_PACKAGES stays out. -->
@@ -16,6 +21,10 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
+        </intent>
+        <!-- mic-to-claude: lets ClaudeRecognitionService find the recognizer it forwards to. Visibility only. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 
@@ -97,7 +106,8 @@
             android:name=".ClaudeSessionService"
             android:exported="true"
             android:permission="android.permission.BIND_VOICE_INTERACTION" />
-        <!-- Required by the role; recognizes nothing (no RECORD_AUDIO) and answers every request with an error. -->
+        <!-- Required by the role (which makes it the default recognizer); forwards every request to another installed
+             recognizer (Google's first) and relays the callbacks. -->
         <service
             android:name=".ClaudeRecognitionService"
             android:exported="true"

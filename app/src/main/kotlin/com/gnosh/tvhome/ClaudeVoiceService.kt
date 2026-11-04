@@ -1,22 +1,34 @@
 package com.gnosh.tvhome
 
+import android.content.ComponentName
+import android.content.ContextParams
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.service.voice.VoiceInteractionService
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
+import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
+import tvhome.core.assistant.RecognizerChoice
 
 /**
  * mic-to-claude: the digital assistant services. With the app chosen as the TV's digital assistant (Settings > Apps >
  * Default apps > Digital assistant app; docs/user/tv-home-setup.md), the remote's mic button (ASSIST) shows a session
- * here, and the session opens Ask Claude, listening (ADR 0002's recognizer path). No hotword, no always-on listening,
- * no audio of our own: this service only routes the button.
+ * here, and the session opens Ask Claude, listening (ADR 0002's recognizer path). No hotword, no always-on listening:
+ * this service only routes the button.
  */
-class ClaudeVoiceService : VoiceInteractionService()
+class ClaudeVoiceService : VoiceInteractionService() {
+    override fun onReady() {
+        super.onReady()
+        // assist-context-collected: never receive the other app's view structure or a screenshot.
+        disabledShowContext = VoiceInteractionSession.SHOW_WITH_ASSIST or VoiceInteractionSession.SHOW_WITH_SCREENSHOT
+    }
+}
 
 /** One session per button press; it has no window of its own. */
 class ClaudeSessionService : VoiceInteractionSessionService() {
@@ -24,6 +36,12 @@ class ClaudeSessionService : VoiceInteractionSessionService() {
 
     private class AskSession(service: VoiceInteractionSessionService) : VoiceInteractionSession(service) {
         private val main = Handler(Looper.getMainLooper())
+
+        override fun onCreate() {
+            super.onCreate()
+            disabledShowContext = SHOW_WITH_ASSIST or SHOW_WITH_SCREENSHOT // assist-context-collected
+            setUiEnabled(false) // mic-session-window: no empty window over the listening dialog
+        }
 
         override fun onShow(args: Bundle?, showFlags: Int) {
             super.onShow(args, showFlags)
@@ -52,16 +70,89 @@ class ClaudeSessionService : VoiceInteractionSessionService() {
 }
 
 /**
- * Required for the assistant role (a voice interaction service must name a recognition service). It recognizes
- * nothing: the app holds no RECORD_AUDIO, and Ask Claude listens through the system recognizer dialog instead. A
- * client that binds it gets an immediate error, never a hang.
+ * Required for the assistant role, which also makes it the TV's default speech recognizer (stub-recognizer-default).
+ * It recognizes nothing itself: each request is forwarded to another installed recognizer (RecognizerChoice, Google's
+ * first) and every callback is relayed back. The microphone is opened by that recognizer, not by us. Because the
+ * permission check runs over the whole attribution chain (us, then the calling app), forwarding needs RECORD_AUDIO
+ * granted to this app; without it the target answers ERROR_INSUFFICIENT_PERMISSIONS, which is relayed as is.
+ * With no other recognizer installed, a client gets an immediate error, never a hang.
  */
 class ClaudeRecognitionService : RecognitionService() {
+    private var inner: SpeechRecognizer? = null
+
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
-        runCatching { listener?.error(SpeechRecognizer.ERROR_CLIENT) }
+        listener ?: return
+        release()
+        val target = target()
+        if (target == null || recognizerIntent == null) {
+            runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) }
+            return
+        }
+        // Chain the caller's attribution so the target's RECORD_AUDIO check covers the app that really asked.
+        val ctx = runCatching {
+            createContext(ContextParams.Builder().setNextAttribution(listener.callingAttributionSource).build())
+        }.getOrDefault(this)
+        val r = runCatching { SpeechRecognizer.createSpeechRecognizer(ctx, target) }.getOrNull()
+        if (r == null) {
+            runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) }
+            return
+        }
+        inner = r
+        r.setRecognitionListener(Relay(listener))
+        runCatching { r.startListening(recognizerIntent) }.onFailure {
+            release()
+            runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) }
+        }
     }
 
-    override fun onCancel(listener: Callback?) = Unit
+    override fun onStopListening(listener: Callback?) {
+        runCatching { inner?.stopListening() }
+    }
 
-    override fun onStopListening(listener: Callback?) = Unit
+    override fun onCancel(listener: Callback?) {
+        runCatching { inner?.cancel() }
+        release()
+    }
+
+    override fun onDestroy() {
+        release()
+        super.onDestroy()
+    }
+
+    private fun release() {
+        inner?.let { runCatching { it.destroy() } }
+        inner = null
+    }
+
+    private fun target(): ComponentName? {
+        val found = runCatching {
+            packageManager.queryIntentServices(Intent(SERVICE_INTERFACE), PackageManager.MATCH_ALL)
+                .mapNotNull { it.serviceInfo }
+                .map { RecognizerChoice.Candidate(it.packageName, it.name) }
+        }.getOrDefault(emptyList())
+        return RecognizerChoice.pick(found, packageName)?.let { ComponentName(it.pkg, it.cls) }
+    }
+
+    /** Relays the target's callbacks to our caller. Raw audio buffers are not relayed (we never handle audio). */
+    private inner class Relay(private val cb: Callback) : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) { runCatching { cb.readyForSpeech(params ?: Bundle()) } }
+        override fun onBeginningOfSpeech() { runCatching { cb.beginningOfSpeech() } }
+        override fun onRmsChanged(rmsdB: Float) { runCatching { cb.rmsChanged(rmsdB) } }
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+        override fun onEndOfSpeech() { runCatching { cb.endOfSpeech() } }
+        override fun onError(error: Int) { runCatching { cb.error(error) }; release() }
+        override fun onResults(results: Bundle?) { runCatching { cb.results(results ?: Bundle()) }; release() }
+        override fun onPartialResults(partialResults: Bundle?) { runCatching { cb.partialResults(partialResults ?: Bundle()) } }
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        override fun onSegmentResults(segmentResults: Bundle) {
+            if (Build.VERSION.SDK_INT >= 33) runCatching { cb.segmentResults(segmentResults) }
+        }
+        override fun onEndOfSegmentedSession() {
+            if (Build.VERSION.SDK_INT >= 33) runCatching { cb.endOfSegmentedSession() }
+            release()
+        }
+        override fun onLanguageDetection(results: Bundle) {
+            if (Build.VERSION.SDK_INT >= 34) runCatching { cb.languageDetection(results) }
+        }
+    }
 }

@@ -39,26 +39,36 @@ class AppManifestTest {
         assertNull(application.attr("requestLegacyExternalStorage"))
     }
 
-    @Test fun onlyTheTwoNetworkPermissions() {
+    /** The two network permissions, plus RECORD_AUDIO for the forwarding recognizer (mic-to-claude) and nothing else. */
+    @Test fun onlyTheNetworkPermissionsAndRecordAudio() {
         val perms = manifest.kids("uses-permission").map { it.attr("name") }.toSet()
-        assertEquals(setOf("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"), perms)
+        assertEquals(
+            setOf("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.RECORD_AUDIO"),
+            perms,
+        )
+        // RECORD_AUDIO is never requested at runtime, and nothing in the app opens the microphone itself.
+        File(app, "src/main/kotlin").walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { f ->
+            val t = f.readText()
+            for (bad in listOf("requestPermissions", "RequestPermission", "AudioRecord", "MediaRecorder")) assertFalse(t.contains(bad), "${f.name}: $bad")
+        }
     }
 
     /**
      * M2: package visibility is "apps with a TV launcher entry", plus (M3) the TV's home activities for
      * HomeWatchService; no <package> or <provider> entries.
      */
-    @Test fun queriesOnlyLeanbackLauncherAndHomeIntents() {
+    @Test fun queriesOnlyLeanbackLauncherHomeAndRecognizerIntents() {
         val q = manifest.kids("queries").single()
         assertTrue(q.kids("package").isEmpty() && q.kids("provider").isEmpty())
         val intents = q.kids("intent")
-        intents.forEach {
-            assertEquals(listOf("android.intent.action.MAIN"), it.kids("action").map { a -> a.attr("name") })
-            assertTrue(it.kids("data").isEmpty())
-        }
+        intents.forEach { assertTrue(it.kids("data").isEmpty()) }
         assertEquals(
-            listOf("android.intent.category.LEANBACK_LAUNCHER", "android.intent.category.HOME"),
-            intents.map { it.kids("category").single().attr("name") },
+            listOf(
+                "android.intent.action.MAIN android.intent.category.LEANBACK_LAUNCHER",
+                "android.intent.action.MAIN android.intent.category.HOME",
+                "android.speech.RecognitionService",
+            ),
+            intents.map { i -> (i.kids("action") + i.kids("category")).joinToString(" ") { it.attr("name") ?: "" } },
         )
     }
 
@@ -191,8 +201,12 @@ class AppManifestTest {
         val r = component("service", ".ClaudeRecognitionService")
         assertEquals(listOf("android.speech.RecognitionService"), r.kids("intent-filter").single().kids("action").map { it.attr("name") })
         assertEquals("@xml/recognition_service", r.kids("meta-data").single().attr("resource"))
-        // No hotword or audio capture anywhere in the app code.
+        // No hotword or audio capture anywhere in the app code; assist context (screen, screenshot) is refused; the
+        // session has no window; the recognizer forwards instead of failing everyone.
         val src = File(app, "src/main/kotlin/com/gnosh/tvhome/ClaudeVoiceService.kt").readText()
+        assertEquals(2, Regex("""disabledShowContext = .*SHOW_WITH_ASSIST or .*SHOW_WITH_SCREENSHOT""").findAll(src).count())
+        assertTrue(src.contains("setUiEnabled(false)"))
+        assertTrue(src.contains("RecognizerChoice.pick(") && src.contains("SpeechRecognizer.createSpeechRecognizer("))
         for (bad in listOf("AlwaysOnHotwordDetector", "createAlwaysOnHotwordDetector", "AudioRecord", "MediaRecorder")) assertFalse(src.contains(bad), bad)
         for (x in listOf("voice_interaction", "recognition_service")) assertTrue(File(app, "src/main/res/xml/$x.xml").isFile)
     }

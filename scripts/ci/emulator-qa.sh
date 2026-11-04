@@ -169,6 +169,7 @@ on_exit() {
   local rc=$?
   idle_cleanup
   declare -F m3_cleanup >/dev/null && m3_cleanup
+  declare -F restore_role >/dev/null && restore_role   # qa-role-restore-trap: never leave the assistant role on us
   declare -F m7_offline >/dev/null && m7_offline off   # m7-dns-restore-on-exit: a failed Q1 must not leave DNS broken
   final_scan || rc=1
   exit $rc
@@ -409,12 +410,17 @@ no_app_crash_yet "M1b ask"
 
 step "mic-to-claude: with the assistant role, the remote's mic (KEYCODE_ASSIST) opens Ask Claude; role restored after"
 ROLE=android.app.role.ASSISTANT
+REC="$PKG/com.gnosh.tvhome.ClaudeRecognitionService"
 prev_roles=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ' || true)
-echo "assistant role holders before: ${prev_roles:-<none>}"
+prev_rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
+echo "before: assistant role holders: ${prev_roles:-<none>}; voice_recognition_service: $prev_rec"
+ROLE_TAKEN=0
+# qa-role-restore-trap: on_exit calls this too, so a failure anywhere after the role is taken still gives it back.
 restore_role() {
-  sh_ cmd role remove-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || true
-  for h in $prev_roles; do sh_ cmd role add-role-holder --user 0 "$ROLE" "$h" 0 >/dev/null 2>&1 || warn "could not give the assistant role back to $h"; done
-  sh_ cmd role set-bypassing-role-qualification false >/dev/null 2>&1 || true
+  [[ ${ROLE_TAKEN:-0} == 1 ]] || return 0
+  ROLE_TAKEN=0
+  timeout 30 adb shell cmd role remove-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || true
+  for h in $prev_roles; do timeout 30 adb shell cmd role add-role-holder --user 0 "$ROLE" "$h" 0 >/dev/null 2>&1 || echo "::warning::could not give the assistant role back to $h"; done
 }
 # The Ask entry also works by intent alone (no role): ACTION_ASSIST goes to AssistActivity, which opens Ask Claude.
 sh_ am force-stop "$PKG"; sh_ input keyevent KEYCODE_HOME; sleep 2
@@ -424,26 +430,31 @@ expect_text "mic-assist-intent" "Ask Claude full screen"
 pass "mic: ACTION_ASSIST opens Ask Claude"
 sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1
 sh_ input keyevent KEYCODE_HOME; sleep 2
-if ! sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1; then
-  sh_ cmd role set-bypassing-role-qualification true >/dev/null 2>&1 || true
-  sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || { restore_role; fail "mic: could not give $PKG the assistant role"; }
-  warn "mic: the role needed set-bypassing-role-qualification (the app did not qualify on its own)"
-fi
+# qa-bypass-masks-qualification: no bypass. If the app does not qualify for the role on its own, that is the bug.
+ROLE_TAKEN=1   # set before the call: a half-applied add is still undone
+sh_ cmd role add-role-holder --user 0 "$ROLE" "$PKG" 0 >/dev/null 2>&1 || fail "mic: add-role-holder refused $PKG (the app does not qualify for the assistant role)"
 sleep 3
 holders=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r')
-grep -qF "$PKG" <<<"$holders" || { restore_role; fail "mic: $PKG is not the assistant role holder (got: $holders)"; }
+grep -qF "$PKG" <<<"$holders" || fail "mic: $PKG is not the assistant role holder (got: $holders)"
 sh_ settings get secure voice_interaction_service | tr -d '\r' | tee "$OUT/mic-voice-service.txt"
+rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
+echo "with the role: voice_recognition_service: $rec"
+[[ $rec == "$REC" || $rec == "$PKG/.ClaudeRecognitionService" ]] || fail "mic: voice_recognition_service is not our forwarding recognizer (got: $rec)"
+pass "mic: the role points voice_recognition_service at the forwarding ClaudeRecognitionService"
 # No force-stop from here on: it would unbind the voice service.
 sh_ input keyevent KEYCODE_ASSIST; sleep 4
-if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; restore_role; fail "mic: KEYCODE_ASSIST with the role did not open the app"; fi
+if ! in_front; then echo "diagnostic: top resumed: $(resumed | head -1 | sed 's/^ *//')"; fail "mic: KEYCODE_ASSIST with the role did not open the app"; fi
 xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-mic-assist.xml"
-grep -qF "Ask Claude full screen" <<<"$xml" || { restore_role; fail "mic: KEYCODE_ASSIST did not show the Ask Claude screen"; }
+grep -qF "Ask Claude full screen" <<<"$xml" || fail "mic: KEYCODE_ASSIST did not show the Ask Claude screen"
 pass "mic: KEYCODE_ASSIST with the role opens Ask Claude"
 sh_ input keyevent KEYCODE_BACK; sleep 1; sh_ input keyevent KEYCODE_BACK; sleep 1
 restore_role
+sleep 2
 after=$(sh_ cmd role get-role-holders --user 0 "$ROLE" 2>/dev/null | tr -d '\r' | tr ';' ' ')
 grep -qF "$PKG" <<<"$after" && fail "mic: the assistant role was not taken back from $PKG"
-pass "mic: assistant role restored (now: ${after:-<none>})"
+after_rec=$(sh_ settings get secure voice_recognition_service | tr -d '\r')
+[[ $after_rec == "$prev_rec" ]] || warn "mic: voice_recognition_service after restore is '$after_rec', before it was '$prev_rec'"
+pass "mic: assistant role restored (now: ${after:-<none>}; voice_recognition_service: $after_rec)"
 no_app_crash_yet "mic-to-claude"
 
 # Return to our home screen from an app we opened. Third-party apps may consume Back (YouTube TV shows an exit
