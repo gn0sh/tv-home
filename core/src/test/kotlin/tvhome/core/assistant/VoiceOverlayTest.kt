@@ -167,3 +167,24 @@ class VoiceOverlayEffectsTest {
         assertTrue(seen.isEmpty(), "$seen")
     }
 }
+
+class VoiceOverlayFadeTest {
+    private var t = 0L
+
+    /** answer-fade: a key on the card restarts the 20 s fade; it does not end the answer. */
+    @Test fun keepShowingRestartsTheFade() {
+        val o = VoiceOverlay({ t })
+        o.final("q"); o.outcome(AskOutcome.Answer(AskReply("a", null), false))
+        t += 15_000; o.keepShowing()
+        assertEquals(t + VoiceOverlay.ANSWER_MS, o.deadline())
+        t += 19_999; assertFalse(o.tick())
+        t += 1; assertTrue(o.tick()); assertTrue(o.isDone)
+    }
+
+    @Test fun keepShowingOnlyTouchesAnAnswer() {
+        val o = VoiceOverlay({ t })
+        val d = o.deadline()
+        t += 5_000; o.keepShowing()
+        assertEquals(d, o.deadline()) // listening timeout unchanged
+    }
+}

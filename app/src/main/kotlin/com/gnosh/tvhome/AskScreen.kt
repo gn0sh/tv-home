@@ -69,8 +69,9 @@ const val ASK_FULL_SCREEN = "Ask Claude full screen"
 /**
  * [intent]: what Open starts (package-restricted or explicit), so a caller that is not a foreground activity (the voice
  * overlay) can hand it to a foreground trampoline instead of calling [launch]; null when there is nothing to open.
+ * [route]: which fallback it is ("deep_link", "search", "home" or "none"), for the open log. Never the title.
  */
-class OpenPlan(val description: String, val intent: Intent? = null, val launch: () -> Boolean)
+class OpenPlan(val description: String, val intent: Intent? = null, val route: String = "none", val launch: () -> Boolean)
 
 /**
  * What the Ask view needs from the activity. [newEngine] gives a fresh engine (and so a fresh, in-memory conversation)

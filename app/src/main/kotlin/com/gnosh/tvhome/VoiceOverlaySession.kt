@@ -24,6 +24,7 @@ import android.speech.SpeechRecognizer
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -222,8 +223,8 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
                 val open = s.reply.open
                 val plan = openPlan
                 if (open != null && plan != null) {
-                    v?.showOpen("Open ${open.app.label}") {
-                        if (if (qaDirectOpen) plan.launch() else openFromSession(plan)) {
+                    v?.showOpen(open.app.label, onActivity = { keepShowing(m) }) {
+                        if (if (qaDirectOpen) openDirect(plan) else openFromSession(plan)) {
                             m.opened()
                             render(m)
                         } else {
@@ -239,6 +240,13 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
                 return
             }
         }
+        schedule(m)
+    }
+
+    /** answer-fade: a key on the card or focus on Open restarts the fade. */
+    private fun keepShowing(m: VoiceOverlay) {
+        if (machine !== m) return
+        m.keepShowing()
         schedule(m)
     }
 
@@ -283,18 +291,28 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
     }
 
     /**
-     * overlay-open-fix: the session runs in a service, so a plain startActivity from here is a background activity
-     * start, which Android 14 drops without an exception (Brian's Open did nothing). The voice session's own route,
-     * startAssistantActivity, is allowed; it starts our non-exported, no-UI [OpenTrampolineActivity], which is then
-     * the foreground activity and starts the Open intent. False only when that start itself fails.
+     * overlay-open-fix: Open goes through the voice session's documented route, startAssistantActivity, onto our
+     * non-exported, no-UI [OpenTrampolineActivity], which is then the foreground activity and starts the Open intent.
+     * Hypothesis (not proven; the emulator opened the app either way): a plain startActivity from the session's service
+     * context can be dropped as a background activity start without an exception. False only when this start fails.
+     * Each attempt goes to [OpenLog] with its route, never the title.
      */
     private fun openFromSession(plan: OpenPlan): Boolean {
-        val target = plan.intent ?: return false
-        return runCatching {
-            startAssistantActivity(Intent(context, OpenTrampolineActivity::class.java).putExtra(OpenTrampolineActivity.EXTRA_TARGET, target))
+        val target = plan.intent ?: return false.also { OpenLog.record(context, "session", plan.route, "no_intent") }
+        val ok = runCatching {
+            startAssistantActivity(
+                Intent(context, OpenTrampolineActivity::class.java)
+                    .putExtra(OpenTrampolineActivity.EXTRA_TARGET, target)
+                    .putExtra(OpenTrampolineActivity.EXTRA_ROUTE, plan.route),
+            )
             true
         }.getOrDefault(false)
+        OpenLog.record(context, "session", plan.route, if (ok) "assistant_started" else "assistant_failed")
+        return ok
     }
+
+    private fun openDirect(plan: OpenPlan): Boolean =
+        plan.launch().also { OpenLog.record(context, "session", plan.route, if (it) "direct_started" else "direct_failed") }
 
     private fun openFullScreen() {
         // The assistant's own start path first; the plain start as a fallback (the bound voice service may start it).
@@ -393,32 +411,50 @@ private class OverlayViews(private val context: Context) {
         this.status.visibility = if (status == null) View.GONE else View.VISIBLE
         this.body.text = body.orEmpty()
         this.body.visibility = if (body == null) View.GONE else View.VISIBLE
-        open.visibility = View.GONE
-        open.setOnClickListener(null)
-        hint.visibility = View.GONE
+        clearOpen()
         if (pulsing) startPulse() else stopPulse()
         panel.requestFocus()
     }
 
     /**
-     * overlay-open-autofocus: Open is never focused for Brian. Focus stays on the card (OK there does nothing); a
-     * deliberate Right or Down moves to Open, then OK opens. The hint says so.
+     * overlay-open-autofocus, ok-on-card-noop: Open is never focused for Brian, and never launches on one press. Focus
+     * starts on the card; OK there (or Right/Down) moves focus to Open and the hint says to press OK again; OK on Open
+     * opens. Two presses keep the accidental-launch guard. Any key on the card, or focus on Open, calls [onActivity].
      */
-    fun showOpen(label: String, onOpen: () -> Unit) {
-        open.text = label
+    fun showOpen(appLabel: String, onActivity: () -> Unit, onOpen: () -> Unit) {
+        open.text = "Open $appLabel"
         open.visibility = View.VISIBLE
         open.setOnClickListener { onOpen() }
-        hint.text = "\u2192 $label"
+        hint.text = "Press OK or \u2192 to open $appLabel"
         hint.visibility = View.VISIBLE
         panel.nextFocusDownId = open.id
         panel.nextFocusRightId = open.id
         open.nextFocusUpId = panel.id
         open.nextFocusLeftId = panel.id
+        panel.setOnClickListener { open.requestFocus() } // OK on the card: to Open, never a launch
+        open.setOnFocusChangeListener { _, has ->
+            if (has) {
+                hint.text = "Press OK again to open $appLabel"
+                onActivity()
+            }
+        }
+        val keys = View.OnKeyListener { _, _, e -> if (e.action == KeyEvent.ACTION_DOWN) onActivity(); false }
+        panel.setOnKeyListener(keys)
+        open.setOnKeyListener(keys)
         panel.requestFocus()
     }
 
     fun reset() {
         stopPulse()
+        clearOpen()
+    }
+
+    private fun clearOpen() {
+        panel.setOnClickListener(null)
+        panel.isClickable = false
+        panel.setOnKeyListener(null)
+        open.setOnKeyListener(null)
+        open.onFocusChangeListener = null
         hint.visibility = View.GONE
         open.visibility = View.GONE
         open.setOnClickListener(null)

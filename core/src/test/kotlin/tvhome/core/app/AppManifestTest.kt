@@ -178,7 +178,7 @@ class AppManifestTest {
         assertEquals("@android:style/Theme.NoDisplay", a.attr("theme"))
         assertEquals("true", a.attr("excludeFromRecents")); assertEquals("true", a.attr("noHistory"))
         val src = File(app, "src/main/kotlin/com/gnosh/tvhome/OpenTrampolineActivity.kt").readText()
-        assertTrue(src.contains("pkg != packageName") && src.contains("GRANTS.inv()"))
+        assertTrue(src.contains("OpenFilter.accepts(target.`package`, target.component?.packageName, packageName)") && src.contains("OpenFilter.flags("))
         // The release and debug QA hooks never plant anything; only the qa build type reads a planted exchange.
         for (bt in listOf("release", "debug")) {
             val hook = File(app, "src/$bt/kotlin/com/gnosh/tvhome/VoiceQaHook.kt").readText()

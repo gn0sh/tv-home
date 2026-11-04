@@ -69,8 +69,10 @@
             </intent-filter>
         </activity-alias>
 
-        <!-- overlay-open-fix: the voice overlay's Open goes through here (VoiceInteractionSession.startAssistantActivity),
-             so the app launch comes from a foreground activity. Not exported: only this app can start it. No UI. -->
+        <!-- overlay-open-fix: the voice overlay's Open goes through here (VoiceInteractionSession.startAssistantActivity,
+             the documented route for a voice session), so the app launch comes from a foreground activity. Whether a
+             plain start from the session is blocked as a background launch is a hypothesis, not proven. Not exported:
+             only this app can start it. No UI. -->
         <activity
             android:name=".OpenTrampolineActivity"
             android:exported="false"
