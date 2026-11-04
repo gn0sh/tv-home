@@ -1109,7 +1109,8 @@ fi
     warn "M7 Watch pill check skipped: a game 90 min out would fall after midnight in $etz"
   else
     q2_restart() { sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 8; }
-    watch_shown() { ui_text | grep -qF 'content-desc="Watch the game on YouTube"'; }
+    # The description may end ", opens <app>" when the pill names the app (watch-desc-mismatch).
+    watch_shown() { ui_text | grep -qE 'content-desc="Watch the game on YouTube(, opens [^"]*)?"'; }
     sh_ content insert --uri "content://$PKG.provision/watch" --bind networks:s:"YouTube=$yt" --bind defaults:s:predators=YouTube \
       || fail "q2: watch map insert refused"
     # No game: no pill, even with the map set.
@@ -1123,6 +1124,14 @@ fi
     q2_restart
     watch_shown || fail "q2: an upcoming game today with a mapped, installed app shows no Watch pill"
     pass "q2: game day with a mapped, installed app shows the Watch pill"
+    # Each dock pill's full description (closing quote included) must be present. Whether it sits on the focusable
+    # node is not checked here: uiautomator shows every tile's and pill's description on a non-focusable child with the
+    # same bounds, app-wide; the backlog item pill-a11y-node settles that with a real TalkBack / AccessibilityNodeInfo check.
+    ui=$(ui_text)
+    for d in 'Watch the game on YouTube(, opens [^"]*)?' 'Quiet mode, off\. Turn on to hide event titles\.' 'Ask Claude\. Talk or type a question\.'; do
+      grep -qE "content-desc=\"$d\"" <<<"$ui" || fail "q2: no node has the description /$d/"
+    done
+    pass "q2: the Watch, Quiet and Ask pills show their full descriptions"
     # Focus order (R1): apps row > Calendar > Ask > Watch > Quiet.
     first=$(focus_after q2)
     case ${first%%|*} in ""|Calendar,*|"${ASK_DESC_PREFIX}"*|"Quiet mode"*|"Watch the game on "*) fail "q2: first focus is '${first%%|*}', not the apps row (R1)" ;; esac

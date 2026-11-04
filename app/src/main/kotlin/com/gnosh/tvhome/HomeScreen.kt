@@ -74,6 +74,8 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -82,6 +84,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.tv.material3.LocalTextStyle
 import androidx.tv.material3.Text
 import tvhome.core.apps.AppLayout
 import tvhome.core.apps.LauncherApp
@@ -96,6 +99,7 @@ import tvhome.core.ui.OledTokens
 import tvhome.core.ui.dimmed
 import tvhome.core.ui.ScreenModel
 import tvhome.core.ui.Tokens
+import tvhome.core.ui.WatchPill
 
 /** One tile: the app, and its banner (16:9) or, failing that, its icon, already drawn to a bitmap off the main thread. */
 class TileApp(val app: LauncherApp, val image: ImageBitmap?, val isBanner: Boolean)
@@ -353,8 +357,19 @@ fun HomeScreen(
                 ) {
                     AskButton(shown, askTile, up = calendar, onFocused = {}, onClick = { open = DOCK_ASK })
                     watch?.let { w ->
+                        // watch-pill-truncated: "Watch on CDE" when it fits the pill whole, else "Watch" (the card names
+                        // the network). Measured at the pill's own type size and text width.
+                        val measurer = rememberTextMeasurer()
+                        val density = LocalDensity.current
+                        val textPx = with(density) { (WATCH_PILL_MAX_DP - 2 * PILL_PAD_H_DP).dp.roundToPx() }
+                        val style = LocalTextStyle.current.merge(PILL_TEXT_STYLE)
+                        val label = remember(w.appLabel, textPx, density, style) {
+                            WatchPill.label(w.appLabel) { t ->
+                                measurer.measure(t, style, maxLines = 1, softWrap = false, density = density).size.width <= textPx
+                            }
+                        }
                         DockPill(
-                            shown, label = "Watch ${w.network}", description = WATCH_DESC_PREFIX + w.network,
+                            shown, label = label, description = WatchPill.description(WATCH_DESC_PREFIX, w.network, label),
                             requester = watchPill, up = calendar, maxWidthDp = WATCH_PILL_MAX_DP, active = false,
                             // The focus loss that comes with the pill's removal (watch already null) must not clear the flag.
                             onFocus = { f -> if (f) watchFocused = true else if (watch != null) watchFocused = false },
@@ -705,14 +720,18 @@ private fun AskButton(theme: HomeTheme, requester: FocusRequester, up: FocusRequ
             .focusRequester(requester)
             .focusProperties { this.up = up }
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
-            .clearAndSetSemantics { contentDescription = "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}." }
-            .clickable(onClick = onClick),
+            // watch-pill-a11y: clickable is the merging (focusable) semantics node. The description is a plain,
+            // non-merging semantics after it, so it merges INTO that node; a second mergeDescendants = true made a
+            // separate merged node that took the description away from the focusable one (tour 41727087775).
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "${AskCopy.TILE_LABEL}. ${AskCopy.TILE_HINT}." },
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("\u2726", color = color(theme.focusRing), fontSize = 22.sp)
+        Text("\u2726", color = color(theme.focusRing), fontSize = 22.sp, modifier = Modifier.clearAndSetSemantics { })
         Spacer(Modifier.width(10.dp))
-        Text(AskCopy.TILE_LABEL, color = color(theme.text), fontSize = Tokens.SECONDARY_SP.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(AskCopy.TILE_LABEL, color = color(theme.text), fontSize = Tokens.SECONDARY_SP.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+            modifier = Modifier.clearAndSetSemantics { })
     }
 }
 
@@ -749,15 +768,16 @@ private fun DockPill(
             .focusRequester(requester)
             .focusProperties { this.up = up }
             .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
-            .semantics(mergeDescendants = true) { contentDescription = description }
+            // watch-pill-a11y: plain semantics after clickable, so the description merges into clickable's own
+            // (focusable) node; mergeDescendants = true here made a separate node (tour 41727087775).
             .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp),
+            .semantics { contentDescription = description }
+            .padding(horizontal = PILL_PAD_H_DP.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            label, color = color(if (active) theme.focusRing else theme.text), fontSize = Tokens.SECONDARY_SP.sp,
-            fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.clearAndSetSemantics { },
+            label, color = color(if (active) theme.focusRing else theme.text), style = LocalTextStyle.current.merge(PILL_TEXT_STYLE), maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics { },
         )
     }
 }
@@ -769,6 +789,8 @@ const val QUIET_DESC_OFF = "Quiet mode, off. Turn on to hide event titles."
 
 private const val PILL_GAP_DP = HomeLayout.PILL_GAP_DP
 private const val PILL_MIN_DP = 140
+private const val PILL_PAD_H_DP = 24
+private val PILL_TEXT_STYLE = TextStyle(fontSize = Tokens.SECONDARY_SP.sp, fontWeight = FontWeight.Medium)
 private const val WATCH_PILL_MAX_DP = HomeLayout.WATCH_PILL_MAX_DP
 private const val QUIET_PILL_MAX_DP = HomeLayout.QUIET_PILL_MAX_DP
 

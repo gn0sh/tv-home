@@ -2,8 +2,11 @@ package tvhome.core.feeds
 
 import java.util.Locale
 
-/** The app a Watch pill opens: [network] is the name to show ("ESPN+"), [packageName] the app to launch. */
-data class WatchTarget(val network: String, val packageName: String)
+/**
+ * The app a Watch pill opens: [network] is the name the game card shows ("ESPN+"), [packageName] the app to launch,
+ * [appLabel] its launcher label when known ("CDE", "ESPN"): the pill says "Watch on <app>" ([tvhome.core.ui.WatchPill]).
+ */
+data class WatchTarget(val network: String, val packageName: String, val appLabel: String? = null)
 
 /**
  * Which app carries a game (spec M7-4.2/4.3, A-M7-8): the feeds do not say, so this is a small map Brian sets over adb.
@@ -20,6 +23,8 @@ data class WatchTarget(val network: String, val packageName: String)
 class WatchMap private constructor(
     private val packages: Map<String, WatchTarget>,
     private val teamDefaults: Map<String, String>,
+    /** For a network this map does not name: the built-in defaults ([WatchDefaults]), or null. */
+    private val fallback: ((String) -> WatchTarget?)? = null,
 ) {
     /** The network that carries [game] and has a mapped app, installed or not ("ESPN+"); null when none maps. */
     fun network(game: TeamGame): String? = candidates(game).firstOrNull()?.network
@@ -31,13 +36,35 @@ class WatchMap private constructor(
     private fun candidates(game: TeamGame): List<WatchTarget> {
         val listed = game.game.networks
         val names = if (listed.isNotEmpty()) listed else listOfNotNull(teamDefaults[game.team.key])
-        return names.mapNotNull { packages[key(it)] }.distinctBy { it.packageName }
+        return resolveAll(names).distinctBy { it.packageName }
     }
+
+    /** watch-adb-precedence: every one of [names] against this map's own entries first, then the fallback for each. */
+    private fun resolveAll(names: List<String>): List<WatchTarget> {
+        val own = names.mapNotNull { packages[key(it)] }
+        val fb = fallback?.let { f -> names.mapNotNull { n -> runCatching { f(n) }.getOrNull() } }.orEmpty()
+        return own + fb
+    }
+
+    /**
+     * This map wins for the whole game (an adb-provisioned map is Brian's word): every network the game lists is tried
+     * against its entries first, in feed order, and only when none of them has an installed app do [defaults] get a
+     * turn, again in feed order. Its team defaults win too.
+     */
+    fun orElse(defaults: WatchMap): WatchMap = WatchMap(packages, teamDefaults + defaults.teamDefaults.filterKeys { it !in teamDefaults }) { n ->
+        defaults.resolveAll(listOf(n)).firstOrNull()
+    }
+
+    /** True when nothing is mapped and there is no fallback (no Watch pill can show). */
+    val isEmpty: Boolean get() = packages.isEmpty() && fallback == null
 
     override fun toString(): String = "WatchMap(${packages.size} networks, ${teamDefaults.size} defaults)"
 
     companion object {
         val EMPTY = WatchMap(emptyMap(), emptyMap())
+
+        /** A map that names nothing itself and asks [resolve] for every network (the built-in defaults). */
+        internal fun resolving(resolve: (String) -> WatchTarget?): WatchMap = WatchMap(emptyMap(), emptyMap(), resolve)
         const val MAX_NETWORKS = 32
         const val MAX_TEAMS = 8
         const val MAX_PACKAGE = 100
