@@ -127,5 +127,30 @@ for k in DPAD_UP 313 190 191 "--longpress 313" "--longpress 190" "--longpress BA
   got=$(sh_ logcat -d -s KeyProbe:I | grep -oE 'key KEYCODE_[A-Z0-9_]+ action=[01] repeat=[0-9]+ longPress=(true|false)' | sort -u | tr '\n' ' ')
   p "keyfilter: $k -> ${got:-NOT RECEIVED} | top after=$(top)"
 done
+# `input keyevent` is injected and skipped the filter above (even DPAD_UP never arrived), so the same keys again
+# through the emulator's own key device (`adb emu event send`, Linux key codes through the image's key layout), the
+# path a real remote's keys take. Linux codes: KEY_UP 103, KEY_BACK 158, BTN_3 259, BTN_4 260, KEY_MACRO1 656,
+# KEY_ASSISTANT 583, KEY_SEARCH 217, KEY_HOMEPAGE 172, KEY_BOOKMARKS 156, KEY_VOICECOMMAND 582, KEY_RED 398.
+p "keydev: key devices: $(sh_ getevent -p 2>/dev/null | grep -E '^add device|name:' | tr -s ' ' | tr '\n' ' ' | head -c 600)"
+for kc in 103:UP 158:BACK 259:BTN_3 260:BTN_4 656:MACRO1 583:ASSISTANT 582:VOICECOMMAND 217:SEARCH 156:BOOKMARKS 398:RED 172:HOMEPAGE; do
+  code=${kc%%:*}; name=${kc#*:}
+  neutral
+  sh_ logcat -c
+  a emu event send "EV_KEY:$code:1" "EV_SYN:0:0" >/dev/null 2>&1; sleep 0.2
+  a emu event send "EV_KEY:$code:0" "EV_SYN:0:0" >/dev/null 2>&1
+  sleep 3
+  got=$(sh_ logcat -d -s KeyProbe:I | grep -oE 'key KEYCODE_[A-Z0-9_]+ action=[01] repeat=[0-9]+ longPress=(true|false)' | sort -u | tr '\n' ' ')
+  p "keydev: linux $code ($name) -> ${got:-NOT RECEIVED} | top after=$(top)"
+done
+# long press of the star (MACRO1) and of BACK through the key device: held 1.5 s
+for kc in 656:MACRO1 158:BACK; do
+  code=${kc%%:*}; name=${kc#*:}
+  neutral; sh_ logcat -c
+  a emu event send "EV_KEY:$code:1" "EV_SYN:0:0" >/dev/null 2>&1; sleep 1.5
+  a emu event send "EV_KEY:$code:0" "EV_SYN:0:0" >/dev/null 2>&1
+  sleep 3
+  got=$(sh_ logcat -d -s KeyProbe:I | grep -oE 'key KEYCODE_[A-Z0-9_]+ action=[01] repeat=[0-9]+ longPress=(true|false)' | sort -u | tr '\n' ' ')
+  p "keydev: linux $code ($name) held 1.5 s -> ${got:-NOT RECEIVED} | top after=$(top)"
+done
 sh_ settings delete secure enabled_accessibility_services >/dev/null 2>&1
 echo "PROBE done"
