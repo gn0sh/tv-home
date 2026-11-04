@@ -47,7 +47,7 @@ class SunArcTest {
                 val s = SunArc.place(SkyNow.of(d.atTime(h, m).atZone(central).toInstant(), lat, lon), flat)
                     ?: continue
                 assertTrue(s.y >= SunArc.Y_TOP - 1e-4f, "$d $h:$m y ${s.y}")
-                assertTrue(s.x in 0.52f..0.96f, "$d $h:$m x ${s.x}")
+                assertTrue(s.x in 0.05f..0.95f, "$d $h:$m x ${s.x}")
             }
             d = d.plusDays(7)
         }
@@ -106,13 +106,39 @@ class SunArcTest {
     }
 
     @Test fun transitIsTheMiddleOfTheArc() {
-        // sun-x-noon: the arc spans X_RISE..X_SET (right of the calm title wash), so the transit (11:33 AM CST in
-        // Clarksville, not clock noon) is its midpoint, about 0.74 of the image; 12:00 PM is a little past it.
+        // The transit (11:33 AM CST in Clarksville, not clock noon) is the centre of the screen; 12:00 PM is just past.
         val mid = (SunArc.X_RISE + SunArc.X_SET) / 2
         for (date in listOf(LocalDate.of(2026, 11, 3), LocalDate.of(2026, 6, 21), LocalDate.of(2026, 3, 8))) {
             val day = tvhome.core.sky.Sun.day(date, central, lat, lon)
             assertEquals(mid, SunArc.place(SkyNow.of(day.noon, lat, lon), flat)!!.x, 0.01f, "$date")
         }
-        assertTrue(SunArc.place(sky(2026, 11, 3, 12), flat)!!.x in mid..mid + 0.03f)
+        assertEquals(0.5f, mid, 1e-6f)
+        assertTrue(SunArc.place(sky(2026, 11, 3, 12), flat)!!.x in mid..mid + 0.08f)
+    }
+
+    @Test fun nashvilleNovember4FollowsTheSkyLeftToRight() {
+        // Brian's report (2026-11-04 20:39Z, 2:39 PM CST): the sun was drawn at x 0.85, by the sunset end of the old
+        // 0.56-0.92 arc. Facing south it is south-west (azimuth 229), 22 degrees up, past its 38-degree peak.
+        val nash = 36.16 to -86.78
+        fun at(t: String) = SkyNow.of(java.time.Instant.parse("2026-11-04T$t"), nash.first, nash.second)
+        val day = at("17:30:00Z").day
+        val rise = SunArc.place(SkyNow.of(day.sunrise!!, nash.first, nash.second), flat)!!
+        val noon = SunArc.place(SkyNow.of(day.noon, nash.first, nash.second), flat)!!
+        val pm = SunArc.place(at("20:39:00Z"), flat)!!
+        val set = SunArc.place(SkyNow.of(day.sunset!!, nash.first, nash.second), flat)!!
+        assertEquals(SunArc.X_RISE, rise.x, 0.01f) // east, on the left
+        assertEquals(0.5f, noon.x, 0.01f)
+        assertEquals(SunArc.Y_TOP, noon.y, 0.001f)
+        assertEquals(SunArc.X_SET, set.x, 0.01f) // west, on the right
+        val p = at("20:39:00Z").position
+        assertEquals(229.4, p.azimuth, 1.0)
+        assertEquals(21.8, p.elevation, 0.5)
+        assertTrue(!p.morning)
+        // Right of centre by its share of the afternoon's azimuth span, and lower than noon, above the horizon.
+        assertEquals(0.77f, pm.x, 0.02f)
+        assertTrue(pm.y > noon.y + 0.03f && pm.y < 0.6f - 0.03f, "y ${pm.y}")
+        assertTrue(rise.x < noon.x && noon.x < pm.x && pm.x < set.x)
+        // 9 AM is left of centre: the morning sun is in the east half.
+        assertTrue(SunArc.place(at("15:00:00Z"), flat)!!.x < 0.5f)
     }
 }
