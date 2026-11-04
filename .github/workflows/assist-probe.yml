@@ -17,6 +17,7 @@ concurrency:
 
 env:
   CI: "true"
+  TVHOME_BUILD_APP: "true"
   APP_DEP_VERIFICATION: strict
 
 jobs:
