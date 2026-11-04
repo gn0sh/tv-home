@@ -102,6 +102,36 @@ would halve it (one constant, `AskConfig.MODEL`).
 - **Reading the player's UI through accessibility window content**: would get on-screen titles, but means reading
   screen content, which the spec rules out. Rejected.
 
+## Voice overlay (2026-11-04, branch `voice-overlay`)
+Brian's ask: when he finishes speaking it acts at once (no Send screen), entirely in the background, with only an
+icon in a corner of whatever he is watching. Verified before this: with the app holding the ASSISTANT role, the mic
+button reaches our VoiceInteractionSession on his Streamer (Android 14). This supersedes decision 6 for the mic path.
+Assumptions and decisions:
+1. **Window:** the VoiceInteractionSession's own UI window, which the system draws over the current app. No
+   SYSTEM_ALERT_WINDOW, no accessibility overlay. The window is sized to the card (wrap content, bottom-right), so
+   the rest of the screen takes no input and playback keeps going. Assumption (unverified on the TV): the session
+   window keeps the size set in the session's onCreate, and the app underneath stays resumed (CI checks the latter
+   on the emulator).
+2. **Card size:** about 15% of the screen width while listening (the pulsing Claude mark and the partial text);
+   about 28% for the answer or an error, so a short answer is readable. Plain Android views (no Compose in the
+   session window). Focus sits on the card, so D-pad keys go to it, not the player, while it shows.
+3. **Speech:** SpeechRecognizer directly, with Google's system recognizer from RecognizerChoice, partial results on.
+   Needs RECORD_AUDIO, which the app already declares (mic-to-claude) and Brian granted over adb. Still never
+   requested at runtime. Assumption (unverified): the assistant's visible session window counts as foreground for
+   the microphone, so Google's recognizer may record.
+4. **Send at once:** the final transcript goes straight to the same AskEngine (key check, daily cap, error mapping,
+   no logging, toString redaction). No confirmation step on this path; the full-screen view keeps its Send step.
+   One question per press (no follow-up on the overlay).
+5. **Answer card:** the answer text; fades after about 20 s (errors after 8 s). Back dismisses it and ends the
+   session. If the reply names an app, a focused **Open** button uses the same launch rules (InstalledApps.planOpen).
+   Nothing launches without Open (decision 3 holds).
+6. **Errors:** no key, cap reached, offline, busy, rejected, no recognizer, mic denied, nothing heard: one short line
+   on the same card. Without RECORD_AUDIO the mic button falls back to the full-screen Ask view as before.
+7. **Unchanged:** the dock tile and the star-button alias still open the full-screen Ask view. disabledShowContext
+   stays ASSIST|SCREENSHOT: the session never receives screen content.
+8. **Logic in core:** `VoiceOverlay` (listening, sending, answer or error, done; listen timeout 20 s, stuck-send
+   timeout 90 s, fade) with JVM tests. The app wires it to the recognizer and the views.
+
 ## Consequences
 - Cost: about $0.02-0.20 per question, typically ~$0.10 (architecture section 7); roughly $10-15 a month at 5 a
   day. Spending starts only after Brian approves.

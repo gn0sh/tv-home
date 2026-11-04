@@ -202,8 +202,11 @@ On a Google TV that does have the picker: **Settings > Apps > Default apps > Dig
 **Ask Claude** (the app itself shows as **Agenda** elsewhere), then allow the microphone in **Settings > Apps > Agenda >
 Permissions > Microphone** (menu names not checked on a TV).
 
-Press the mic button: Ask Claude opens and starts listening (checked on the Streamer, 2026-11-04). Speak your question
-as usual.
+Press the mic button: a small Claude card appears in the bottom-right corner over whatever is playing, with a
+pulsing star while it listens. Speak your question; when you stop, it asks Claude straight away and shows the
+answer on the card, which fades after about 20 seconds. Press Back to dismiss it sooner. If Claude names an app, an
+**Open** button appears; nothing opens unless you press it. (Without the microphone line in step 2, the mic button
+opens the full-screen Ask Claude view instead.) The card is new and not yet checked on the TV.
 
 **What moves with it:** Google voice search moves too. While this is set, the mic button no longer opens Google
 Assistant or Google's voice search, and "Hey Google" style voice commands for the TV won't work. Apps that have their
