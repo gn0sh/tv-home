@@ -15,7 +15,7 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
   launcher's priority-2 HOME filter; an accessibility key filter never receives HOME, SEARCH or ASSIST.
 
 ## Waiting on the CEO
-- Merge #33 and #34, then run Install TV Home.cmd (yes/no, yes recommended) | https://github.com/gn0sh/tv-home/pull/33 , https://github.com/gn0sh/tv-home/pull/34 | tap Merge on both, wait for the main build, double-click Install TV Home.cmd | asked 2026-11-04 21:20Z in the "Run Claude voice in the TV background" thread | default: nothing changes on the TV
+- Merge #36 then run Install TV Home.cmd (yes/no, yes recommended) | https://github.com/gn0sh/tv-home/pull/36 | tap Merge, wait for the main build, double-click Install TV Home.cmd, then ask for a show and press OK twice | asked 2026-11-04 23:15Z in the "Run Claude voice in the TV background" thread | default: Open on the corner card keeps needing Right then OK
 
 ## Problem-key ledger
 | Key | Returns | Source |
@@ -44,6 +44,8 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | home-recovery-unreachable | 3 | PR #15 security (key filter, hold-Home, Home watch); escape defined as a tested policy (HomeRedirect in :core: double press + crash-loop pause), approved |
 | home-redirect-crash-loop | 2 | PR #15 security, then code review (limit unreachable); fixed with init guard + tests |
 | home-dead-on-start-failure, a11y-list-regex-too-strict, rollback-file-not-per-serial, home-set-stale, a11y-event-breadth, m3-staying-reset-overlay, m3-boot-claim, m3-launcher-unverified (open: on-TV) | 1 | PR #15 reviews |
+
+- Nov 4: ok-on-card-noop, open-cause-unproven, answer-fade, open-failure-silent, trampoline-component-pkg: 1 return each (PR #36 reviews, fixed 35f220c)
 
 ## Run ledger
 | Date | Role | Model/effort | Task | Outcome |
@@ -109,3 +111,6 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | 2026-11-04 | security-engineer | opus | PR #33 fresh + delta 4e978eb..e802a79 | OK, OK |
 | 2026-11-04 | frontend-engineer | opus/medium | PR #34 sun position root cause + fix | done (7750f92, 717 core tests) |
 | 2026-11-04 | code-reviewer | sonnet/medium | PR #34 sun arc | approve with nits (skynow-default-trap, fixed) |
+| 2026-11-04 | frontend-engineer | opus/medium | PR #36 Open button fix (trampoline, then OK-twice) | done (35f220c, emulator pass) |
+| 2026-11-04 | code-reviewer | opus | PR #36 fresh + delta | request changes (ok-on-card-noop, open-cause-unproven) -> approve with nits |
+| 2026-11-04 | security-engineer | opus | PR #36 fresh + delta | OK with 2 lows -> OK |
