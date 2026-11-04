@@ -1,12 +1,12 @@
 package tvhome.core.ui
 
+import java.time.Instant
+import java.time.ZoneOffset
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import tvhome.core.sky.Sun
 import tvhome.core.sky.SunDay
 import tvhome.core.sky.SunPosition
-import kotlin.math.abs
-import java.time.Instant
-import java.time.ZoneOffset
-import kotlin.math.roundToInt
 
 /** Where the backdrop draws the sun's centre: fractions of the backdrop image (1920 x 600), from its top left. */
 data class SunSpot(val x: Float, val y: Float)
@@ -19,10 +19,13 @@ data class SkyNow(
     val at: Instant,
     val position: SunPosition,
     val day: SunDay,
-    /** Azimuths (degrees from north) of the day's sunrise, transit and sunset; null rise/set when there is none. */
-    val riseAzimuth: Double? = null,
-    val noonAzimuth: Double = 180.0,
-    val setAzimuth: Double? = null,
+    /**
+     * Azimuths (degrees from north) of the day's sunrise, transit and sunset; null rise/set when there is none. No
+     * defaults (skynow-default-trap): build it with [of], which computes all three from the same place and day.
+     */
+    val riseAzimuth: Double?,
+    val noonAzimuth: Double,
+    val setAzimuth: Double?,
 ) {
     companion object {
         /**
@@ -68,7 +71,9 @@ object SunArc {
         val elev = sky.position.elevation
         if (elev < HIDDEN_BELOW) return null
         val day = sky.day
-        // Signed degrees from the transit's azimuth, negative towards sunrise (east of south in the north).
+        // Signed degrees from the transit's azimuth. The sides assume Brian's view: northern hemisphere, facing south,
+        // so negative is east (sunrise, left) and positive west (sunset, right). In the southern hemisphere the transit
+        // is to the north and the same formula mirrors: sunrise on the right, sunset on the left (as facing north).
         val d = wrap180(sky.position.azimuth - sky.noonAzimuth)
         val riseSide = sky.riseAzimuth?.let { abs(wrap180(it - sky.noonAzimuth)) } ?: 180.0
         val setSide = sky.setAzimuth?.let { abs(wrap180(it - sky.noonAzimuth)) } ?: 180.0
