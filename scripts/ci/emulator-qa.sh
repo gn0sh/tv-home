@@ -1246,7 +1246,7 @@ fi
     esac
     pass "q2: Down from Calendar reached the Ask pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
-    [[ ${cur%%|*} == "Watch the game on YouTube" ]] || fail "q2: Right from Ask reached '${cur%%|*}', not the Watch pill"
+    [[ ${cur%%|*} =~ ^Watch\ the\ game\ on\ YouTube(,\ opens\ .+)?$ ]] || fail "q2: Right from Ask reached '${cur%%|*}', not the Watch pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
     [[ ${cur%%|*} == "Quiet mode, off"* ]] || fail "q2: Right from Watch reached '${cur%%|*}', not the Quiet pill"
     key DPAD_RIGHT; cur=$(focus_after q2)
