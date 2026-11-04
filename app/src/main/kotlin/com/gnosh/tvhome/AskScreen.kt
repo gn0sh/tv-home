@@ -1,5 +1,6 @@
 package com.gnosh.tvhome
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -65,7 +66,11 @@ import tvhome.core.ui.Tokens
 const val ASK_FULL_SCREEN = "Ask Claude full screen"
 
 /** How Open would launch a target, decided before Brian presses it so the screen can say which fallback is used. */
-class OpenPlan(val description: String, val launch: () -> Boolean)
+/**
+ * [intent]: what Open starts (package-restricted or explicit), so a caller that is not a foreground activity (the voice
+ * overlay) can hand it to a foreground trampoline instead of calling [launch]; null when there is nothing to open.
+ */
+class OpenPlan(val description: String, val intent: Intent? = null, val launch: () -> Boolean)
 
 /**
  * What the Ask view needs from the activity. [newEngine] gives a fresh engine (and so a fresh, in-memory conversation)

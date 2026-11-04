@@ -40,6 +40,7 @@ import kotlinx.coroutines.withContext
 import tvhome.core.assistant.AskApp
 import tvhome.core.assistant.AskEngine
 import tvhome.core.assistant.AskOutcome
+import tvhome.core.assistant.AskReply
 import tvhome.core.assistant.OverlayEffect
 import tvhome.core.assistant.OverlayState
 import tvhome.core.assistant.VoiceError
@@ -70,6 +71,8 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
     private var job: Job? = null
     /** The Open plan for the current answer, worked out on IO before the answer is drawn. */
     private var openPlan: OpenPlan? = null
+    /** qa builds only (VoiceQaHook): Open the old way, straight from the session, to show the platform blocks it. */
+    private var qaDirectOpen = false
     private var views: OverlayViews? = null
     private val tick = Runnable { machine?.let { if (it.tick()) render(it) else schedule(it) } }
 
@@ -119,6 +122,20 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
             val e = (ctx.applicationContext as TvHomeApp).graph.newAskEngine { apps }
             engine = e
             if (machine !== m) return@launch
+            // qa builds only: a planted exchange instead of the microphone and the API (release: always null).
+            VoiceQaHook.planted(ctx)?.let { p ->
+                qaDirectOpen = p.directOpen
+                m.final(p.transcript) ?: return@launch
+                val outcome = AskReply.parse(p.replyJson, apps)?.let { AskOutcome.Answer(it, canFollowUp = false) } ?: AskOutcome.Unworkable
+                val plan = (outcome as? AskOutcome.Answer)?.reply?.open?.let { t ->
+                    withContext(Dispatchers.IO) { runCatching { InstalledApps.planOpen(ctx, t) }.getOrNull() }
+                }
+                if (machine !== m) return@launch
+                openPlan = plan
+                m.outcome(outcome)
+                render(m)
+                return@launch
+            }
             if (!e.checkKey()) return@launch fail(m, VoiceError.NO_KEY)
             val target = googleRecognizer(ctx) ?: return@launch fail(m, VoiceError.NO_RECOGNIZER)
             listen(m, target)
@@ -206,7 +223,7 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
                 val plan = openPlan
                 if (open != null && plan != null) {
                     v?.showOpen("Open ${open.app.label}") {
-                        if (plan.launch()) {
+                        if (if (qaDirectOpen) plan.launch() else openFromSession(plan)) {
                             m.opened()
                             render(m)
                         } else {
@@ -263,6 +280,20 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
     private fun releaseRecognizer() {
         recognizer?.let { runCatching { it.cancel() }; runCatching { it.destroy() } }
         recognizer = null
+    }
+
+    /**
+     * overlay-open-fix: the session runs in a service, so a plain startActivity from here is a background activity
+     * start, which Android 14 drops without an exception (Brian's Open did nothing). The voice session's own route,
+     * startAssistantActivity, is allowed; it starts our non-exported, no-UI [OpenTrampolineActivity], which is then
+     * the foreground activity and starts the Open intent. False only when that start itself fails.
+     */
+    private fun openFromSession(plan: OpenPlan): Boolean {
+        val target = plan.intent ?: return false
+        return runCatching {
+            startAssistantActivity(Intent(context, OpenTrampolineActivity::class.java).putExtra(OpenTrampolineActivity.EXTRA_TARGET, target))
+            true
+        }.getOrDefault(false)
     }
 
     private fun openFullScreen() {
@@ -418,4 +449,9 @@ private class OverlayViews(private val context: Context) {
         val CLAUDE_ORANGE = Color.rgb(217, 119, 87)
         val PANEL_BG = Color.argb(235, 16, 20, 24)
     }
+}
+
+/** A planted exchange for the qa build's VoiceQaHook (release and debug never make one). */
+internal class QaPlanted(val transcript: String, val replyJson: String, val directOpen: Boolean) {
+    override fun toString() = "QaPlanted(direct=$directOpen)"
 }

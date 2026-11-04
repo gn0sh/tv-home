@@ -130,7 +130,7 @@ class InstalledApps {
                 @Suppress("DEPRECATION")
                 pm.resolveActivity(i, 0) != null
             }.getOrDefault(false)
-            fun plan(description: String, intent: Intent) = OpenPlan(description) {
+            fun plan(description: String, intent: Intent) = OpenPlan(description, Intent(intent)) {
                 try {
                     context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     true
