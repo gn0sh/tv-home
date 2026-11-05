@@ -1,11 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- qa build only (CI emulator QA, never published): a tiny SpeechRecognizer client for the mic-to-claude round-trip
-     check (forwarding-unproven-on-device). Exported so `am start -n` from the shell can open it. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+     check (forwarding-unproven-on-device). Exported so `am start -n` from the shell can open it.
+     probe-watch-next (throwaway branch, never merged): WatchNextProbeActivity and the two permissions it probes. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA" />
+    <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     <application>
         <activity
             android:name=".RecognizerProbeActivity"
             android:exported="true"
             android:excludeFromRecents="true" />
+        <activity
+            android:name=".probe.WatchNextProbeActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.NoDisplay" />
     </application>
 </manifest>
