@@ -82,8 +82,6 @@ interface AskHost {
     fun newEngine(): AskEngine
     fun listen(onResult: (String?) -> Unit): Boolean
     fun planOpen(target: OpenTarget): OpenPlan
-    /** continue-tile: Open launched [target]; it becomes the home row's Continue tile. */
-    fun opened(target: OpenTarget) {}
 }
 
 private sealed interface Step {
@@ -220,11 +218,7 @@ private fun ColumnScope.Result(
             var openFailed by remember(o) { mutableStateOf(false) }
             if (openFailed) Line("Couldn't open ${o.reply.open?.app?.label.orEmpty()}.", amber)
             Buttons(theme, s, focusFirst = false) {
-                if (plan != null) button("Open in ${o.reply.open!!.app.label}") {
-                    val ok = plan.launch()
-                    openFailed = !ok
-                    if (ok) host.opened(o.reply.open!!)
-                }
+                if (plan != null) button("Open in ${o.reply.open!!.app.label}") { openFailed = !plan.launch() }
                 if (o.canFollowUp) button("Follow up") { onFollowUp() } else button("Start over") { onStartOver() }
                 button("Done") { onClose() }
             }

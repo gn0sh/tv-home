@@ -388,15 +388,15 @@ try {
     }
     $installed = $true
     # continue-tile (SECURITY REVIEW: an adb app-op change on Brian's TV): let TV Home read which apps were used last, for
-    # the Continue tile's fallback. A fresh install may already report "default", so allow it unless the op was turned
+    # the Continue tile. A fresh install may already report "default", so allow it unless the op was turned
     # off explicitly (ignore/deny/errored: usage-op-regrant, usage-op-fresh-default); an update never turns it back on.
     # Reversible, and the undo sticks across updates:
     #   adb shell appops set com.gnosh.tvhome GET_USAGE_STATS ignore
-    # It grants nothing else. A failure here only hides that fallback, so it warns and carries on.
+    # It grants nothing else. A failure here only hides the tile, so it warns and carries on.
     # emulator-qa.sh (usage-op-undo) mirrors this regex; keep the two the same.
     $get = Invoke-Tool $adbItem.FullName @('-s', $serial, 'shell', 'appops', 'get', 'com.gnosh.tvhome', 'GET_USAGE_STATS')
     if ($get.Code -ne 0) {
-        Write-Host 'Note: could not read recent-app access (the Continue tile may show only Ask Claude picks).' -ForegroundColor Yellow
+        Write-Host 'Note: could not read recent-app access (the Continue tile may stay hidden).' -ForegroundColor Yellow
     } elseif ($get.Text -notmatch 'GET_USAGE_STATS:\s*(ignore|deny|errored)') {
         $op = Invoke-Tool $adbItem.FullName @('-s', $serial, 'shell', 'appops', 'set', 'com.gnosh.tvhome', 'GET_USAGE_STATS', 'allow')
         if ($op.Code -eq 0) {
@@ -404,7 +404,7 @@ try {
                 Write-Host 'Turned on recent-app access for the Continue tile. To undo: adb shell appops set com.gnosh.tvhome GET_USAGE_STATS ignore'
             }
         } else {
-            Write-Host 'Note: could not allow recent-app access (the Continue tile shows only Ask Claude picks).' -ForegroundColor Yellow
+            Write-Host 'Note: could not allow recent-app access (the Continue tile stays hidden).' -ForegroundColor Yellow
         }
     }
     # Bookkeeping after a good install: a failure here must not look like a failed install.

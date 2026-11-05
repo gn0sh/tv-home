@@ -186,12 +186,14 @@ By hand, with the remote: press Home twice quickly, open Settings from the TV's 
 Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.
 
 ## Continue tile
-The first tile of the app row is **Continue**: the last show you opened from Ask Claude (press OK to open it again,
-in the same app), or, if you haven't opened one or have since used a different streaming app, the streaming app you used last. Android keeps other apps'
-"Continue watching" lists for the TV's own home screen only, so it can't show shows you started elsewhere. The
-install script allows TV Home to see which apps you used last (`appops set com.gnosh.tvhome GET_USAGE_STATS allow`;
-undo with `adb shell appops set com.gnosh.tvhome GET_USAGE_STATS ignore`, which later installs leave alone). Without it, the tile shows only Ask Claude picks, or hides. Quiet mode
-hides the show's title on it.
+The first tile of the app row is **Continue in <app>** (for example "Continue in Netflix"): the streaming app you
+used last. Press OK to open that app's home screen. Android keeps other apps' "Continue watching" lists for the TV's
+own home screen only, so the tile can't show which show you were watching. Settings, the Play Store and apps you
+hid never count.
+
+The install script lets TV Home see which apps you used last
+(`appops set com.gnosh.tvhome GET_USAGE_STATS allow`). Without that access the tile is hidden. To turn it off:
+`adb shell appops set com.gnosh.tvhome GET_USAGE_STATS ignore`. Later installs leave that setting alone.
 
 ## Use the mic button for Claude (optional)
 The remote's mic button can open Ask Claude instead of Google Assistant. The Google TV Streamer has no Settings

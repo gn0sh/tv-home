@@ -598,19 +598,6 @@ EOF2
   done
   m7_rm qa-voice.json
   restore_role
-  # continue-tile: the successful Opens above were recorded, so the home row now leads with that pick.
-  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
-  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-pick.xml"
-  grep -qF 'content-desc="Continue: Planet Earth, in YouTube"' <<<"$xml" || fail "continue: after an overlay Open, the home row has no 'Continue: Planet Earth, in YouTube' tile"
-  pass "continue: the overlay's Open pick is the home row's Continue tile"
-  # continue-pick-self-usage: with usage access on, YouTube's own use (the Open itself, after the pick) must not hide the pick.
-  sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set refused (test setup)"
-  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
-  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-pick-usage.xml"
-  sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
-  grep -qF 'content-desc="Continue: Planet Earth, in YouTube"' <<<"$xml" || fail "continue: with usage access, the pick's own app use hid 'Continue: Planet Earth, in YouTube'"
-  pass "continue: with usage access, the pick still shows after its own app was opened"
-  m7_rm continue-picks.json
   sh_ input keyevent KEYCODE_HOME; sleep 2
   no_app_crash_yet "overlay open"
 }
@@ -919,8 +906,8 @@ sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
 in_front || fail "continue: home screen not in front"
 xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-installed.xml"
 [[ -n $xml ]] || fail "continue: UI dump failed"
-grep -qF 'content-desc="Continue' <<<"$xml" && fail "continue: a Continue tile shows as installed (no pick, app op not allowed): it must hide"
-pass "continue: no tile as installed (no Ask pick, usage access not allowed)"
+grep -qF 'content-desc="Continue' <<<"$xml" && fail "continue: a Continue tile shows as installed (app op not allowed): it must hide"
+pass "continue: no tile as installed (usage access not allowed)"
 # usage-op-fresh-default / usage-op-undo-not-sticky: the install script's get-then-set, ported (same regex as
 # install-tv-home.ps1): allow unless the op was explicitly turned off.
 usage_op_install() {
@@ -937,7 +924,7 @@ usage_op_install
 pass "continue: the install logic allows the op on a fresh install and leaves an explicit 'ignore' (the undo) alone"
 sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
 if ! sh_ pm path "$CONT_YT" 2>/dev/null | grep -q '^package:'; then
-  note "continue: last-used app fallback NOT VERIFIED: $CONT_YT is not installed on this image"
+  note "continue: last-used app tile NOT VERIFIED: $CONT_YT is not installed on this image"
 else
   # The install script's line (idempotent; its undo is ignore, this test restores default).
   sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set refused (test setup)"
@@ -954,7 +941,7 @@ else
   pass "continue: right after launch, focus is on 'Continue in YouTube' (first tile, on screen)"
   key DPAD_CENTER; sleep 5
   resumed | head -1 | grep -qF "$CONT_YT/" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: OK on the Continue tile did not open YouTube ($(resumed | head -1))"; }
-  pass "continue: OK on the Continue tile opens YouTube"
+  pass "continue: OK on the Continue tile opens YouTube (its TV home)"
   sh_ am force-stop "$CONT_YT"
   sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
   sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5

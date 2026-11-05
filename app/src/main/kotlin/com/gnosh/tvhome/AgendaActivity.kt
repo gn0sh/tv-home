@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.speech.RecognizerIntent
 import android.text.format.DateFormat
 import android.widget.Toast
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,7 +28,6 @@ import kotlinx.coroutines.withContext
 import tvhome.core.apps.ContinueChoice
 import tvhome.core.apps.ContinueTile
 import tvhome.core.assistant.AskEngine
-import tvhome.core.assistant.OpenFilter
 import tvhome.core.assistant.EntryRoute
 import tvhome.core.assistant.OpenTarget
 import tvhome.core.assistant.askAppsOf
@@ -102,33 +102,28 @@ class AgendaActivity : ComponentActivity() {
         }
 
         override fun planOpen(target: OpenTarget): OpenPlan = InstalledApps.planOpen(this@AgendaActivity, target)
-
-        override fun opened(target: OpenTarget) = (application as TvHomeApp).graph.recordOpen(target)
     }
 
-    /** continue-tile: the home row's first tile, or null (nothing known, or UsageStats not allowed). */
+    /** continue-tile: the home row's first tile, or null (UsageStats not allowed, or no streaming app used). */
     private var continueTile by mutableStateOf<ContinueTile?>(null)
+    private var picksCleaned = false
 
-    /** Blocking (file and UsageStats reads): on the IO dispatcher, with the app list it belongs to. */
-    private fun continueFor(loaded: List<TileApp>, hidden: Set<String>): ContinueTile? = runCatching {
-        ContinueChoice.choose(
-            (application as TvHomeApp).graph.continuePicks.read(), RecentApps.recent(applicationContext),
-            loaded.map { it.app.packageName }.toSet(), packageName, hidden, now = System.currentTimeMillis(),
-        )
-    }.getOrNull()
-
-    private fun openContinue(tile: ContinueTile) {
-        val ok = when (tile) {
-            // The same route as Ask's Open (deep link, else the app's search, else its home), from this foreground activity.
-            is ContinueTile.Pick -> runCatching {
-                val plan = InstalledApps.planOpen(this, tile.target)
-                // continue-open-no-filter: the stored pick only ever opens another app (the trampoline's rule).
-                val i = plan.intent
-                i != null && OpenFilter.accepts(i.`package`, i.component?.packageName, packageName) && plan.launch()
-            }.getOrDefault(false)
-            is ContinueTile.App -> (apps as? AppsState.Loaded)?.apps?.firstOrNull { it.app.packageName == tile.packageName }
-                ?.let { InstalledApps.launch(this, it.app) } ?: false
+    /** Blocking (UsageStats read): on the IO dispatcher, with the app list it belongs to. */
+    private fun continueFor(loaded: List<TileApp>, hidden: Set<String>): ContinueTile? {
+        if (!picksCleaned) {
+            // One-time tidy: an earlier draft stored Ask Claude picks here; the tile no longer uses them.
+            picksCleaned = true
+            runCatching { File(noBackupFilesDir, "continue-picks.json").delete() }
         }
+        return runCatching {
+            ContinueChoice.choose(RecentApps.recent(applicationContext), loaded.map { it.app.packageName }.toSet(), packageName, hidden)
+        }.getOrNull()
+    }
+
+    /** Opens the tile's app at its TV home (its launcher entry). */
+    private fun openContinue(tile: ContinueTile) {
+        val ok = (apps as? AppsState.Loaded)?.apps?.firstOrNull { it.app.packageName == tile.packageName }
+            ?.let { InstalledApps.launch(this, it.app) } ?: false
         if (!ok) Toast.makeText(this, "Couldn't open that app", Toast.LENGTH_SHORT).show()
     }
 
