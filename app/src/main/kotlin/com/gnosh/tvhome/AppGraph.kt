@@ -4,7 +4,13 @@ import android.app.Application
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import tvhome.core.apps.ContinuePicks
 import tvhome.core.assistant.AnthropicClient
+import tvhome.core.assistant.OpenTarget
 import tvhome.core.assistant.AskApp
 import tvhome.core.assistant.AskEngine
 import tvhome.core.assistant.BriefConfig
@@ -82,6 +88,19 @@ class AppGraph(app: Application) {
     private val anthropic = AnthropicClient { secrets.get(SecretKey.ANTHROPIC_API_KEY) }
     val claude: ClaudeClient = anthropic
     val askCap = DailyCap(FileCountStore(File(app.noBackupFilesDir, "ask-count.txt")), clock = { Instant.now() }, zone = { ZoneId.systemDefault() })
+
+    /**
+     * continue-tile: the last few Ask Claude Open picks (title, app, deep link), app-private in no-backup storage,
+     * never logged. Written off the main thread after a successful Open (full-screen Ask and the voice overlay).
+     */
+    val continuePicks = ContinuePicks(
+        FileCountStore(File(app.noBackupFilesDir, "continue-picks.json"), maxBytes = ContinuePicks.MAX_BYTES),
+    ) { System.currentTimeMillis() }
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    fun recordOpen(target: OpenTarget) {
+        background.launch { runCatching { continuePicks.record(target) } }
+    }
 
     /** A fresh engine (and conversation) per visit to the Ask view; [apps] is read at each question. */
     fun newAskEngine(apps: () -> List<AskApp>): AskEngine =

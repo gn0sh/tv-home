@@ -387,6 +387,12 @@ try {
         Fail "adb said: $why"
     }
     $installed = $true
+    # continue-tile (SECURITY REVIEW: an adb app-op change on Brian's TV): let TV Home read which apps were used last, for
+    # the Continue tile's fallback. Idempotent (setting allow again is a no-op) and reversible:
+    #   adb shell appops set com.gnosh.tvhome GET_USAGE_STATS default
+    # It grants nothing else. A failure here only hides that fallback, so it warns and carries on.
+    $op = Invoke-Tool $adbItem.FullName @('-s', $serial, 'shell', 'appops', 'set', 'com.gnosh.tvhome', 'GET_USAGE_STATS', 'allow')
+    if ($op.Code -ne 0) { Write-Host 'Note: could not allow recent-app access (the Continue tile shows only Ask Claude picks).' -ForegroundColor Yellow }
     # Bookkeeping after a good install: a failure here must not look like a failed install.
     $tidyProblem = $null
     $runId = if ((Split-Path $orig -Leaf) -match '^tv-home-(\d+)\.apk$') { $Matches[1] } else { $null }

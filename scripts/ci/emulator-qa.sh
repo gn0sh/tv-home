@@ -598,6 +598,12 @@ EOF2
   done
   m7_rm qa-voice.json
   restore_role
+  # continue-tile: the successful Opens above were recorded, so the home row now leads with that pick.
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-pick.xml"
+  grep -qF 'content-desc="Continue: Planet Earth, in YouTube"' <<<"$xml" || fail "continue: after an overlay Open, the home row has no 'Continue: Planet Earth, in YouTube' tile"
+  pass "continue: the overlay's Open pick is the home row's Continue tile"
+  m7_rm continue-picks.json
   sh_ input keyevent KEYCODE_HOME; sleep 2
   no_app_crash_yet "overlay open"
 }
@@ -899,6 +905,40 @@ else
   pass "row-edit: one Back leaves the app"
   no_app_crash_yet "row edit"
 fi
+
+step "continue-tile: hidden as installed; with GET_USAGE_STATS allowed the last-used streaming app is the row's first tile and OK opens it; app op restored"
+CONT_YT=com.google.android.youtube.tv
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+in_front || fail "continue: home screen not in front"
+xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-installed.xml"
+[[ -n $xml ]] || fail "continue: UI dump failed"
+grep -qF 'content-desc="Continue' <<<"$xml" && fail "continue: a Continue tile shows as installed (no pick, app op not allowed): it must hide"
+pass "continue: no tile as installed (no Ask pick, usage access not allowed)"
+if ! sh_ pm path "$CONT_YT" 2>/dev/null | grep -q '^package:'; then
+  note "continue: last-used app fallback NOT VERIFIED: $CONT_YT is not installed on this image"
+else
+  # The install script's line (idempotent; undo with default).
+  sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set refused (test setup)"
+  sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set is not idempotent"
+  sh_ monkey -p "$CONT_YT" -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1 || true; sleep 6
+  sh_ am force-stop "$CONT_YT"
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-usage.xml"
+  grep -qF 'content-desc="Continue in YouTube"' <<<"$xml" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: with usage access, no 'Continue in YouTube' tile"; }
+  for _ in 1 2 3 4 5 6; do key DPAD_LEFT; done
+  cur=$(focus_after continue)
+  [[ ${cur%%|*} == "Continue in YouTube" ]] || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: the row's first tile is '${cur%%|*}', not the Continue tile"; }
+  pass "continue: 'Continue in YouTube' is the first tile of the app row"
+  key DPAD_CENTER; sleep 5
+  resumed | head -1 | grep -qF "$CONT_YT/" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: OK on the Continue tile did not open YouTube ($(resumed | head -1))"; }
+  pass "continue: OK on the Continue tile opens YouTube"
+  sh_ am force-stop "$CONT_YT"
+  sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+  grep -qF 'content-desc="Continue' <<<"$(ui_text)" && fail "continue: the tile still shows after the app op was set back to default"
+  pass "continue: app op back to default hides the tile again"
+fi
+no_app_crash_yet "continue tile"
 
 step "Hero (M7): no focusable hero; focus starts on the apps row; one Back leaves"
 # M7 removed the M2e focused-tile title (each tile labels itself); the hero is non-focusable text (home-back-twice).

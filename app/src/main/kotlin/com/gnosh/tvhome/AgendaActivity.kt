@@ -23,6 +23,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import tvhome.core.apps.ContinueChoice
+import tvhome.core.apps.ContinueTile
 import tvhome.core.assistant.AskEngine
 import tvhome.core.assistant.EntryRoute
 import tvhome.core.assistant.OpenTarget
@@ -98,6 +100,33 @@ class AgendaActivity : ComponentActivity() {
         }
 
         override fun planOpen(target: OpenTarget): OpenPlan = InstalledApps.planOpen(this@AgendaActivity, target)
+
+        override fun opened(target: OpenTarget) = (application as TvHomeApp).graph.recordOpen(target)
+    }
+
+    /** continue-tile: the home row's first tile, or null (nothing known, or UsageStats not allowed). */
+    private var continueTile by mutableStateOf<ContinueTile?>(null)
+
+    /** Off the main thread, after the app list (the visible core) has loaded. */
+    private suspend fun loadContinue(loaded: List<TileApp>) {
+        val ctx = applicationContext
+        val pkgs = loaded.map { it.app.packageName }.toSet()
+        val next = withContext(Dispatchers.IO) {
+            runCatching {
+                ContinueChoice.choose((application as TvHomeApp).graph.continuePicks.read(), RecentApps.recent(ctx), pkgs, packageName)
+            }.getOrNull()
+        }
+        continueTile = next
+    }
+
+    private fun openContinue(tile: ContinueTile) {
+        val ok = when (tile) {
+            // The same route as Ask's Open (deep link, else the app's search, else its home), from this foreground activity.
+            is ContinueTile.Pick -> runCatching { InstalledApps.planOpen(this, tile.target).launch() }.getOrDefault(false)
+            is ContinueTile.App -> (apps as? AppsState.Loaded)?.apps?.firstOrNull { it.app.packageName == tile.packageName }
+                ?.let { InstalledApps.launch(this, it.app) } ?: false
+        }
+        if (!ok) Toast.makeText(this, "Couldn't open that app", Toast.LENGTH_SHORT).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -124,6 +153,7 @@ class AgendaActivity : ComponentActivity() {
                         else -> AppsState.Failed
                     }
                     if (next != apps) apps = next
+                    (next as? AppsState.Loaded)?.let { loadContinue(it.apps) }
                 }
                 session.runWhileStarted()
             }
@@ -171,6 +201,8 @@ class AgendaActivity : ComponentActivity() {
                     layout = next
                     runCatching { layoutStore.save(next) }
                 },
+                continueTile = continueTile,
+                onContinue = ::openContinue,
             )
             }
         }

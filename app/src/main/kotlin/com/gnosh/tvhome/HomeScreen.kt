@@ -86,6 +86,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.LocalTextStyle
 import androidx.tv.material3.Text
+import tvhome.core.apps.ContinueTile
+import tvhome.core.apps.ContinueChoice
 import tvhome.core.apps.AppLayout
 import tvhome.core.apps.LauncherApp
 import tvhome.core.assistant.AskCopy
@@ -149,6 +151,9 @@ fun HomeScreen(
     /** M7-F6 Quiet mode; null until the stored value has loaded (titles stay hidden until then). */
     quiet: Boolean? = false,
     onQuietToggle: () -> Unit = {},
+    /** continue-tile: pinned first in the app row when known (last Ask Claude pick, else the last streaming app). */
+    continueTile: ContinueTile? = null,
+    onContinue: (ContinueTile) -> Unit = {},
 ) {
     // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
     var open by rememberSaveable { mutableStateOf<String?>(null) }
@@ -187,9 +192,12 @@ fun HomeScreen(
     val hiddenList = remember(allApps, layout) {
         AppLayout.hiddenApps(layout.order, layout.hidden, installedPkgs).mapNotNull { byPkg[it] }
     }
-    // The row's focus targets in order: the visible apps, then the Hidden tile when there are hidden apps.
-    val rowKeys = remember(appList, hiddenList) {
-        appList.map { it.app.packageName } + if (hiddenList.isNotEmpty()) listOf(HIDDEN_KEY) else emptyList()
+    // The row's focus targets in order: the Continue tile (pinned first, when known), the visible apps, then the
+    // Hidden tile when there are hidden apps. The Continue tile only shows with at least one app tile.
+    val shownContinue = continueTile?.takeIf { appList.isNotEmpty() }
+    val rowKeys = remember(appList, hiddenList, shownContinue != null) {
+        (if (shownContinue != null) listOf(CONTINUE_KEY) else emptyList()) +
+            appList.map { it.app.packageName } + if (hiddenList.isNotEmpty()) listOf(HIDDEN_KEY) else emptyList()
     }
     val hasApps = rowKeys.isNotEmpty()
     val firstApp = rowKeys.firstOrNull()?.let { appFocus.requester(it) }
@@ -337,6 +345,7 @@ fun HomeScreen(
                 AppRow(
                     apps, appList, hiddenList.size, rowKeys, shown, rowState, appFocus, onLaunch,
                     onMenu = { menuFor = it }, onOpenHidden = { hiddenOpen = true },
+                    continueTile = shownContinue, byPkg = byPkg, onContinue = onContinue, hideTitle = quiet != false,
                 )
             }
             // The dock band, one Row so nothing in it can overlap (emulator tour: Watch over Ask): the Calendar and Board
@@ -491,6 +500,10 @@ private fun AppRow(
     onLaunch: (LauncherApp) -> Unit,
     onMenu: (String) -> Unit,
     onOpenHidden: () -> Unit,
+    continueTile: ContinueTile? = null,
+    byPkg: Map<String, TileApp> = emptyMap(),
+    onContinue: (ContinueTile) -> Unit = {},
+    hideTitle: Boolean = true,
 ) {
     if (apps.isEmpty() && hiddenCount == 0) {
         // The message takes the row's place, at the row's height, so the dock does not jump when apps arrive.
@@ -519,6 +532,11 @@ private fun AppRow(
         contentPadding = rowPadding(theme),
         horizontalArrangement = Arrangement.spacedBy(TILE_GAP_DP.dp),
     ) {
+        continueTile?.let { c ->
+            item(key = CONTINUE_KEY) {
+                ContinueTileView(c, byPkg, theme, hideTitle, appFocus.requester(CONTINUE_KEY), onFocused = { appFocus.lastFocused = CONTINUE_KEY }) { onContinue(c) }
+            }
+        }
         items(apps, key = { it.app.packageName }) { t ->
             val pkg = t.app.packageName
             AppTile(
@@ -811,6 +829,58 @@ private const val DOCK_ASK = "ask"
 
 /** Focus-requester key of the "Hidden apps (N)" tile; cannot clash with a package name. */
 private const val HIDDEN_KEY = "::hidden"
+private const val CONTINUE_KEY = "::continue"
+
+/** The Continue tile's label under it (also how the emulator QA finds it: its description starts with it). */
+const val CONTINUE_TILE_LABEL = "Continue"
+
+/**
+ * continue-tile: same frame, focus scale and OK as the app tiles; no tile menu (it cannot be moved or hidden). A pick
+ * shows "Continue" and the title (two lines at most) with the app named under it; the last-used app shows that app's
+ * own banner. TalkBack reads one description ([ContinueChoice.description]).
+ */
+@Composable
+private fun ContinueTileView(
+    tile: ContinueTile,
+    byPkg: Map<String, TileApp>,
+    theme: HomeTheme,
+    hideTitle: Boolean,
+    requester: FocusRequester,
+    onFocused: () -> Unit,
+    onClick: () -> Unit,
+) {
+    val desc = ContinueChoice.description(tile, hideTitle) { byPkg[it]?.app?.label }
+    val under = when (tile) {
+        is ContinueTile.Pick -> "$CONTINUE_TILE_LABEL \u00B7 ${tile.target.app.label}"
+        is ContinueTile.App -> "$CONTINUE_TILE_LABEL \u00B7 ${byPkg[tile.packageName]?.app?.label.orEmpty()}"
+    }
+    TileFrame(theme, under, desc, requester, onClick, onFocused) {
+        val k = theme.tileHeightDp / 135f
+        when (tile) {
+            is ContinueTile.Pick -> Column(Modifier.fillMaxSize().clearAndSetSemantics { }.padding(horizontal = (14 * k).dp, vertical = (10 * k).dp)) {
+                Text("\u25B6 $CONTINUE_TILE_LABEL", color = color(Tokens.AMBER), fontSize = (18 * k).sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                Spacer(Modifier.height((6 * k).dp))
+                // Quiet mode hides the title, like calendar titles (a guest sees only the app).
+                Text(if (hideTitle) tile.target.app.label else tile.target.title, color = color(theme.text), fontSize = (22 * k).sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            is ContinueTile.App -> {
+                val img = byPkg[tile.packageName]?.image
+                if (img != null) {
+                    Image(
+                        bitmap = img, contentDescription = null, contentScale = ContentScale.Crop, alpha = LocalImageAlpha.current,
+                        modifier = Modifier.fillMaxSize().clearAndSetSemantics { },
+                    )
+                } else {
+                    Text(byPkg[tile.packageName]?.app?.label.orEmpty(), color = color(theme.text), fontSize = (22 * k).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Text(
+                    "\u25B6", color = color(Tokens.AMBER), fontSize = (20 * k).sp,
+                    modifier = Modifier.align(Alignment.TopStart).padding((8 * k).dp).clearAndSetSemantics { },
+                )
+            }
+        }
+    }
+}
 
 private val OK_KEYS = setOf(Key.Enter, Key.DirectionCenter, Key.NumPadEnter)
 

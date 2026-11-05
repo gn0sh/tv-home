@@ -225,6 +225,7 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
                 if (open != null && plan != null) {
                     v?.showOpen(open.app.label, onActivity = { keepShowing(m) }) {
                         if (if (qaDirectOpen) openDirect(plan) else openFromSession(plan)) {
+                            (context.applicationContext as TvHomeApp).graph.recordOpen(open) // continue-tile
                             m.opened()
                             render(m)
                         } else {
