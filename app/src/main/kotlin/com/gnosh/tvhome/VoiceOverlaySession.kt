@@ -225,7 +225,10 @@ internal class VoiceOverlaySession(service: VoiceInteractionSessionService) : Vo
                 if (open != null && plan != null) {
                     v?.showOpen(open.app.label, onActivity = { keepShowing(m) }) {
                         if (if (qaDirectOpen) openDirect(plan) else openFromSession(plan)) {
-                            (context.applicationContext as TvHomeApp).graph.recordOpen(open) // continue-tile
+                            // continue-tile. Recorded when the trampoline start is accepted, before the app is known to have
+                            // opened (overlay-record-before-confirm, accepted: a failed open shows a toast, and the tile
+                            // re-opens it through the same route).
+                            (context.applicationContext as TvHomeApp).graph.recordOpen(open)
                             m.opened()
                             render(m)
                         } else {

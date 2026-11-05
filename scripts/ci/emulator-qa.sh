@@ -925,10 +925,11 @@ else
   sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
   xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-usage.xml"
   grep -qF 'content-desc="Continue in YouTube"' <<<"$xml" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: with usage access, no 'Continue in YouTube' tile"; }
-  for _ in 1 2 3 4 5 6; do key DPAD_LEFT; done
+  # continue-late-insert: no key presses: right after launch, focus is already on the Continue tile, on screen.
   cur=$(focus_after continue)
-  [[ ${cur%%|*} == "Continue in YouTube" ]] || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: the row's first tile is '${cur%%|*}', not the Continue tile"; }
-  pass "continue: 'Continue in YouTube' is the first tile of the app row"
+  [[ ${cur%%|*} == "Continue in YouTube" ]] || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: after launch focus is on '${cur%%|*}', not the Continue tile"; }
+  on_screen "$cur" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: the focused Continue tile is off screen ($cur)"; }
+  pass "continue: right after launch, focus is on 'Continue in YouTube' (first tile, on screen)"
   key DPAD_CENTER; sleep 5
   resumed | head -1 | grep -qF "$CONT_YT/" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: OK on the Continue tile did not open YouTube ($(resumed | head -1))"; }
   pass "continue: OK on the Continue tile opens YouTube"

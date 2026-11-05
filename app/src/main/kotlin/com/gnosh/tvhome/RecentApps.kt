@@ -26,7 +26,8 @@ internal object RecentApps {
             val um = context.getSystemService(UsageStatsManager::class.java) ?: return null
             val now = System.currentTimeMillis()
             um.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - WINDOW_MS, now).orEmpty()
-                .map { RecentUse(it.packageName, it.lastTimeUsed) }
+                // lastTimeVisible (API 29+, minSdk 31): when the app was last on screen, not when it last ran in the background.
+                .map { RecentUse(it.packageName, maxOf(it.lastTimeVisible, 0L)) }
         }.getOrNull()
     }
 }

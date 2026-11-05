@@ -263,6 +263,11 @@ fun HomeScreen(
         returningTo = null
         focusSoon(when (back) { DOCK_ASK -> askTile; DOCK_BOARD -> boardTile; else -> calendar })
     }
+    // continue-late-insert, belt and braces: if the Continue tile still arrives after the row (a later start), keep the
+    // row at its start while focus has not settled, so the new first tile is on screen.
+    LaunchedEffect(shownContinue != null) {
+        if (shownContinue != null && !settled && rowState.firstVisibleItemIndex == 0) rowState.requestScrollToItem(0)
+    }
     LaunchedEffect(hasApps) {
         if (settled) return@LaunchedEffect
         // Re-check after the frame: a key press in that frame settles focus, and must not be overridden (dock-preview-steal).

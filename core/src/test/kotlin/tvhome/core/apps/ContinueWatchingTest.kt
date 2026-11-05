@@ -57,7 +57,7 @@ class ContinueWatchingTest {
 
     @Test fun pickWinsWhenItsAppIsInstalled() {
         val picks = listOf(ContinuePicks.Entry(pick("Gone", AskApp("Old", "com.old.app")), 2), ContinuePicks.Entry(pick("Stranger Things"), 1))
-        val t = ContinueChoice.choose(picks, recent = null, launcherPkgs = launcher, ownPackage = own)
+        val t = ContinueChoice.choose(picks, recent = null, launcherPkgs = launcher, ownPackage = own, now = 10)
         assertEquals("Stranger Things", (t as ContinueTile.Pick).target.title)
     }
 
@@ -74,6 +74,51 @@ class ContinueWatchingTest {
         assertNull(ContinueChoice.choose(emptyList(), null, launcher, own))
         assertNull(ContinueChoice.choose(emptyList(), emptyList(), launcher, own))
         assertNull(ContinueChoice.choose(emptyList(), listOf(RecentUse(own, 5), RecentUse("com.android.tv.settings", 4)), launcher, own))
+    }
+
+    /** continue-stale-pick: a pick older than the last use of a streaming app loses to that app. */
+    @Test fun aStalePickLosesToANewerAppUse() {
+        val picks = listOf(ContinuePicks.Entry(pick("Old show"), 100))
+        val newer = listOf(RecentUse("com.google.android.youtube.tv", 200))
+        assertEquals(ContinueTile.App("com.google.android.youtube.tv"), ContinueChoice.choose(picks, newer, launcher, own, now = 300))
+        val older = listOf(RecentUse("com.google.android.youtube.tv", 50))
+        assertTrue(ContinueChoice.choose(picks, older, launcher, own, now = 300) is ContinueTile.Pick)
+    }
+
+    @Test fun withoutUsageDataAPickExpiresAfterSevenDays() {
+        val week = ContinueChoice.PICK_FRESH_MS
+        val picks = listOf(ContinuePicks.Entry(pick("Show"), 1_000))
+        assertTrue(ContinueChoice.choose(picks, null, launcher, own, now = 1_000 + week) is ContinueTile.Pick)
+        assertNull(ContinueChoice.choose(picks, null, launcher, own, now = 1_001 + week))
+    }
+
+    /** continue-hidden-app: an app Brian hid is never the Continue tile, as a pick or as the last-used app. */
+    @Test fun hiddenAppsAreSkipped() {
+        val picks = listOf(ContinuePicks.Entry(pick("Show"), 500))
+        val recent = listOf(RecentUse("com.netflix.ninja", 400), RecentUse("com.google.android.youtube.tv", 300))
+        val hidden = setOf("com.netflix.ninja")
+        assertEquals(ContinueTile.App("com.google.android.youtube.tv"), ContinueChoice.choose(picks, recent, launcher, own, hidden, now = 600))
+        assertNull(ContinueChoice.choose(picks, null, launcher, own, hidden, now = 600))
+    }
+
+    /** picks-no-expiry: a pick older than 30 days, or with no time, is dropped on read. */
+    @Test fun oldPicksAreDroppedOnRead() {
+        val m = Mem()
+        now = ContinuePicks.MAX_AGE_MS + 10_000
+        val p = ContinuePicks(m) { now }
+        m.text = """[{"t":"New","p":"com.netflix.ninja","l":"Netflix","at":${now - 1}},{"t":"Old","p":"com.netflix.ninja","l":"Netflix","at":1},{"t":"NoTime","p":"com.netflix.ninja","l":"Netflix"}]"""
+        assertEquals(listOf("New"), p.read().map { it.target.title })
+    }
+
+    /** continue-picks-cap: long multibyte titles are trimmed by encoded bytes, so the file always reads back. */
+    @Test fun multibyteTitlesStayUnderTheByteCap() {
+        val m = Mem()
+        val p = ContinuePicks(m) { now++ }
+        val wide = "\u3042".repeat(200) // 200 chars (the title limit), 600 UTF-8 bytes
+        for (i in 0 until 5) p.record(pick("$i$wide".take(200), link = "https://example.com/" + "x".repeat(400)))
+        assertTrue(m.text!!.toByteArray(Charsets.UTF_8).size <= ContinuePicks.MAX_BYTES)
+        assertTrue(p.read().isNotEmpty())
+        assertEquals("4", p.read().first().target.title.take(1))
     }
 
     @Test fun descriptionsAndNoTitleInToString() {

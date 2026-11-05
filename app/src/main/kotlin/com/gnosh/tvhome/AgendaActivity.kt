@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -26,6 +27,7 @@ import kotlinx.coroutines.withContext
 import tvhome.core.apps.ContinueChoice
 import tvhome.core.apps.ContinueTile
 import tvhome.core.assistant.AskEngine
+import tvhome.core.assistant.OpenFilter
 import tvhome.core.assistant.EntryRoute
 import tvhome.core.assistant.OpenTarget
 import tvhome.core.assistant.askAppsOf
@@ -107,22 +109,23 @@ class AgendaActivity : ComponentActivity() {
     /** continue-tile: the home row's first tile, or null (nothing known, or UsageStats not allowed). */
     private var continueTile by mutableStateOf<ContinueTile?>(null)
 
-    /** Off the main thread, after the app list (the visible core) has loaded. */
-    private suspend fun loadContinue(loaded: List<TileApp>) {
-        val ctx = applicationContext
-        val pkgs = loaded.map { it.app.packageName }.toSet()
-        val next = withContext(Dispatchers.IO) {
-            runCatching {
-                ContinueChoice.choose((application as TvHomeApp).graph.continuePicks.read(), RecentApps.recent(ctx), pkgs, packageName)
-            }.getOrNull()
-        }
-        continueTile = next
-    }
+    /** Blocking (file and UsageStats reads): on the IO dispatcher, with the app list it belongs to. */
+    private fun continueFor(loaded: List<TileApp>, hidden: Set<String>): ContinueTile? = runCatching {
+        ContinueChoice.choose(
+            (application as TvHomeApp).graph.continuePicks.read(), RecentApps.recent(applicationContext),
+            loaded.map { it.app.packageName }.toSet(), packageName, hidden, now = System.currentTimeMillis(),
+        )
+    }.getOrNull()
 
     private fun openContinue(tile: ContinueTile) {
         val ok = when (tile) {
             // The same route as Ask's Open (deep link, else the app's search, else its home), from this foreground activity.
-            is ContinueTile.Pick -> runCatching { InstalledApps.planOpen(this, tile.target).launch() }.getOrDefault(false)
+            is ContinueTile.Pick -> runCatching {
+                val plan = InstalledApps.planOpen(this, tile.target)
+                // continue-open-no-filter: the stored pick only ever opens another app (the trampoline's rule).
+                val i = plan.intent
+                i != null && OpenFilter.accepts(i.`package`, i.component?.packageName, packageName) && plan.launch()
+            }.getOrDefault(false)
             is ContinueTile.App -> (apps as? AppsState.Loaded)?.apps?.firstOrNull { it.app.packageName == tile.packageName }
                 ?.let { InstalledApps.launch(this, it.app) } ?: false
         }
@@ -146,14 +149,22 @@ class AgendaActivity : ComponentActivity() {
                     val density = tvhome.core.ui.DesignCanvas.density(dm.widthPixels, dm.heightPixels)
                     val w = (theme.tileWidthDp * density).toInt()
                     val h = (theme.tileHeightDp * density).toInt()
-                    val loaded = withContext(Dispatchers.IO) { runCatching { installed.load(applicationContext, w, h) }.getOrNull() }
+                    // continue-late-insert: the Continue tile is worked out in the same IO block as the app list and both
+                    // are published together, so the row never gains a first tile after focus has settled.
+                    val hidden = layout.hidden
+                    val (loaded, cont) = withContext(Dispatchers.IO) {
+                        val l = runCatching { installed.load(applicationContext, w, h) }.getOrNull()
+                        l to l?.let { continueFor(it, hidden) }
+                    }
                     val next = when {
                         loaded != null -> AppsState.Loaded(loaded)
                         apps is AppsState.Loaded -> apps // keep the last good row rather than blanking it
                         else -> AppsState.Failed
                     }
-                    if (next != apps) apps = next
-                    (next as? AppsState.Loaded)?.let { loadContinue(it.apps) }
+                    Snapshot.withMutableSnapshot {
+                        if (next != apps) apps = next
+                        if (loaded != null) continueTile = cont
+                    }
                 }
                 session.runWhileStarted()
             }

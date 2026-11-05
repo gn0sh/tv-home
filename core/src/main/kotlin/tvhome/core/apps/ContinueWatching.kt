@@ -31,13 +31,21 @@ sealed interface ContinueTile {
 
 /** The last few successful Opens, newest first, in a small app-private file. */
 class ContinuePicks(private val store: CountStore, private val clock: () -> Long) {
+    /** Newest first, at most [KEEP], and trimmed until the file fits [MAX_BYTES] (continue-picks-cap). */
+    @Synchronized
     fun record(target: OpenTarget) {
-        val next = (listOf(Entry(target, clock())) + read().filterNot { same(it.target, target) }).take(KEEP)
-        runCatching { store.write(encode(next)) }
+        var next = (listOf(Entry(target, clock())) + read().filterNot { same(it.target, target) }).take(KEEP)
+        var text = encode(next)
+        while (next.isNotEmpty() && text.toByteArray(Charsets.UTF_8).size > MAX_BYTES) {
+            next = next.dropLast(1)
+            text = encode(next)
+        }
+        if (next.isNotEmpty()) runCatching { store.write(text) }
     }
 
-    /** Newest first; anything unreadable or invalid is dropped (never an error). */
-    fun read(): List<Entry> = runCatching { store.read() }.getOrNull()?.let(::decode).orEmpty()
+    /** Newest first; anything unreadable, invalid or older than [MAX_AGE_MS] is dropped (never an error). */
+    @Synchronized
+    fun read(): List<Entry> = runCatching { store.read() }.getOrNull()?.let { decode(it, clock()) }.orEmpty()
 
     class Entry(val target: OpenTarget, val atMillis: Long) {
         override fun toString() = "Entry(${target.app.packageName})"
@@ -45,8 +53,10 @@ class ContinuePicks(private val store: CountStore, private val clock: () -> Long
 
     companion object {
         const val KEEP = 3
-        /** Bigger than KEEP entries can be; a larger file is ignored. */
+        /** The file's size cap in UTF-8 bytes; record() trims to it and a larger file is ignored. */
         const val MAX_BYTES = 4_096
+        /** picks-no-expiry: a pick older than this is dropped. */
+        const val MAX_AGE_MS = 30L * 24 * 3600 * 1000
 
         private val json = Json { ignoreUnknownKeys = true }
 
@@ -64,8 +74,8 @@ class ContinuePicks(private val store: CountStore, private val clock: () -> Long
             }
         }.toString()
 
-        fun decode(text: String): List<Entry> {
-            if (text.length > MAX_BYTES) return emptyList()
+        fun decode(text: String, now: Long): List<Entry> {
+            if (text.toByteArray(Charsets.UTF_8).size > MAX_BYTES) return emptyList()
             val arr = runCatching { json.parseToJsonElement(text) }.getOrNull() as? JsonArray ?: return emptyList()
             return arr.mapNotNull { el ->
                 val o = el as? JsonObject ?: return@mapNotNull null
@@ -74,7 +84,8 @@ class ContinuePicks(private val store: CountStore, private val clock: () -> Long
                 val pkg = str("p")?.takeIf { PKG.matches(it) } ?: return@mapNotNull null
                 val label = str("l")?.let { clean(it, AskConfig.MAX_LABEL_CHARS) }?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val link = str("d")?.let { AskReply.validDeepLink(it) ?: return@mapNotNull null }
-                val at = (o["at"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L
+                val at = (o["at"] as? JsonPrimitive)?.content?.toLongOrNull() ?: return@mapNotNull null
+                if (now - at > MAX_AGE_MS || at > now + 60_000) return@mapNotNull null
                 Entry(OpenTarget(AskApp(label, pkg), title, link), at)
             }.take(KEEP)
         }
@@ -98,17 +109,32 @@ object ContinueChoice {
         "com.google.android.katniss",
     )
 
+    /** Without usage data, a pick older than this is not shown (continue-stale-pick). */
+    const val PICK_FRESH_MS = 7L * 24 * 3600 * 1000
+
     /**
-     * The tile: the newest pick whose app is still in the launcher list; else the most recently used launcher app that
-     * is not ours and not a system utility ([recent] is null when UsageStats is not allowed: then no tile at all).
+     * The tile. Only apps in the launcher list and not hidden by Brian ([hidden], continue-hidden-app) count. The newest
+     * such pick wins if it is newer than the last use of any such streaming app (with no usage data: if it is under
+     * [PICK_FRESH_MS] old); else that last-used app; else no tile. [recent] is null when UsageStats is not allowed.
      */
-    fun choose(picks: List<ContinuePicks.Entry>, recent: List<RecentUse>?, launcherPkgs: Set<String>, ownPackage: String): ContinueTile? {
-        picks.firstOrNull { it.target.app.packageName in launcherPkgs }?.let { return ContinueTile.Pick(it.target) }
-        val r = recent ?: return null
-        return r.asSequence()
-            .filter { it.lastUsedMillis > 0 && it.packageName in launcherPkgs && it.packageName != ownPackage && it.packageName !in NOT_STREAMING }
+    fun choose(
+        picks: List<ContinuePicks.Entry>,
+        recent: List<RecentUse>?,
+        launcherPkgs: Set<String>,
+        ownPackage: String,
+        hidden: Set<String> = emptySet(),
+        now: Long = Long.MAX_VALUE,
+    ): ContinueTile? {
+        fun ok(pkg: String) = pkg in launcherPkgs && pkg !in hidden && pkg != ownPackage
+        val pick = picks.firstOrNull { ok(it.target.app.packageName) }
+        val last = recent.orEmpty().asSequence()
+            .filter { it.lastUsedMillis > 0 && ok(it.packageName) && it.packageName !in NOT_STREAMING }
             .maxByOrNull { it.lastUsedMillis }
-            ?.let { ContinueTile.App(it.packageName) }
+        if (pick != null) {
+            val fresh = if (last != null) pick.atMillis >= last.lastUsedMillis else now - pick.atMillis <= PICK_FRESH_MS
+            if (fresh) return ContinueTile.Pick(pick.target)
+        }
+        return last?.let { ContinueTile.App(it.packageName) }
     }
 
     /** The tile's spoken description. [hideTitle]: Quiet mode (M7-F6) is on, so a pick names only its app. */
