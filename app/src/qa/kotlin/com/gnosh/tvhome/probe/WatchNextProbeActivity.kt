@@ -78,7 +78,7 @@ class WatchNextProbeActivity : Activity() {
         val um = getSystemService(UsageStatsManager::class.java)
         val now = System.currentTimeMillis()
         try {
-            val stats = um.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 7L * 24 * 3600 * 1000, now)
+            val stats = um!!.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 7L * 24 * 3600 * 1000, now)
             p("usage: entries=${stats?.size ?: -1} (empty means no PACKAGE_USAGE_STATS access)")
             stats.orEmpty().filter { it.lastTimeUsed > 0 }.sortedByDescending { it.lastTimeUsed }.distinctBy { it.packageName }.take(12).forEach {
                 p("usage: pkg=${it.packageName} lastUsed=${(now - it.lastTimeUsed) / 1000}s_ago fg=${it.totalTimeInForeground / 1000}s")
