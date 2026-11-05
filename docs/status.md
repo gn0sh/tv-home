@@ -15,8 +15,7 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
   launcher's priority-2 HOME filter; an accessibility key filter never receives HOME, SEARCH or ASSIST.
 
 ## Waiting on the CEO
-- Merge #39 (Continue tile) then run Install TV Home.cmd (yes/no, yes recommended) | https://github.com/gn0sh/tv-home/pull/39 | tap Merge, wait for the main build, double-click Install TV Home.cmd | asked 2026-11-05 01:50Z in the "Improve Claude voice and home tiles on TV" thread | default: no Continue tile
-- Did OK-twice open Netflix from the corner card after #36? (yes/no) | none | try it on the TV | 2026-11-04 23:40Z | default: assume fixed
+- None. Installed 2026-11-05 20:09Z (main e541bea: voice overlay, sun fix, Open OK-twice, Continue tile). Asked Brian for an on-TV check of the Continue tile and Netflix Open; default: assume both work.
 
 ## Problem-key ledger
 | Key | Returns | Source |
