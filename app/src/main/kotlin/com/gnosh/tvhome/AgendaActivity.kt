@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.speech.RecognizerIntent
 import android.text.format.DateFormat
 import android.widget.Toast
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -23,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import tvhome.core.apps.ContinueChoice
+import tvhome.core.apps.ContinueTile
 import tvhome.core.assistant.AskEngine
 import tvhome.core.assistant.EntryRoute
 import tvhome.core.assistant.OpenTarget
@@ -100,6 +104,29 @@ class AgendaActivity : ComponentActivity() {
         override fun planOpen(target: OpenTarget): OpenPlan = InstalledApps.planOpen(this@AgendaActivity, target)
     }
 
+    /** continue-tile: the home row's first tile, or null (UsageStats not allowed, or no streaming app used). */
+    private var continueTile by mutableStateOf<ContinueTile?>(null)
+    private var picksCleaned = false
+
+    /** Blocking (UsageStats read): on the IO dispatcher, with the app list it belongs to. */
+    private fun continueFor(loaded: List<TileApp>, hidden: Set<String>): ContinueTile? {
+        if (!picksCleaned) {
+            // One-time tidy: an earlier draft stored Ask Claude picks here; the tile no longer uses them.
+            picksCleaned = true
+            runCatching { File(noBackupFilesDir, "continue-picks.json").delete() }
+        }
+        return runCatching {
+            ContinueChoice.choose(RecentApps.recent(applicationContext), loaded.map { it.app.packageName }.toSet(), packageName, hidden)
+        }.getOrNull()
+    }
+
+    /** Opens the tile's app at its TV home (its launcher entry). */
+    private fun openContinue(tile: ContinueTile) {
+        val ok = (apps as? AppsState.Loaded)?.apps?.firstOrNull { it.app.packageName == tile.packageName }
+            ?.let { InstalledApps.launch(this, it.app) } ?: false
+        if (!ok) Toast.makeText(this, "Couldn't open that app", Toast.LENGTH_SHORT).show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // A recreated activity (savedInstanceState) keeps its own screen; only a fresh start honours the intent.
@@ -117,13 +144,22 @@ class AgendaActivity : ComponentActivity() {
                     val density = tvhome.core.ui.DesignCanvas.density(dm.widthPixels, dm.heightPixels)
                     val w = (theme.tileWidthDp * density).toInt()
                     val h = (theme.tileHeightDp * density).toInt()
-                    val loaded = withContext(Dispatchers.IO) { runCatching { installed.load(applicationContext, w, h) }.getOrNull() }
+                    // continue-late-insert: the Continue tile is worked out in the same IO block as the app list and both
+                    // are published together, so the row never gains a first tile after focus has settled.
+                    val hidden = layout.hidden
+                    val (loaded, cont) = withContext(Dispatchers.IO) {
+                        val l = runCatching { installed.load(applicationContext, w, h) }.getOrNull()
+                        l to l?.let { continueFor(it, hidden) }
+                    }
                     val next = when {
                         loaded != null -> AppsState.Loaded(loaded)
                         apps is AppsState.Loaded -> apps // keep the last good row rather than blanking it
                         else -> AppsState.Failed
                     }
-                    if (next != apps) apps = next
+                    Snapshot.withMutableSnapshot {
+                        if (next != apps) apps = next
+                        if (loaded != null) continueTile = cont
+                    }
                 }
                 session.runWhileStarted()
             }
@@ -171,6 +207,8 @@ class AgendaActivity : ComponentActivity() {
                     layout = next
                     runCatching { layoutStore.save(next) }
                 },
+                continueTile = continueTile,
+                onContinue = ::openContinue,
             )
             }
         }

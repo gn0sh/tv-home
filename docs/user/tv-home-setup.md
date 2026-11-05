@@ -185,6 +185,16 @@ To undo: `.\scripts\tv-home-takeover.ps1 -Rollback`. It keeps any other accessib
 By hand, with the remote: press Home twice quickly, open Settings from the TV's own home, then System >
 Accessibility, and turn off "Dashboard Home button". Or uninstall the dashboard.
 
+## Continue tile
+The first tile of the app row is **Continue in <app>** (for example "Continue in Netflix"): the streaming app you
+used last. Press OK to open that app's home screen. Android keeps other apps' "Continue watching" lists for the TV's
+own home screen only, so the tile can't show which show you were watching. Settings, the Play Store and apps you
+hid never count.
+
+The install script lets TV Home see which apps you used last
+(`appops set com.gnosh.tvhome GET_USAGE_STATS allow`). Without that access the tile is hidden. To turn it off:
+`adb shell appops set com.gnosh.tvhome GET_USAGE_STATS ignore`. Later installs leave that setting alone.
+
 ## Use the mic button for Claude (optional)
 The remote's mic button can open Ask Claude instead of Google Assistant. The Google TV Streamer has no Settings
 picker for this (Settings > Apps has no "Default apps"), so it is set from the PC with adb:

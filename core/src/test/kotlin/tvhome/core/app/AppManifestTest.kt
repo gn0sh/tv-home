@@ -43,7 +43,10 @@ class AppManifestTest {
     @Test fun onlyTheNetworkPermissionsAndRecordAudio() {
         val perms = manifest.kids("uses-permission").map { it.attr("name") }.toSet()
         assertEquals(
-            setOf("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.RECORD_AUDIO"),
+            setOf(
+                "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.RECORD_AUDIO",
+                "android.permission.PACKAGE_USAGE_STATS", // continue-tile: an app op, allowed only by Brian's adb command
+            ),
             perms,
         )
         // RECORD_AUDIO is never requested at runtime, and nothing in the app opens the microphone itself.

@@ -86,6 +86,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.LocalTextStyle
 import androidx.tv.material3.Text
+import tvhome.core.apps.ContinueTile
+import tvhome.core.apps.ContinueChoice
 import tvhome.core.apps.AppLayout
 import tvhome.core.apps.LauncherApp
 import tvhome.core.assistant.AskCopy
@@ -149,6 +151,9 @@ fun HomeScreen(
     /** M7-F6 Quiet mode; null until the stored value has loaded (titles stay hidden until then). */
     quiet: Boolean? = false,
     onQuietToggle: () -> Unit = {},
+    /** continue-tile: pinned first in the app row when known (the streaming app used last; needs usage access). */
+    continueTile: ContinueTile? = null,
+    onContinue: (ContinueTile) -> Unit = {},
 ) {
     // Which dock tile's full screen is showing (null: home), and which dock tile gets focus back after it closes.
     var open by rememberSaveable { mutableStateOf<String?>(null) }
@@ -187,9 +192,12 @@ fun HomeScreen(
     val hiddenList = remember(allApps, layout) {
         AppLayout.hiddenApps(layout.order, layout.hidden, installedPkgs).mapNotNull { byPkg[it] }
     }
-    // The row's focus targets in order: the visible apps, then the Hidden tile when there are hidden apps.
-    val rowKeys = remember(appList, hiddenList) {
-        appList.map { it.app.packageName } + if (hiddenList.isNotEmpty()) listOf(HIDDEN_KEY) else emptyList()
+    // The row's focus targets in order: the Continue tile (pinned first, when known), the visible apps, then the
+    // Hidden tile when there are hidden apps. The Continue tile only shows with at least one app tile.
+    val shownContinue = continueTile?.takeIf { appList.isNotEmpty() && it.packageName !in layout.hidden }
+    val rowKeys = remember(appList, hiddenList, shownContinue != null) {
+        (if (shownContinue != null) listOf(CONTINUE_KEY) else emptyList()) +
+            appList.map { it.app.packageName } + if (hiddenList.isNotEmpty()) listOf(HIDDEN_KEY) else emptyList()
     }
     val hasApps = rowKeys.isNotEmpty()
     val firstApp = rowKeys.firstOrNull()?.let { appFocus.requester(it) }
@@ -254,6 +262,11 @@ fun HomeScreen(
         val back = returningTo ?: return@LaunchedEffect
         returningTo = null
         focusSoon(when (back) { DOCK_ASK -> askTile; DOCK_BOARD -> boardTile; else -> calendar })
+    }
+    // continue-late-insert, belt and braces: if the Continue tile still arrives after the row (a later start), keep the
+    // row at its start while focus has not settled, so the new first tile is on screen.
+    LaunchedEffect(shownContinue != null) {
+        if (shownContinue != null && !settled && rowState.firstVisibleItemIndex == 0) rowState.requestScrollToItem(0)
     }
     LaunchedEffect(hasApps) {
         if (settled) return@LaunchedEffect
@@ -337,6 +350,7 @@ fun HomeScreen(
                 AppRow(
                     apps, appList, hiddenList.size, rowKeys, shown, rowState, appFocus, onLaunch,
                     onMenu = { menuFor = it }, onOpenHidden = { hiddenOpen = true },
+                    continueTile = shownContinue, byPkg = byPkg, onContinue = onContinue,
                 )
             }
             // The dock band, one Row so nothing in it can overlap (emulator tour: Watch over Ask): the Calendar and Board
@@ -491,6 +505,9 @@ private fun AppRow(
     onLaunch: (LauncherApp) -> Unit,
     onMenu: (String) -> Unit,
     onOpenHidden: () -> Unit,
+    continueTile: ContinueTile? = null,
+    byPkg: Map<String, TileApp> = emptyMap(),
+    onContinue: (ContinueTile) -> Unit = {},
 ) {
     if (apps.isEmpty() && hiddenCount == 0) {
         // The message takes the row's place, at the row's height, so the dock does not jump when apps arrive.
@@ -519,6 +536,11 @@ private fun AppRow(
         contentPadding = rowPadding(theme),
         horizontalArrangement = Arrangement.spacedBy(TILE_GAP_DP.dp),
     ) {
+        continueTile?.let { c ->
+            item(key = CONTINUE_KEY) {
+                ContinueTileView(c, byPkg, theme, appFocus.requester(CONTINUE_KEY), onFocused = { appFocus.lastFocused = CONTINUE_KEY }) { onContinue(c) }
+            }
+        }
         items(apps, key = { it.app.packageName }) { t ->
             val pkg = t.app.packageName
             AppTile(
@@ -811,6 +833,40 @@ private const val DOCK_ASK = "ask"
 
 /** Focus-requester key of the "Hidden apps (N)" tile; cannot clash with a package name. */
 private const val HIDDEN_KEY = "::hidden"
+private const val CONTINUE_KEY = "::continue"
+
+/**
+ * continue-tile: same frame, focus scale and OK as the app tiles; no tile menu (it cannot be moved or hidden). It shows
+ * the last-used streaming app's own banner with "Continue in <app>" under it, which is also what TalkBack reads.
+ */
+@Composable
+private fun ContinueTileView(
+    tile: ContinueTile,
+    byPkg: Map<String, TileApp>,
+    theme: HomeTheme,
+    requester: FocusRequester,
+    onFocused: () -> Unit,
+    onClick: () -> Unit,
+) {
+    // The label under the tile and its spoken description are the same: "Continue in Netflix".
+    val desc = ContinueChoice.description(tile) { byPkg[it]?.app?.label }
+    TileFrame(theme, desc, desc, requester, onClick, onFocused) {
+        val k = theme.tileHeightDp / 135f
+        val img = byPkg[tile.packageName]?.image
+        if (img != null) {
+            Image(
+                bitmap = img, contentDescription = null, contentScale = ContentScale.Crop, alpha = LocalImageAlpha.current,
+                modifier = Modifier.fillMaxSize().clearAndSetSemantics { },
+            )
+        } else {
+            Text(byPkg[tile.packageName]?.app?.label.orEmpty(), color = color(theme.text), fontSize = (22 * k).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Text(
+            "\u25B6", color = color(Tokens.AMBER), fontSize = (20 * k).sp,
+            modifier = Modifier.align(Alignment.TopStart).padding((8 * k).dp).clearAndSetSemantics { },
+        )
+    }
+}
 
 private val OK_KEYS = setOf(Key.Enter, Key.DirectionCenter, Key.NumPadEnter)
 

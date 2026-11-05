@@ -256,6 +256,7 @@ jobs:
           printf '%s\n' \
             android.permission.ACCESS_NETWORK_STATE \
             android.permission.INTERNET \
+            android.permission.PACKAGE_USAGE_STATS \
             android.permission.RECORD_AUDIO \
             com.gnosh.tvhome.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION | sort -u > "$RUNNER_TEMP/perms.expected"
           diff "$RUNNER_TEMP/perms.expected" "$RUNNER_TEMP/perms.actual" \

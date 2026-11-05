@@ -900,6 +900,56 @@ else
   no_app_crash_yet "row edit"
 fi
 
+step "continue-tile: hidden as installed; with GET_USAGE_STATS allowed the last-used streaming app is the row's first tile and OK opens it; app op restored"
+CONT_YT=com.google.android.youtube.tv
+sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+in_front || fail "continue: home screen not in front"
+xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-installed.xml"
+[[ -n $xml ]] || fail "continue: UI dump failed"
+grep -qF 'content-desc="Continue' <<<"$xml" && fail "continue: a Continue tile shows as installed (app op not allowed): it must hide"
+pass "continue: no tile as installed (usage access not allowed)"
+# usage-op-fresh-default / usage-op-undo-not-sticky: the install script's get-then-set, ported (same regex as
+# install-tv-home.ps1): allow unless the op was explicitly turned off.
+usage_op_install() {
+  local got; got=$(sh_ appops get "$PKG" GET_USAGE_STATS 2>&1 | tr -d '\r') || { note "continue: appops get failed: $got"; return 0; }
+  grep -qE 'GET_USAGE_STATS:[[:space:]]*(ignore|deny|errored)' <<<"$got" || sh_ appops set "$PKG" GET_USAGE_STATS allow
+}
+usage_op_mode() { sh_ appops get "$PKG" GET_USAGE_STATS 2>&1 | tr -d '\r' | grep -oE 'GET_USAGE_STATS:[[:space:]]*[a-z]+' | awk '{print $2}'; }
+echo "continue: appops get on a fresh install prints: $(sh_ appops get "$PKG" GET_USAGE_STATS 2>&1 | tr -d '\r' | tr '\n' '|')"
+usage_op_install
+[[ $(usage_op_mode) == allow ]] || fail "continue: the install script's logic did not allow the op on a fresh install (mode '$(usage_op_mode)')"
+sh_ appops set "$PKG" GET_USAGE_STATS ignore || fail "continue: appops set ignore refused (test setup)"
+usage_op_install
+[[ $(usage_op_mode) == ignore ]] || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: the install script's logic overrode an explicit ignore (mode '$(usage_op_mode)')"; }
+pass "continue: the install logic allows the op on a fresh install and leaves an explicit 'ignore' (the undo) alone"
+sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
+if ! sh_ pm path "$CONT_YT" 2>/dev/null | grep -q '^package:'; then
+  note "continue: last-used app tile NOT VERIFIED: $CONT_YT is not installed on this image"
+else
+  # The install script's line (idempotent; its undo is ignore, this test restores default).
+  sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set refused (test setup)"
+  sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set is not idempotent"
+  sh_ monkey -p "$CONT_YT" -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1 || true; sleep 6
+  sh_ am force-stop "$CONT_YT"
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-usage.xml"
+  grep -qF 'content-desc="Continue in YouTube"' <<<"$xml" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: with usage access, no 'Continue in YouTube' tile"; }
+  # continue-late-insert: no key presses: right after launch, focus is already on the Continue tile, on screen.
+  cur=$(focus_after continue)
+  [[ ${cur%%|*} == "Continue in YouTube" ]] || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: after launch focus is on '${cur%%|*}', not the Continue tile"; }
+  on_screen "$cur" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: the focused Continue tile is off screen ($cur)"; }
+  pass "continue: right after launch, focus is on 'Continue in YouTube' (first tile, on screen)"
+  key DPAD_CENTER; sleep 5
+  resumed | head -1 | grep -qF "$CONT_YT/" || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: OK on the Continue tile did not open YouTube ($(resumed | head -1))"; }
+  pass "continue: OK on the Continue tile opens YouTube (its TV home)"
+  sh_ am force-stop "$CONT_YT"
+  sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+  grep -qF 'content-desc="Continue' <<<"$(ui_text)" && fail "continue: the tile still shows after the app op was set back to default"
+  pass "continue: app op back to default hides the tile again"
+fi
+no_app_crash_yet "continue tile"
+
 step "Hero (M7): no focusable hero; focus starts on the apps row; one Back leaves"
 # M7 removed the M2e focused-tile title (each tile labels itself); the hero is non-focusable text (home-back-twice).
 sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 4
