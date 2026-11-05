@@ -15,7 +15,8 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
   launcher's priority-2 HOME filter; an accessibility key filter never receives HOME, SEARCH or ASSIST.
 
 ## Waiting on the CEO
-- Merge #36 then run Install TV Home.cmd (yes/no, yes recommended) | https://github.com/gn0sh/tv-home/pull/36 | tap Merge, wait for the main build, double-click Install TV Home.cmd, then ask for a show and press OK twice | asked 2026-11-04 23:15Z in the "Run Claude voice in the TV background" thread | default: Open on the corner card keeps needing Right then OK
+- Merge #39 (Continue tile) then run Install TV Home.cmd (yes/no, yes recommended) | https://github.com/gn0sh/tv-home/pull/39 | tap Merge, wait for the main build, double-click Install TV Home.cmd | asked 2026-11-05 01:50Z in the "Improve Claude voice and home tiles on TV" thread | default: no Continue tile
+- Did OK-twice open Netflix from the corner card after #36? (yes/no) | none | try it on the TV | 2026-11-04 23:40Z | default: assume fixed
 
 ## Problem-key ledger
 | Key | Returns | Source |
@@ -46,6 +47,8 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | home-dead-on-start-failure, a11y-list-regex-too-strict, rollback-file-not-per-serial, home-set-stale, a11y-event-breadth, m3-staying-reset-overlay, m3-boot-claim, m3-launcher-unverified (open: on-TV) | 1 | PR #15 reviews |
 
 - Nov 4: ok-on-card-noop, open-cause-unproven, answer-fade, open-failure-silent, trampoline-component-pkg: 1 return each (PR #36 reviews, fixed 35f220c)
+
+- Nov 5: continue-late-insert, continue-stale-pick, continue-hidden-app, usage-op-regrant, usage-op-undo-not-sticky, continue-pick-self-usage: 1 return each (PR #39; pick ones superseded when Brian chose last-app-only)
 
 ## Run ledger
 | Date | Role | Model/effort | Task | Outcome |
@@ -114,3 +117,7 @@ Earlier: Build M1 (calendar agenda). Core and T5 app code approved (18631fe on c
 | 2026-11-04 | frontend-engineer | opus/medium | PR #36 Open button fix (trampoline, then OK-twice) | done (35f220c, emulator pass) |
 | 2026-11-04 | code-reviewer | opus | PR #36 fresh + delta | request changes (ok-on-card-noop, open-cause-unproven) -> approve with nits |
 | 2026-11-04 | security-engineer | opus | PR #36 fresh + delta | OK with 2 lows -> OK |
+| 2026-11-05 | frontend-engineer | opus/medium | Watch Next / UsageStats feasibility probe (PR #38 closed) | done: Watch Next launcher-only; UsageStats via appop |
+| 2026-11-05 | frontend-engineer | opus/medium | PR #39 Continue tile + 3 fix rounds | done (697a141); pick feature `waste:superseded` by Brian's pick |
+| 2026-11-05 | code-reviewer | opus | PR #39 fresh + 3 deltas | request changes x2 -> approve |
+| 2026-11-05 | security-engineer | opus | PR #39 fresh x2 + 2 deltas | OK with lows/1 medium (fixed) -> OK |
