@@ -194,7 +194,7 @@ fun HomeScreen(
     }
     // The row's focus targets in order: the Continue tile (pinned first, when known), the visible apps, then the
     // Hidden tile when there are hidden apps. The Continue tile only shows with at least one app tile.
-    val shownContinue = continueTile?.takeIf { appList.isNotEmpty() }
+    val shownContinue = continueTile?.takeIf { appList.isNotEmpty() && continuePackage(it) !in layout.hidden }
     val rowKeys = remember(appList, hiddenList, shownContinue != null) {
         (if (shownContinue != null) listOf(CONTINUE_KEY) else emptyList()) +
             appList.map { it.app.packageName } + if (hiddenList.isNotEmpty()) listOf(HIDDEN_KEY) else emptyList()
@@ -1003,3 +1003,9 @@ internal object GameScreenMemo {
 }
 
 private const val GAME_SCREEN_FADE_MS = 600
+
+/** The app a Continue tile opens. */
+private fun continuePackage(tile: ContinueTile): String = when (tile) {
+    is ContinueTile.Pick -> tile.target.app.packageName
+    is ContinueTile.App -> tile.packageName
+}

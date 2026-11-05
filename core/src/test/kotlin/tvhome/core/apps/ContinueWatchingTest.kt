@@ -85,6 +85,16 @@ class ContinueWatchingTest {
         assertTrue(ContinueChoice.choose(picks, older, launcher, own, now = 300) is ContinueTile.Pick)
     }
 
+    @Test fun thePickedAppsOwnLaterUseDoesNotBeatThePick() {
+        val picks = listOf(ContinuePicks.Entry(pick("Show"), 100))
+        val selfLater = listOf(RecentUse("com.netflix.ninja", 500))
+        assertTrue(ContinueChoice.choose(picks, selfLater, launcher, own, now = 600) is ContinueTile.Pick)
+        val bothLater = selfLater + RecentUse("com.google.android.youtube.tv", 400)
+        assertEquals(ContinueTile.App("com.netflix.ninja"), ContinueChoice.choose(picks, bothLater, launcher, own, now = 600))
+        val otherOlder = selfLater + RecentUse("com.google.android.youtube.tv", 50)
+        assertTrue(ContinueChoice.choose(picks, otherOlder, launcher, own, now = 600) is ContinueTile.Pick)
+    }
+
     @Test fun withoutUsageDataAPickExpiresAfterSevenDays() {
         val week = ContinueChoice.PICK_FRESH_MS
         val picks = listOf(ContinuePicks.Entry(pick("Show"), 1_000))

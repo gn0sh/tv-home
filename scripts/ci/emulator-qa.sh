@@ -603,6 +603,13 @@ EOF2
   xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-pick.xml"
   grep -qF 'content-desc="Continue: Planet Earth, in YouTube"' <<<"$xml" || fail "continue: after an overlay Open, the home row has no 'Continue: Planet Earth, in YouTube' tile"
   pass "continue: the overlay's Open pick is the home row's Continue tile"
+  # continue-pick-self-usage: with usage access on, YouTube's own use (the Open itself, after the pick) must not hide the pick.
+  sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set refused (test setup)"
+  sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 5
+  xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-pick-usage.xml"
+  sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
+  grep -qF 'content-desc="Continue: Planet Earth, in YouTube"' <<<"$xml" || fail "continue: with usage access, the pick's own app use hid 'Continue: Planet Earth, in YouTube'"
+  pass "continue: with usage access, the pick still shows after its own app was opened"
   m7_rm continue-picks.json
   sh_ input keyevent KEYCODE_HOME; sleep 2
   no_app_crash_yet "overlay open"
@@ -914,10 +921,25 @@ xml=$(ui_text); printf '%s\n' "$xml" > "$OUT/ui-continue-installed.xml"
 [[ -n $xml ]] || fail "continue: UI dump failed"
 grep -qF 'content-desc="Continue' <<<"$xml" && fail "continue: a Continue tile shows as installed (no pick, app op not allowed): it must hide"
 pass "continue: no tile as installed (no Ask pick, usage access not allowed)"
+# usage-op-fresh-default / usage-op-undo-not-sticky: the install script's get-then-set, ported (same regex as
+# install-tv-home.ps1): allow unless the op was explicitly turned off.
+usage_op_install() {
+  local got; got=$(sh_ appops get "$PKG" GET_USAGE_STATS 2>&1 | tr -d '\r') || { note "continue: appops get failed: $got"; return 0; }
+  grep -qE 'GET_USAGE_STATS:[[:space:]]*(ignore|deny|errored)' <<<"$got" || sh_ appops set "$PKG" GET_USAGE_STATS allow
+}
+usage_op_mode() { sh_ appops get "$PKG" GET_USAGE_STATS 2>&1 | tr -d '\r' | grep -oE 'GET_USAGE_STATS:[[:space:]]*[a-z]+' | awk '{print $2}'; }
+echo "continue: appops get on a fresh install prints: $(sh_ appops get "$PKG" GET_USAGE_STATS 2>&1 | tr -d '\r' | tr '\n' '|')"
+usage_op_install
+[[ $(usage_op_mode) == allow ]] || fail "continue: the install script's logic did not allow the op on a fresh install (mode '$(usage_op_mode)')"
+sh_ appops set "$PKG" GET_USAGE_STATS ignore || fail "continue: appops set ignore refused (test setup)"
+usage_op_install
+[[ $(usage_op_mode) == ignore ]] || { sh_ appops set "$PKG" GET_USAGE_STATS default || true; fail "continue: the install script's logic overrode an explicit ignore (mode '$(usage_op_mode)')"; }
+pass "continue: the install logic allows the op on a fresh install and leaves an explicit 'ignore' (the undo) alone"
+sh_ appops set "$PKG" GET_USAGE_STATS default || fail "continue: could not restore the app op"
 if ! sh_ pm path "$CONT_YT" 2>/dev/null | grep -q '^package:'; then
   note "continue: last-used app fallback NOT VERIFIED: $CONT_YT is not installed on this image"
 else
-  # The install script's line (idempotent; undo with default).
+  # The install script's line (idempotent; its undo is ignore, this test restores default).
   sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set refused (test setup)"
   sh_ appops set "$PKG" GET_USAGE_STATS allow || fail "continue: appops set is not idempotent"
   sh_ monkey -p "$CONT_YT" -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1 || true; sleep 6

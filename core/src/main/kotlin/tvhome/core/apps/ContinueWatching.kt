@@ -53,7 +53,7 @@ class ContinuePicks(private val store: CountStore, private val clock: () -> Long
 
     companion object {
         const val KEEP = 3
-        /** The file's size cap in UTF-8 bytes; record() trims to it and a larger file is ignored. */
+        /** The file's size cap in UTF-8 bytes. record() trims to it; FileCountStore truncates a larger file to it on read, so it fails to parse and yields no picks. */
         const val MAX_BYTES = 4_096
         /** picks-no-expiry: a pick older than this is dropped. */
         const val MAX_AGE_MS = 30L * 24 * 3600 * 1000
@@ -109,12 +109,12 @@ object ContinueChoice {
         "com.google.android.katniss",
     )
 
-    /** Without usage data, a pick older than this is not shown (continue-stale-pick). */
+    /** With no later use of a different streaming app, a pick older than this is not shown (continue-stale-pick). */
     const val PICK_FRESH_MS = 7L * 24 * 3600 * 1000
 
     /**
      * The tile. Only apps in the launcher list and not hidden by Brian ([hidden], continue-hidden-app) count. The newest
-     * such pick wins if it is newer than the last use of any such streaming app (with no usage data: if it is under
+     * such pick wins if it is newer than the last use of any other such streaming app (with no such use: if it is under
      * [PICK_FRESH_MS] old); else that last-used app; else no tile. [recent] is null when UsageStats is not allowed.
      */
     fun choose(
@@ -127,11 +127,13 @@ object ContinueChoice {
     ): ContinueTile? {
         fun ok(pkg: String) = pkg in launcherPkgs && pkg !in hidden && pkg != ownPackage
         val pick = picks.firstOrNull { ok(it.target.app.packageName) }
-        val last = recent.orEmpty().asSequence()
-            .filter { it.lastUsedMillis > 0 && ok(it.packageName) && it.packageName !in NOT_STREAMING }
-            .maxByOrNull { it.lastUsedMillis }
+        val streaming = recent.orEmpty().filter { it.lastUsedMillis > 0 && ok(it.packageName) && it.packageName !in NOT_STREAMING }
+        val last = streaming.maxByOrNull { it.lastUsedMillis }
         if (pick != null) {
-            val fresh = if (last != null) pick.atMillis >= last.lastUsedMillis else now - pick.atMillis <= PICK_FRESH_MS
+            // continue-pick-self-usage: opening the pick makes its own app the last used, so only a later use of a
+            // different app beats it. No such use: the pick holds for PICK_FRESH_MS.
+            val other = streaming.filter { it.packageName != pick.target.app.packageName }.maxByOrNull { it.lastUsedMillis }
+            val fresh = if (other != null) pick.atMillis >= other.lastUsedMillis else now - pick.atMillis <= PICK_FRESH_MS
             if (fresh) return ContinueTile.Pick(pick.target)
         }
         return last?.let { ContinueTile.App(it.packageName) }

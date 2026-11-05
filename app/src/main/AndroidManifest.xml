@@ -11,7 +11,7 @@
          this at runtime: it is granted in the TV's app settings only if the mic button is moved to Claude. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- continue-tile: the fallback reads which apps were used last. An app-op permission: nothing is granted until Brian
-         runs `appops set com.gnosh.tvhome GET_USAGE_STATS allow` over adb (install script; undo: `... default`).
+         runs `appops set com.gnosh.tvhome GET_USAGE_STATS allow` over adb (install script; undo: `... ignore`).
          Without it the Continue tile shows only Ask Claude picks, or hides. Package names and times only. -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
 

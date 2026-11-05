@@ -8,7 +8,7 @@ import tvhome.core.apps.RecentUse
 
 /**
  * continue-tile fallback: which apps Brian used last (UsageStats, the last 7 days), only when the GET_USAGE_STATS app op
- * is allowed (one adb command at install: `appops set com.gnosh.tvhome GET_USAGE_STATS allow`; undo with `default`).
+ * is allowed (one adb command at install: `appops set com.gnosh.tvhome GET_USAGE_STATS allow`; undo with `ignore`, which an update does not change).
  * Null when it is not allowed, so the tile hides instead of showing an error. Package names and times only; nothing
  * is stored or logged. Blocking: call off the main thread.
  */
