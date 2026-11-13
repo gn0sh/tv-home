@@ -182,9 +182,9 @@ def test_serial_must_be_ip_port():
         AdbShell("adb", "192.168.68.71:5555 && calc")
 
 
-def test_the_bridge_is_six_named_functions_and_a_sealed_api_object():
+def test_the_bridge_is_seven_named_functions_and_a_sealed_api_object():
     names = [f.__name__ for f in make_bridge(shell()[0], None)]
-    assert names == ["start", "key", "app", "text", "volume", "set_tv"]
+    assert names == ["start", "key", "app", "text", "volume", "set_tv", "tv_input"]
     assert dir(SEALED) == []
     for attr in ("__class__", "__dict__", "_tv", "start", "__init__"):
         assert getattr(SEALED, attr, None) is None
@@ -833,3 +833,65 @@ def test_settings_replace_is_retried_once(tmp_path, monkeypatch):
     choice = TvChoice(tmp_path / "remote-app.json")
     assert choice.set("vizio") is True and len(tries) == 2
     assert TvChoice(tmp_path / "remote-app.json").name == "vizio"
+
+
+# ---- inputs on the LG (lg-input-over-cec) ----
+
+class FakeLgInputs(FakeLg):
+    async def set_input(self, source):
+        if self.fail:
+            raise self.fail
+        self.calls.append(("input", source))
+
+
+def test_input_goes_to_the_lg_not_the_google_tv():
+    lg = FakeLgInputs()
+    sh, fake = shell()
+    vol = LgVolume(lg, timeout=5)
+    try:
+        r = RemoteApi(sh, vol, TvChoice(None)).tv_input("HDMI_2")
+        assert r["ok"] and r["input"] == "HDMI_2" and r["via"] == "lg" and "HDMI 2" in r["status"]
+        assert lg.calls == [("input", "HDMI_2")] and fake.lines == []
+    finally:
+        vol.close()
+
+
+def test_input_refuses_anything_but_hdmi_1_to_4():
+    lg = FakeLgInputs()
+    sh, fake = shell()
+    vol = LgVolume(lg, timeout=5)
+    try:
+        api = RemoteApi(sh, vol, TvChoice(None))
+        for bad in ("HDMI_5", "hdmi_1", "AV", 3, None):
+            assert api.tv_input(bad)["ok"] is False
+        assert lg.calls == [] and fake.lines == []
+    finally:
+        vol.close()
+
+
+def test_input_when_the_lg_does_not_answer_says_so_and_sends_nothing_else():
+    lg = FakeLgInputs(fail=DeviceUnreachable("lg", LG_HOST))
+    sh, fake = shell()
+    vol = LgVolume(lg, timeout=5)
+    try:
+        r = RemoteApi(sh, vol, TvChoice(None)).tv_input("HDMI_1")
+        assert r["ok"] is False and r["status"] == "The LG did not answer. Input not changed."
+        assert LG_HOST not in json.dumps(r) and fake.lines == []
+    finally:
+        vol.close()
+
+
+def test_input_without_the_lg_or_on_the_vizio_uses_the_google_tv_key():
+    sh, fake = shell()
+    r = RemoteApi(sh, None, TvChoice(None)).tv_input("HDMI_1")
+    assert r["via"] == "googletv"
+    choice = TvChoice(None)
+    choice.set("vizio")
+    lg = FakeLgInputs()
+    vol = LgVolume(lg, timeout=5)
+    try:
+        r = RemoteApi(sh, vol, choice).tv_input("HDMI_1")
+        assert r["via"] == "googletv" and lg.calls == []
+    finally:
+        vol.close()
+    assert any("KEYCODE_TV_INPUT" in line for line in fake.lines)

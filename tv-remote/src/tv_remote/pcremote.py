@@ -208,7 +208,30 @@ class AdbShell:
             pass
 
 
-# ---- the LG, for volume ----
+# ---- the LG, for volume and inputs ----
+
+LG_INPUTS = ("HDMI_1", "HDMI_2", "HDMI_3", "HDMI_4")
+
+
+async def _switch(lg: Any, set_input: Callable[[str], Any], source: str, name: str) -> str:
+    from .devices import CertificateChanged, DeviceRefused, DeviceUnreachable, NotPaired
+    from .lgpipe import lock_for
+
+    the = "the " + name
+    try:
+        async with lock_for(lg):
+            await set_input(source)
+        return "ok " + source
+    except CertificateChanged:
+        return f"error {the}'s certificate changed; pair it again"
+    except NotPaired:
+        return f"error {the} is not paired"
+    except DeviceRefused:
+        return f"error {the} refused"
+    except DeviceUnreachable:
+        return f"error {the} did not answer"
+    except Exception as exc:  # noqa: BLE001  never a traceback (it could carry a host)
+        return "error " + type(exc).__name__
 
 class LgVolume:
     """Runs lgpipe.handle on one private event loop thread, so the LG link is reused between presses."""
@@ -256,6 +279,34 @@ class LgVolume:
                 self._failed_at = self._clock() if reply == self._no_answer else None
             if cmd in ("up", "down"):
                 self.level_known = reply[3:].strip().isdigit() if reply.startswith("ok ") else False
+        return reply
+
+    def switch_input(self, source: str) -> str:
+        """Switch the LG to HDMI_1..HDMI_4 (lg-input-over-cec: the BX ignores the Google TV's CEC input key).
+        Same loop, link and per-TV lock as volume. ``ok HDMI_n`` or ``error <fixed reason>``."""
+        if source not in LG_INPUTS:
+            return "error unknown input"
+        set_input = getattr(self._lg, "set_input", None)
+        if set_input is None:
+            return f"error the {self._name} cannot switch inputs"
+        with self._lock:
+            if self._closed:
+                return "error the remote is closing"
+            if len(self._pending) >= LG_MAX_PENDING:
+                return "busy"
+            fut = asyncio.run_coroutine_threadsafe(_switch(self._lg, set_input, source, self._name), self._loop)
+            self._pending.add(fut)
+        try:
+            reply = fut.result(timeout=self._timeout)
+        except FutureTimeout:
+            fut.cancel()
+            reply = self._no_answer
+        except CancelledError:
+            reply = "error the remote is closing"
+        except Exception as exc:  # noqa: BLE001
+            reply = "error " + type(exc).__name__
+        with self._lock:
+            self._pending.discard(fut)
         return reply
 
     def close(self, wait: float = 1.5) -> None:
@@ -539,9 +590,32 @@ def _set_tv(choice: TvChoice, name: object) -> dict[str, Any]:
                   tv=name)
 
 
+INPUT_SAID = {s: "HDMI " + s[-1] for s in LG_INPUTS}
+
+
+def _lg_input(tv: AdbShell, lg: Any, choice: TvChoice, source: object) -> dict[str, Any]:
+    """The Input picker. On the LG this goes over SSAP: the BX ignores the Google TV's HDMI-CEC input key.
+    In Vizio mode, or with no LG set up, the Google TV's own Input key is sent as before."""
+    if not isinstance(source, str) or source not in LG_INPUTS:
+        return _reply(False, "That input is not on this remote.")
+    switch = getattr(lg, "switch_input", None)
+    if choice.name != "lg" or switch is None:
+        ok, status = tv.send("input keyevent KEYCODE_TV_INPUT")
+        return _reply(ok, "Input sent to the Google TV." if ok else status, via="googletv")
+    reply = switch(source)
+    if reply.startswith("ok "):
+        return _reply(True, f"LG switched to {INPUT_SAID[source]}", via="lg", input=source)
+    if reply == "busy":
+        return _reply(False, "Still switching...", via="lg")
+    reason = reply[6:] if reply.startswith("error ") else ""
+    reason = reason if LG_REASON_RE.match(reason) else "did not work"
+    said = "The LG" + reason[len("the LG"):] if reason.startswith("the LG") else "The LG: " + reason
+    return _reply(False, f"{said}. Input not changed.", via="none")
+
+
 def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice | None = None,
                 vz: LgVolume | None = None) -> tuple[Callable[..., dict[str, Any]], ...]:
-    """The six functions the page may call, registered with ``window.expose`` (finding jsapi-private-dispatch).
+    """The seven functions the page may call, registered with ``window.expose`` (finding jsapi-private-dispatch).
 
     The backends live only in these closures. The page reaches a function only by its exact name in the exposed
     table; a dotted name such as ``key.__globals__`` is not in the table and falls through to the walk from
@@ -568,7 +642,10 @@ def make_bridge(tv: AdbShell, lg: Callable[[str], str] | None, choice: TvChoice 
     def set_tv(*args):
         return _guard(_set_tv, 1, (choice,), args)
 
-    return start, key, app, text, volume, set_tv
+    def tv_input(*args):
+        return _guard(_lg_input, 1, (tv, lg, choice), args)
+
+    return start, key, app, text, volume, set_tv, tv_input
 
 
 # ---- the window ----

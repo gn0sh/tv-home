@@ -38,6 +38,7 @@ from aiowebostv.webos_client import WSS_PORT
 
 from .devices import CertificateChanged, DeviceRefused, DeviceUnreachable, LgInput, LgStatus, NotPaired
 from .googletv import _write_atomic
+from .lanfind import find_by_mac
 from .secretstore import Protector, SecretStoreError
 from .tlspin import pinned_client_context
 
@@ -178,9 +179,10 @@ class LgRemote:
     """LgBackend over SSAP (see devices.LgBackend)."""
 
     def __init__(self, host: str, mac: str, vault: LgVault, *, port: int = WSS_PORT,
-                 wol_sender: Callable[[bytes], None] = send_wol, clock: Callable[[], float] = time.monotonic):
+                 wol_sender: Callable[[bytes], None] = send_wol, clock: Callable[[], float] = time.monotonic,
+                 locate: Callable[[str, str], str | None] = find_by_mac):
         self.host, self.mac, self._vault = host, mac, vault
-        self._port, self._wol, self._clock = port, wol_sender, clock
+        self._port, self._wol, self._clock, self._locate = port, wol_sender, clock, locate
         self._link: _Link | None = None
         self._ids = itertools.count(1)
         self._lock = asyncio.Lock()
@@ -266,6 +268,25 @@ class LgRemote:
                             "payload": {}})
         await self._recv(ws, "get_sys_info", REQUEST_TIMEOUT, sent=False, untagged_types=_REPLY)
 
+    async def _open_or_relocate(self, pin: str):
+        """_open, and if the configured address does not answer, look the LG's MAC up on the LAN (lanfind) and try
+        the address it has now, once (lg-address-moved: the router moved the BX from .80 to .69). Only with a pin:
+        the new address must present the pinned certificate before anything is sent, so a wrong or spoofed address
+        is refused in the handshake. A certificate mismatch at the configured address is never relocated around."""
+        try:
+            return await self._open(pin)
+        except DeviceUnreachable:
+            moved = await asyncio.to_thread(self._locate, self.mac, self.host)
+            if not moved or moved == self.host:
+                raise
+            log.info("LG did not answer at its configured address; trying the address its MAC has now.")
+            old_host, self.host = self.host, moved
+            try:
+                return await self._open(pin)
+            except DeviceUnreachable:
+                self.host = old_host
+                raise
+
     async def _ensure(self) -> _Link:
         if self._link is not None and not self._link.ws.closed and self._clock() - self._link.last_rx <= SILENCE_LIMIT:
             return self._link
@@ -273,7 +294,7 @@ class LgRemote:
         pin, key = await asyncio.to_thread(lambda: (self._vault.pinned(), self._vault.client_key()))
         if pin is None or key is None:
             raise NotPaired("lg")
-        session, ws, _ctx = await self._open(pin)
+        session, ws, _ctx = await self._open_or_relocate(pin)
         try:
             await self._preamble(ws)
             await ws.send_json(registration_message(key))

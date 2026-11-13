@@ -186,6 +186,11 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
 .vcard.vizio .bar { display: none; }
 .vcard.vizio .vnote { display: block; }
 .vcard.vizio .vnum { font-size: 17px; }
+.inputs { display: flex; justify-content: center; gap: 8px; margin: 2px 0 4px; }
+.inputs[hidden] { display: none; }
+.inputs button { height: 34px; padding: 0 14px; border-radius: 17px; font: inherit; font-size: 13px; font-weight: 600;
+  color: var(--ink); background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12); }
+.inputs button.down, .inputs button.current { color: var(--accent-ink); background: linear-gradient(180deg, #ffc443, #f0a400); }
 </style>
 </head>
 <body>
@@ -204,6 +209,12 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
         <div class="cap"><button class="key round power" data-key="POWER" aria-label="Power" data-icon="power"></button><span>Power</span></div>
         <div class="cap"><button class="key round" data-key="TV_INPUT" aria-label="Input" data-icon="input"></button><span>Input</span></div>
         <div class="cap"><button class="key round" data-key="SETTINGS" aria-label="Settings" data-icon="gear"></button><span>Settings</span></div>
+      </div>
+      <div class="inputs" id="inputs" role="group" aria-label="LG TV inputs" hidden>
+        <button data-input="HDMI_1">HDMI 1</button>
+        <button data-input="HDMI_2">HDMI 2</button>
+        <button data-input="HDMI_3">HDMI 3</button>
+        <button data-input="HDMI_4">HDMI 4</button>
       </div>
       <div class="dpad-wrap">
         <div class="dpad" id="dpad">
@@ -448,8 +459,30 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
   }
   function sendApp(pkg) { return call("app", pkg).then(show); }
 
+  // ---- inputs: the LG ignores the Google TV's HDMI-CEC Input key, so on the LG, Input opens HDMI 1-4 here ----
+  var lgReady = false, inputsEl = document.getElementById("inputs");
+  function showInputs(on) { inputsEl.hidden = !on; fit(); }
+  function sendInput(source) {
+    return call("tv_input", source).then(function (r) {
+      if (!r) return;
+      show(r);
+      if (r.ok && r.input) {
+        inputsEl.querySelectorAll("[data-input]").forEach(function (b) {
+          b.classList.toggle("current", b.getAttribute("data-input") === r.input);
+        });
+        showInputs(false);
+      }
+    });
+  }
+
   // ---- presses: pointer events so touch, pen and mouse all act at once; hold to repeat ----
   function fire(el) {
+    if (el.getAttribute("data-key") === "TV_INPUT" && mode === "lg" && lgReady) {
+      showInputs(inputsEl.hidden);
+      show({ ok: true, status: inputsEl.hidden ? "" : "Pick the LG input." });
+      return;
+    }
+    if (el.hasAttribute("data-input")) return sendInput(el.getAttribute("data-input"));
     if (el.hasAttribute("data-key")) return sendKey(el.getAttribute("data-key"));
     if (el.hasAttribute("data-vol")) {
       if (mode === null) { // not known yet which TV the volume goes to: send nothing
@@ -467,7 +500,7 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
     if (held) { held.classList.remove(pressClass(held)); held = null; }
   }
   document.addEventListener("pointerdown", function (e) {
-    var el = e.target.closest("[data-key],[data-vol],[data-app]");
+    var el = e.target.closest("[data-key],[data-vol],[data-app],[data-input]");
     if (!el || e.button > 0) return;
     e.preventDefault();
     if (document.activeElement && document.activeElement.id === "typeBox") document.activeElement.blur();
@@ -546,6 +579,7 @@ button { font: inherit; color: inherit; border: 0; padding: 0; margin: 0; backgr
       if (!r) return;
       if (r.apps && r.apps.length) drawApps(r.apps);
       cards.lg.via = r.lg ? "LG TV" : "Google TV";
+      lgReady = r.lg === true;
       vizioPaired = r.vizio_paired === true;
       startAnswered = true;
       if (mode === null) applyMode(r.tv); // never overrides a switch made meanwhile (start-overwrites-toggle)
