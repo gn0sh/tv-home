@@ -7,6 +7,8 @@ import tvhome.core.feeds.GameDay
 import tvhome.core.feeds.GamePhase
 import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelView
+import tvhome.core.feeds.Pick
+import tvhome.core.feeds.Picks
 import tvhome.core.feeds.Stamped
 import tvhome.core.feeds.TeamGame
 import tvhome.core.feeds.WatchMap
@@ -32,6 +34,8 @@ sealed interface ContextCard {
         val line: String, val teamKey: String, val phase: GamePhase = GamePhase.UPCOMING, val network: String? = null,
         /** Set for a game that is not today ([NEXT_GAME]); null lets the card name the phase (Live, Today, Final). */
         val heading: String? = null,
+        /** Claude's pick for today's game ([Picks.text]), or null. */
+        val pick: String? = null,
     ) : ContextCard {
         companion object { const val NEXT_GAME = "Next game" }
     }
@@ -65,6 +69,8 @@ fun contextCard(
     watch: WatchTarget? = null,
     /** The next game of either team when none is today ([GameDay.next]); shown above the time-of-day card. */
     next: TeamGame? = null,
+    /** Claude's pick per team key; shown only for today's game, and not once it is final. */
+    picks: Map<String, Pick> = emptyMap(),
 ): ContextCard? {
     alerts?.override?.let { a -> return ContextCard.Alert(a.event, a.until?.let { untilText(it, now, zone, is24h) }) }
     if (game != null) {
@@ -77,7 +83,9 @@ fun contextCard(
             else -> GameDay.tvText(game.game)
         }
         val line = GameDay.line(game, now, zone).let { if (tv != null) "$it · $tv" else it }
-        return ContextCard.Game(line, game.team.key, game.game.phase, network)
+        val pick = if (game.game.phase == GamePhase.FINAL) null
+        else Picks.forGame(picks[game.team.key], game, now, zone)?.let(Picks::text)
+        return ContextCard.Game(line, game.team.key, game.game.phase, network, pick = pick)
     }
     if (next != null) {
         return ContextCard.Game(GameDay.nextLine(next, now, zone, is24h), next.team.key, next.game.phase, null, ContextCard.Game.NEXT_GAME)
