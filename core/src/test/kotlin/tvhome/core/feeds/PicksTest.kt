@@ -69,10 +69,11 @@ class PicksTest {
         assertTrue(ok)
         for (u in listOf(
             "https://raw.githubusercontent.com/gn0sh/tv-home/main/README.md",
-            "https://raw.githubusercontent.com/someone/else/picks/preds-latest.json",
-            "https://raw.githubusercontent.com/gn0sh/tv-home/picks/other.json",
-            "https://raw.githubusercontent.com/gn0sh/tv-home/picks/preds-latest.json?x=1",
-            "http://raw.githubusercontent.com/gn0sh/tv-home/picks/preds-latest.json",
+            "https://raw.githubusercontent.com/someone/else/refs/heads/claude/project-thread-3aau8u/preds-latest.json",
+            "https://raw.githubusercontent.com/gn0sh/tv-home/refs/heads/claude/project-thread-3aau8u/other.json",
+            "https://raw.githubusercontent.com/gn0sh/tv-home/refs/heads/main/preds-latest.json",
+            "https://raw.githubusercontent.com/gn0sh/tv-home/refs/heads/claude/project-thread-3aau8u/preds-latest.json?x=1",
+            "http://raw.githubusercontent.com/gn0sh/tv-home/refs/heads/claude/project-thread-3aau8u/preds-latest.json",
         )) assertFalse(HttpFeedFetcher.isAllowed(u.toHttpUrl()), u)
         assertEquals(Picks.MAX_BODY, HttpFeedFetcher.maxBodyFor(Picks.url(Teams.PREDATORS.key)!!))
     }

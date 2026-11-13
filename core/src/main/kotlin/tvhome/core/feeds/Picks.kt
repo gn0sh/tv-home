@@ -14,7 +14,7 @@ import java.time.ZoneId
  * Claude's game-day pick for a followed team (Brian 2026-11-13: "a fun bit of conversation before each game").
  *
  * The NHL picks thread writes one small JSON file per team 1.5 to 2 hours before the game and commits it to the `picks`
- * branch of this (public) repo, so the TV reads it from raw.githubusercontent.com over HTTPS like any other public
+ * branch of this (public) repo (the picks thread's own branch, claude/project-thread-3aau8u: the only one it can push to), so the TV reads it from raw.githubusercontent.com over HTTPS like any other public
  * feed: no PC, no key, no account. Shape (v 1):
  * `{"v":1,"gameId":2025020245,"date":"2026-11-13","opponent":"DAL","pick":"NSH","score":"4-2","puckLine":"NSH -1.5",
  *   "reason":"one line","at":"2026-11-13T23:15:00Z"}`; the Buckeyes file has `"spread":"OSU -24.5"` instead of
@@ -37,7 +37,7 @@ data class Pick(
 object Picks {
     /** The data branch and the one file per team key. Only these URLs are fetched ([HttpFeedFetcher.isAllowed]). */
     const val HOST = "raw.githubusercontent.com"
-    const val PATH_PREFIX = "/gn0sh/tv-home/picks/"
+    const val PATH_PREFIX = "/gn0sh/tv-home/refs/heads/claude/project-thread-3aau8u/"
     val FILES: Map<String, String> = mapOf(
         Teams.PREDATORS.key to "preds-latest.json",
         Teams.OHIO_STATE.key to "buckeyes-latest.json",

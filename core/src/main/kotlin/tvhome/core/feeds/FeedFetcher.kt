@@ -121,7 +121,7 @@ class HttpFeedFetcher internal constructor(
         internal fun headersFor(url: HttpUrl): Map<String, String> = HEADERS[url.host] ?: DEFAULT_HEADERS
 
         /**
-         * The four feed hosts, plus exactly the game-day pick files on this repo's `picks` branch ([Picks.isPickUrl]):
+         * The four feed hosts, plus exactly the game-day pick files on the picks thread's branch ([Picks.isPickUrl]):
          * raw.githubusercontent.com serves every public repo, so only those two paths are allowed, never the host.
          */
         internal fun isAllowed(url: HttpUrl): Boolean =
