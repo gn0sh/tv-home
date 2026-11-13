@@ -95,8 +95,11 @@ class HttpFeedFetcher internal constructor(
         const val ESPN_SCHEDULE_MAX_BODY = 2L * 1024 * 1024
         private val ESPN_SCHEDULE_PATH = Regex("/apis/site/v2/sports/football/college-football/teams/\\d{1,6}/schedule")
 
-        internal fun maxBodyFor(url: HttpUrl): Long =
-            if (url.host == "site.api.espn.com" && ESPN_SCHEDULE_PATH.matches(url.encodedPath)) ESPN_SCHEDULE_MAX_BODY else MAX_BODY
+        internal fun maxBodyFor(url: HttpUrl): Long = when {
+            url.host == "site.api.espn.com" && ESPN_SCHEDULE_PATH.matches(url.encodedPath) -> ESPN_SCHEDULE_MAX_BODY
+            url.host == Picks.HOST -> Picks.MAX_BODY
+            else -> MAX_BODY
+        }
 
         const val TIMEOUT_MS = 10_000L
         const val USER_AGENT = "tvhome-hero/1"
@@ -117,6 +120,11 @@ class HttpFeedFetcher internal constructor(
 
         internal fun headersFor(url: HttpUrl): Map<String, String> = HEADERS[url.host] ?: DEFAULT_HEADERS
 
-        internal fun isAllowed(url: HttpUrl): Boolean = url.isHttps && url.port == 443 && url.host in HOSTS
+        /**
+         * The four feed hosts, plus exactly the game-day pick files on the picks thread's branch ([Picks.isPickUrl]):
+         * raw.githubusercontent.com serves every public repo, so only those two paths are allowed, never the host.
+         */
+        internal fun isAllowed(url: HttpUrl): Boolean =
+            url.isHttps && url.port == 443 && (url.host in HOSTS || Picks.isPickUrl(url))
     }
 }

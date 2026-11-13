@@ -23,6 +23,8 @@ data class FeedsSnapshot(
     val alerts: Stamped<AlertSet>? = null,
     val games: Stamped<List<TeamGame>>? = null,
     val alertsChecked: Boolean = false,
+    /** Claude's game-day pick per team key ([Picks]); memory only, refetched on game days. */
+    val picks: Map<String, Pick> = emptyMap(),
 )
 
 /**
@@ -50,6 +52,13 @@ object FeedTiming {
     const val SLICE_MS = 60_000L
     const val MAX_BACKOFF_MS = 2L * 60 * 60_000
     const val MAX_LIVE_BACKOFF_MS = 15L * 60_000
+    /** Picks are written 1.5 to 2 h before the game; every 15 min on a game day finds one soon enough. */
+    const val PICKS_MS = 15L * 60_000
+
+    /** Team keys with a game today (in the team's zone) that has not ended: only those picks are fetched. */
+    fun pickTeams(games: List<TeamGame>, now: Instant): Set<String> = games.filter { (team, g) ->
+        g.phase != GamePhase.FINAL && g.start.atZone(team.zone).toLocalDate() == now.atZone(team.zone).toLocalDate()
+    }.map { it.team.key }.filter { it in Picks.FILES }.toSet()
 
     /** [base] after a success; doubled per consecutive failure, up to [max]. */
     fun delayMs(base: Long, failures: Int, max: Long = MAX_BACKOFF_MS): Long =
@@ -200,6 +209,20 @@ class LiveFeeds(
         launch { scheduleLoop() }
     }
 
+    /** Fetches the pick of each team with a game today ([FeedTiming.pickTeams]). A failed fetch keeps the last pick. */
+    suspend fun refreshPicks() {
+        val want = FeedTiming.pickTeams(state.value.games?.value.orEmpty(), clock())
+        val got = HashMap<String, Pick>()
+        for (key in want) {
+            val url = Picks.url(key) ?: continue
+            val pick = fetcher.fetch(url)?.let { raw -> withContext(io) { Picks.parse(raw) } }
+            if (pick != null) got[key] = pick
+        }
+        state.update { s -> s.copy(picks = s.picks.filterKeys { it in want } + got) }
+    }
+
+    private var picksLast: Instant? = null
+
     private var weatherLast: Instant? = null
     private var scheduleLast: Instant? = null
     private var weatherLoc: Location? = null
@@ -257,6 +280,8 @@ class LiveFeeds(
     private suspend fun scheduleLoop() {
         while (true) {
             if (!switchesNow().games) { sleep(FeedTiming.SLICE_MS); continue }
+            // Picks ride on this loop's wake-ups (no loop of their own, so no extra sleeps on a shared test clock).
+            if (waitLeft(picksLast, FeedTiming.PICKS_MS) <= 0) { refreshPicks(); picksLast = clock() }
             val base = FeedTiming.scheduleBase(state.value.games?.value.orEmpty(), clock())
             val max = if (base == FeedTiming.LIVE_MS) FeedTiming.MAX_LIVE_BACKOFF_MS else FeedTiming.MAX_BACKOFF_MS
             val wait = waitLeft(scheduleLast, FeedTiming.delayMs(base, scheduleFailures, max))

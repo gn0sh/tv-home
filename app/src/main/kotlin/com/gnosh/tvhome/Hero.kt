@@ -554,9 +554,20 @@ private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier, zone:
                     fontSize = GlanceTokens.CARD_SP.sp,
                     lineHeight = (GlanceTokens.CARD_SP + 6).sp,
                     fontWeight = FontWeight.Medium,
-                    maxLines = 3,
+                    maxLines = if (card.pick != null) 2 else 3,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // Claude's game-day pick (Brian 2026-11-13): secondary ink, under the game line, never pushing it out.
+                card.pick?.let {
+                    Text(
+                        it,
+                        color = rgb(ink.secondary),
+                        fontSize = GlanceTokens.DATE_SP.sp,
+                        lineHeight = (GlanceTokens.DATE_SP + 4).sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             // Spec M7-4.5: morning weather arc, or evening tomorrow's first event and the overnight low.
             is ContextCard.TimeOfDay -> Column(
