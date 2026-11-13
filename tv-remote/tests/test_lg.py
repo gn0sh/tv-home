@@ -599,3 +599,85 @@ def test_tool_layer_message_when_reply_missing():
     h.lg.set_mute = no_reply
     with pytest.raises(ToolError, match="may or may not have taken effect"):
         h.call("lg_mute", muted=True)
+
+
+# --- the LG moved to a new address (lg-address-moved) ---------------------------------------------------------------
+
+
+def test_moved_lg_is_found_by_mac_and_still_pin_checked(env):
+    """The configured address does not answer; the MAC lookup says where the TV is now; commands go there."""
+    tmp_path, ctx, fp, vault = env
+    asked = []
+
+    async def go():
+        tv = FakeTV(ctx)
+        await tv.start()
+        await LgRemote(HOST, MAC, vault, port=tv.port).pair()
+        r = LgRemote("127.0.0.2", MAC, vault, port=tv.port,
+                     locate=lambda mac, host: asked.append((mac, host)) or HOST)
+        try:
+            await r.set_volume(12)
+            return r.host, tv
+        finally:
+            await r._drop()
+            await tv.stop()
+
+    host, tv = asyncio.run(go())
+    assert asked == [(MAC, "127.0.0.2")] and host == HOST
+    assert ("ssap://audio/setVolume", {"volume": 12}) in [(m["uri"], m["payload"]) for m in tv.log
+                                                            if m["type"] == "request"]
+
+
+def test_moved_address_with_another_certificate_is_refused(env):
+    """A spoofed neighbour entry pointing at a different TLS server never gets the client key."""
+    tmp_path, ctx, fp, vault = env
+    other_ctx, _ = _cert(tmp_path, "imposter")
+
+    async def go():
+        tv = FakeTV(ctx)
+        await tv.start()
+        await LgRemote(HOST, MAC, vault, port=tv.port).pair()
+        await tv.stop()
+        imp = FakeTV(other_ctx)
+        await imp.start()
+        r = LgRemote("127.0.0.2", MAC, vault, port=imp.port, locate=lambda mac, host: HOST)
+        try:
+            with pytest.raises(CertificateChanged):
+                await r.status()
+            return imp
+        finally:
+            await r._drop()
+            await imp.stop()
+
+    imp = asyncio.run(go())
+    assert not [m for m in imp.log if m["type"] == "register"]
+
+
+def test_no_relocation_when_lookup_finds_nothing(env):
+    tmp_path, ctx, fp, vault = env
+
+    async def go():
+        tv = FakeTV(ctx)
+        await tv.start()
+        port = tv.port
+        await LgRemote(HOST, MAC, vault, port=port).pair()
+        await tv.stop()
+        r = LgRemote(HOST, MAC, vault, port=port, locate=lambda mac, host: None)
+        with pytest.raises(DeviceUnreachable):
+            await r.status()
+        return r.host
+
+    assert asyncio.run(go()) == HOST
+
+
+def test_pairing_never_relocates(env):
+    tmp_path, ctx, fp, vault = env
+    asked = []
+
+    async def go():
+        r = LgRemote("127.0.0.2", MAC, vault, port=1, locate=lambda mac, host: asked.append(1) or HOST)
+        with pytest.raises(DeviceUnreachable):
+            await r.pair()
+
+    asyncio.run(go())
+    assert asked == []
