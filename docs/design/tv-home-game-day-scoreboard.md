@@ -93,15 +93,17 @@ the colour). With the text-card fallback, the backdrop is as today.
 Claude's pick" (24), `big` (condensed 132, weight 900), `line` (condensed 60), and at the bottom, above a thin rule,
 `short` (24, two lines max). A dashed perforation and two notches separate it from the body (`#06142E`): `title` (30,
 bold; the part after " · " in secondary), the paragraphs (24 sp / 34), then a dashed rule and the footer: `stakes` in the
-accent colour left, "Back to close" right. The longest pick (`Picks.MAX_ANALYSIS`) must fit 720 dp without scrolling
-at font scale 1.0; at larger scales the body scrolls with the D-pad. Back or OK closes.
+accent colour left, "Back to close" right. A long pick steps the body type down (24/34 to 22/28) to fit; if it still
+does not fit, the body scrolls with the D-pad. Back or OK closes.
 
 ## 6. OLED and states
 
 - The surface, stub and meta drift with the hero text (same `drifting` modifier). Nothing bright is fixed.
 - DIM: outline and lettering in `OledTokens.DIM_TEXT`, no fills, no glow, no lamp, stub not focusable (as PR #45).
 - Quiet mode: unchanged rules; the board has no personal data.
-- Contrast: lettering on the surface and stub text at 7:1 or better (extend `GlanceTokensTest`).
+- Contrast: text at ordinary sizes (stub, meta, ticket body) at 7:1 or better. The display lettering (abbreviations,
+  scores, the ticket's big pick, 40 sp and up) has a floor of 4.5:1, the AAA level for large text; the approved colours
+  give 5.96 to 6.78 there (designer decision, 2026-11-13; pinned in `GlanceTokensTest`).
 - Reduced motion: there is no animation in this change.
 
 ## 7. Acceptance
