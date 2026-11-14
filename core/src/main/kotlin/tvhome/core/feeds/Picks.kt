@@ -32,6 +32,8 @@ data class Pick(
     val line: String?,
     val reason: String,
     val at: Instant,
+    /** The card's version of [reason] (pick-cut-off): at most [Picks.MAX_CARD_REASON] characters, or null. */
+    val short: String? = null,
 )
 
 object Picks {
@@ -47,6 +49,13 @@ object Picks {
     const val MAX_BODY = 4L * 1024
     const val MAX_REASON = 160
     const val MAX_SHORT = 24
+
+    /**
+     * The card has two lines of about 37 characters for the pick (Brian's TV, 2026-11-13: a 120-character reason was
+     * cut off mid-sentence). The heading takes about 30, so the reason on the card is at most this long: the file's
+     * `short`, else its `reason` when that is already short enough, else none (the pick alone is still shown).
+     */
+    const val MAX_CARD_REASON = 40
 
     /** A pick older than this is not shown, whatever its date says (the thread stopped writing). */
     val MAX_AGE: Duration = Duration.ofHours(36)
@@ -81,6 +90,7 @@ object Picks {
             line = optional("puckLine", MAX_SHORT) ?: optional("spread", MAX_SHORT),
             reason = required("reason", MAX_REASON),
             at = Instant.parse((o["at"] as? JsonPrimitive)?.content ?: return null),
+            short = optional("short", MAX_CARD_REASON),
         )
     }.getOrNull()
 
@@ -96,11 +106,14 @@ object Picks {
         return pick
     }
 
-    /** "Claude's pick: NSH 4-2 (NSH -1.5). Reason." */
+    /**
+     * "Claude's pick: NSH 4-2 (+1.5) · Saros is sharper": the line loses the team when it repeats the pick, and the
+     * reason is [Pick.short] or a [reason] of at most [MAX_CARD_REASON] characters, else left out, so it fits two lines.
+     */
     fun text(p: Pick): String {
         val head = listOfNotNull(p.pick, p.score).joinToString(" ")
-        val line = p.line?.let { " ($it)" } ?: ""
-        val reason = p.reason.trimEnd('.', ' ')
-        return "Claude's pick: $head$line. $reason."
+        val line = p.line?.let { " (" + it.removePrefix(p.pick + " ").trim() + ")" } ?: ""
+        val reason = (p.short ?: p.reason.takeIf { it.length <= MAX_CARD_REASON })?.trimEnd('.', ' ')
+        return "Claude's pick: $head$line" + (reason?.let { " · $it" } ?: "")
     }
 }
