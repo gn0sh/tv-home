@@ -40,6 +40,8 @@ data class TeamConfig(
     val tile: Int? = null,
     /** A thin full-strength accent line along the hero's bottom edge (under no text), or null for none. */
     val edge: Int? = null,
+    /** The scoreboard abbreviation painted on the game-day surface ("NSH", "OSU"), or null: no board for this team. */
+    val abbr: String? = null,
 ) {
     /**
      * NHL: `week/YYYY-MM-DD` for today in [zone]. The `week/now` form answers HTTP 307 to the dated URL, and
@@ -76,7 +78,7 @@ object Teams {
         primary = 0xFFB81C, secondary = 0x041E42,
         backdropTop = 0x041E42, backdropBottom = 0x0B3169, accent = 0xFFB81C,
         zone = ZoneId.of("America/Chicago"), venue = Venue.ARENA,
-        scrim = 0x041E42, screen = 0x041A3A, tile = 0x15305E, edge = 0xFFB81C,
+        scrim = 0x041E42, screen = 0x041A3A, tile = 0x15305E, edge = 0xFFB81C, abbr = "NSH",
     )
 
     /** Scarlet #BB0000 and gray #666666. Gray is too dark for text on the dark backdrop, so the accent is a lighter gray. */
@@ -85,7 +87,7 @@ object Teams {
         primary = 0xBB0000, secondary = 0x666666,
         backdropTop = 0x2A0707, backdropBottom = 0x8A0000, accent = 0xC4C4C4,
         zone = ZoneId.of("America/New_York"), venue = Venue.STADIUM,
-        scrim = 0x2A0707, edge = 0xBB0000,
+        scrim = 0x2A0707, edge = 0xBB0000, abbr = "OSU",
     )
 
     val ALL: List<TeamConfig> = listOf(PREDATORS, OHIO_STATE)
@@ -107,8 +109,16 @@ data class GameInfo(
     val period: String?,
     /** Broadcast network names the feed lists for this game (cleaned, at most [MAX_NETWORKS]); empty when it lists none. */
     val networks: List<String> = emptyList(),
+    /** The opponent's scoreboard abbreviation ("VGK", "MICH"), already through [abbr]; null when the feed gave none. */
+    val opponentAbbr: String? = null,
 ) {
-    companion object { const val MAX_NETWORKS = 8 }
+    companion object {
+        const val MAX_NETWORKS = 8
+        private val ABBR = Regex("^[A-Z0-9]{2,4}$")
+
+        /** A feed's team abbreviation, upper-cased: 2 to 4 characters of A-Z and 0-9; anything else is null. */
+        fun abbr(raw: String?): String? = raw?.uppercase(java.util.Locale.ROOT)?.takeIf { ABBR.matches(it) }
+    }
 }
 
 /** A game together with the team it belongs to. */

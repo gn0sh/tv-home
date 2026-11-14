@@ -1478,6 +1478,165 @@ fi
     in_front && fail "q2: one Back with the pills showing does not leave the app (home-back-twice)"
     no_app_crash_yet "m7 q2"
   fi
+
+  # ---- Game-day scoreboard (docs/design/tv-home-game-day-scoreboard.md, acceptance 1 to 8) ----
+  # Planted games carry an opponent abbreviation, so the hero's right side is the surface (resource-id hero_board).
+  # Tour frames go to $SHOT_DIR/tv-home-board-*.png. The pick (stub and full ticket) needs the qa APK's PickQaHook.
+  if [[ $(TZ=$etz date -d '+100 minutes' +%F) != $(TZ=$etz date +%F) || $(TZ=$etz date -d '-70 minutes' +%F) != $(TZ=$etz date +%F) ]]; then
+    warn "Game-day scoreboard NOT VERIFIED on the emulator: a game 90 min out or 60 min ago is not today in $etz"
+  else
+    gd_restart() { sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; sleep 8; }
+    gd_shot() { a exec-out screencap -p > "$SHOT_DIR/tv-home-board-$1.png" || true; }
+    gd_game() { # $1 team key, $2 opponent, $3 abbr JSON value ("VGK" with quotes, or null), $4 home, $5 phase, $6 start, $7 extra fields
+      printf '%s' '{"v":1,"at":"'"$now"'","data":[{"team":"'"$1"'","start":"'"$6"'","opponent":"'"$2"'","home":'"$4"',"phase":"'"$5"'"'"$7"',"opponentAbbr":'"$3"'}]}' \
+        | m7_put panels/games.json
+    }
+    gd_board() { grep -oE '<node [^>]*resource-id="hero_board"[^>]*>' <<<"$ui" | head -1 || true; }
+    gd_stub() { grep -oE '<node [^>]*resource-id="hero_pick_stub"[^>]*>' <<<"$ui" | head -1 || true; }
+    # design-canvas/dialog-density: the full ticket (its node in $ui) lies inside the screen's 5% safe area, in pixels
+    # (1920x1080: x 96..1824, y 54..1026). A dialog laid out at the window's density, not the design canvas's, overflows.
+    gd_ticket_safe() { # $1 = label
+      local node size sw sh x1 y1 x2 y2 l t r b
+      node=$(grep -oE '<node [^>]*content-desc="Claude(&apos;|.)s pick, full ticket"[^>]*>' <<<"$ui" | head -1 || true)
+      [[ -n $node ]] || m7_fail "board: $1: no full-ticket node in the UI dump, so its bounds cannot be checked"
+      [[ $node =~ bounds=\"\[(-?[0-9]+),(-?[0-9]+)\]\[(-?[0-9]+),(-?[0-9]+)\]\" ]] \
+        || m7_fail "board: $1: the full ticket's node has no readable bounds: $node"
+      x1=${BASH_REMATCH[1]}; y1=${BASH_REMATCH[2]}; x2=${BASH_REMATCH[3]}; y2=${BASH_REMATCH[4]}
+      size=$(sh_ wm size | tr -d '\r' | grep -oE '[0-9]+x[0-9]+' | tail -1 || true)
+      [[ $size =~ ^([0-9]+)x([0-9]+)$ ]] || m7_fail "board: $1: cannot read the screen size from 'wm size' ('$size')"
+      sw=${BASH_REMATCH[1]}; sh=${BASH_REMATCH[2]}
+      l=$(( sw * 5 / 100 )); t=$(( sh * 5 / 100 )); r=$(( sw - l )); b=$(( sh - t ))
+      if (( x2 <= x1 || y2 <= y1 || x1 < l || y1 < t || x2 > r || y2 > b )); then
+        m7_fail "board: $1: the full ticket [$x1,$y1][$x2,$y2] is not inside the 5% safe area of the ${sw}x${sh} screen (x $l..$r, y $t..$b); is the dialog laid out at the design canvas density?"
+      fi
+      pass "board: $1: the full ticket [$x1,$y1][$x2,$y2] is inside the 5% safe area (x $l..$r, y $t..$b)"
+    }
+    gd_soon=$(iso '+90 minutes'); gd_ago=$(iso '-60 minutes')
+    m7_rm panels/alerts.json qa-pick.json
+    sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
+
+    # Acceptance 5: no opponent abbreviation keeps the text card (no surface, the card's node as before).
+    gd_game predators "Golden Knights" null false UPCOMING "$gd_soon" ""
+    gd_restart; ui=$(ui_text)
+    [[ -z $(gd_board) ]] || m7_fail "board: a game with no opponent abbreviation shows the surface"
+    grep -qE 'content-desc="Hero card: Predators at Golden Knights[^"]*"' <<<"$ui" || m7_fail "board: no text card for a game with no abbreviation"
+    pass "board: no opponent abbreviation keeps the text card"
+
+    # Acceptance 1 (no pick yet): the rink, with the card's sentence as its description; nothing in the hero takes focus.
+    gd_game predators "Golden Knights" '"VGK"' false UPCOMING "$gd_soon" ""
+    gd_restart; ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-board-preds.xml"
+    node=$(gd_board); [[ -n $node ]] || m7_fail "board: no surface (hero_board) for today's game with an abbreviation"
+    grep -qE 'content-desc="Hero card: Predators at Golden Knights[^"]*"' <<<"$node" || m7_fail "board: the surface does not carry the card's sentence"
+    grep -q 'focusable="true"' <<<"$node" && m7_fail "board: the surface is focusable (home-back-twice)"
+    [[ -z $(gd_stub) ]] || m7_fail "board: a pick stub shows with no pick"
+    grep -qE 'text="Away · in 1h [0-9]+m[^"]*"' <<<"$ui" || m7_fail "board: no 'Away · in 1h NNm' meta line beside the stub row"
+    gd_shot 1-preds-no-pick
+    pass "board: today's game with an abbreviation shows the surface, not focusable, with the meta line"
+
+    if [[ $m7_mode == runas ]]; then
+      # Acceptance 1, 2, 6: the planted pick (the 2026-11-13 one) is the stub; Up reaches it, OK opens the ticket, Back
+      # closes it, Down returns to the same tile, and one Back from the stub leaves the app.
+      gd_day=$(TZ=$etz date +%F)
+      gd_pick() { # $1 = analysis text
+        printf '%s' '{"v":1,"team":"predators","date":"'"$gd_day"'","opponent":"VGK","pick":"NSH","puckLine":"NSH +1.5","reason":"Hotter team, better goalie.","short":"6 straight wins, Saros sharper","analysis":"'"$1"'","at":"'"$now"'"}' \
+          | m7_put qa-pick.json
+      }
+      gd_text='Nashville comes into Vegas on a six-game win streak and is 7-1-2 in its last 10, with a +6 goal differential. Vegas is good too: 13-5-2, +15, four straight wins, and 7-3 at home. The edge is in goal: Juuse Saros is at .919 this season against Adin Hill at .903 (neither confirmed at pick time). Vegas is missing defenseman Noah Hanifin; Jonathan Marchessault is day-to-day for Nashville. The books opened Vegas at -163 and moved to -180, which prices Vegas near a 62% win chance. With the hotter team and the better goalie, the Preds at +155 are worth the risk, and Nashville +1.5 only needs them to lose by no more than one goal. Pretend stakes: $50 on the Preds to win, $60 on Nashville +1.5.'
+      gd_pick "$gd_text"
+      gd_restart; ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-board-pick.xml"
+      node=$(gd_stub); [[ -n $node ]] || m7_fail "board: the planted pick shows no stub (hero_pick_stub)"
+      # The stub's words, exactly Picks.text, are looked for on any node, as for the dock pills above: uiautomator shows
+      # a focus target's description on a non-focusable child node, app-wide (pill-a11y-node). On a miss, the nodes
+      # after the stub are printed so the dump says where the words went.
+      if ! grep -qF 'content-desc="Claude&apos;s pick: NSH (+1.5)"' <<<"$ui" && ! grep -qF "content-desc=\"Claude's pick: NSH (+1.5)\"" <<<"$ui"; then
+        echo "---- board diagnostics: the stub's node and the 8 nodes after it"
+        grep -oE '<node [^>]*>' <<<"$ui" | grep -A8 -F 'resource-id="hero_pick_stub"' | sed -E 's/ (checkable|checked|enabled|scrollable|long-clickable|password|selected|package|class|index)="[^"]*"//g' || true
+        m7_fail "board: no node carries the stub's words, Picks.text ('Claude's pick: NSH (+1.5)')"
+      fi
+      grep -q 'focusable="true"' <<<"$node" || m7_fail "board: the pick stub is not a focus target"
+      grep -q 'focusable="true"' <<<"$(gd_board)" && m7_fail "board: the surface is focusable with a pick (home-back-twice)"
+      grep -qF 'Saros' <<<"$ui" && m7_fail "board: more of the pick than Picks.text is on the home screen"
+      gd_shot 1-preds
+      pass "board: the stub's text is exactly Picks.text and nothing else of the pick is on the home screen"
+      if (( napps >= 1 )); then
+        tile=$(focus_after board)
+        key DPAD_UP; ui=$(ui_text)
+        grep -q 'focused="true"' <<<"$(gd_stub)" || m7_fail "board: Up from the apps row ('${tile%%|*}') did not reach the pick stub"
+        gd_shot 2-pick-selected
+        key DPAD_CENTER; sleep 1; ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-board-ticket.xml"
+        grep -qE 'content-desc="Claude(&apos;|.)s pick, full ticket"' <<<"$ui" || m7_fail "board: OK on the stub did not open the full ticket"
+        for t in 'Predators at Golden Knights' 'Back to close' 'Pretend stakes: $50 on the Preds to win, $60 on Nashville +1.5.' '6 straight wins, Saros sharper'; do
+          grep -qF "$t" <<<"$ui" || m7_fail "board: the full ticket does not show '$t'"
+        done
+        gd_shot 3-full-ticket
+        gd_ticket_safe "full ticket"
+        key BACK; sleep 1
+        in_front || m7_fail "board: Back on the full ticket left the app"
+        ui=$(ui_text); grep -qF 'Back to close' <<<"$ui" && m7_fail "board: Back did not close the full ticket"
+        grep -q 'focused="true"' <<<"$(gd_stub)" || m7_fail "board: focus is not back on the stub after the ticket closed"
+        key DPAD_CENTER; sleep 1; key DPAD_CENTER; sleep 1
+        ui=$(ui_text); grep -qF 'Back to close' <<<"$ui" && m7_fail "board: OK did not close the full ticket"
+        key DPAD_DOWN; cur=$(focus_after board)
+        [[ ${cur%%|*} == "${tile%%|*}" ]] || m7_fail "board: Down from the stub reached '${cur%%|*}', not the tile it came from ('${tile%%|*}')"
+        key DPAD_UP
+        sh_ input keyevent KEYCODE_BACK; sleep 2
+        in_front && m7_fail "board: one Back with the stub focused does not leave the app (home-back-twice)"
+        pass "board: Up reaches the stub, OK opens the ticket, Back and OK close it, Down returns to the tile, one Back leaves"
+        # The longest analysis (Picks.MAX_ANALYSIS, 900 characters): a frame to judge that it fits without scrolling.
+        gd_long=$(printf 'Nashville has won six straight and Saros has been the sharper goalie all month. %.0s' {1..12}); gd_long=${gd_long:0:899}.
+        gd_pick "$gd_long"
+        gd_restart; key DPAD_UP; key DPAD_CENTER; sleep 1
+        ui=$(ui_text); grep -qF 'Back to close' <<<"$ui" || m7_fail "board: the full ticket did not open for a 900-character analysis"
+        gd_shot 3-full-ticket-900
+        gd_ticket_safe "full ticket, 900 characters"
+        key BACK; sleep 1
+      else
+        warn "board: stub focus and the full ticket NOT VERIFIED: no other TV app on this image, so no apps row to come from"
+      fi
+      # Acceptance 7: DIM is outline only and the stub is not a focus target (idle_test 30 s: DIM at 30 s).
+      gd_pick "$gd_text"
+      sh_ content insert --uri "content://$PKG.provision/idle_test" --bind seconds:i:30 || fail "board: idle_test insert refused"
+      sh_ am force-stop "$PKG"; sh_ am start -W -n "$MAIN" >/dev/null; t0=$(date +%s)
+      sleep_until "$t0" 36
+      ui=$(ui_text)
+      grep -qF 'resource-id="hero_idle_DIM"' <<<"$ui" || m7_fail "board: DIM not reached $(since "$t0") s after the start"
+      [[ -n $(gd_board) ]] || m7_fail "board: no surface in DIM"
+      grep -q 'focusable="true"' <<<"$(gd_stub)" && m7_fail "board: the pick stub is a focus target in DIM"
+      gd_shot dim
+      sh_ content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true
+      key DPAD_RIGHT
+      pass "board: DIM keeps the surface and the stub, and the stub is not a focus target"
+      m7_rm qa-pick.json
+    else
+      warn "board: the pick stub, the full ticket and the DIM frame NOT VERIFIED: no qa APK (run-as), so no planted pick"
+    fi
+
+    # Acceptance 3: live shows the score (the description says it); final shows it with Final.
+    gd_game predators "Golden Knights" '"VGK"' false LIVE "$gd_ago" ',"ownScore":2,"oppScore":1,"period":"2nd"'
+    gd_restart; ui=$(ui_text)
+    grep -qE 'content-desc="Hero card: Predators 2, Golden Knights 1 · 2nd[^"]*"' <<<"$(gd_board)" || m7_fail "board: the live surface does not carry the score"
+    grep -qE 'text="2nd[^"]*"' <<<"$ui" || m7_fail "board: no period as the live meta line"
+    gd_shot 4-live
+    gd_game predators "Golden Knights" '"VGK"' false FINAL "$gd_ago" ',"ownScore":3,"oppScore":2,"period":"OT"'
+    gd_restart; ui=$(ui_text)
+    grep -qE 'content-desc="Hero card: Final \(OT\) · Predators 3, Golden Knights 2"' <<<"$(gd_board)" || m7_fail "board: the final surface does not carry the score"
+    grep -qF 'text="Final (OT)"' <<<"$ui" || m7_fail "board: no 'Final (OT)' meta line"
+    gd_shot 4-final
+    pass "board: live and final show the score with the period or Final"
+
+    # Acceptance 4: Ohio State is a field.
+    gd_game ohio-state "Michigan" '"MICH"' true UPCOMING "$gd_soon" ""
+    gd_restart; ui=$(ui_text)
+    grep -qE 'content-desc="Hero card: Ohio State vs Michigan[^"]*"' <<<"$(gd_board)" || m7_fail "board: no surface for the Ohio State game"
+    grep -qE 'text="Home · in 1h [0-9]+m[^"]*"' <<<"$ui" || m7_fail "board: no 'Home · in 1h NNm' meta line"
+    gd_shot 5-buckeyes
+    pass "board: Ohio State's game shows the field"
+    sh_ input keyevent KEYCODE_BACK; sleep 2
+    in_front && m7_fail "board: one Back with the surface showing does not leave the app (home-back-twice)"
+    no_app_crash_yet "board"
+  fi
+  sh_ content delete --uri "content://$PKG.provision/idle_test" >/dev/null 2>&1 || true
+  m7_rm qa-pick.json
   sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
   sh_ content insert --uri "content://$PKG.provision/quiet" --bind on:b:false >/dev/null 2>&1 || true
   m7_rm agenda-cache.json panels/alerts.json panels/games.json

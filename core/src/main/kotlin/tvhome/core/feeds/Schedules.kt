@@ -125,7 +125,7 @@ object Schedules {
         }
         if (!plausible(start, now)) return Row.Skip
         val scored = phase != GamePhase.UPCOMING
-        return Row.Game(GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period, nhlNetworks(g, isHome)))
+        return Row.Game(GameInfo(start, opponent, isHome, phase, if (scored) own["score"].int()?.takeIf { it in 0..999 } else null, if (scored) opp["score"].int()?.takeIf { it in 0..999 } else null, period, nhlNetworks(g, isHome), GameInfo.abbr(opp["abbrev"].str())))
     }
 
     private fun name(e: JsonElement?): String? = (e as? JsonObject)?.get("default").str()
@@ -195,6 +195,7 @@ object Schedules {
         return Row.Game(GameInfo(
             start, opponent, isHome, phase,
             if (scored) score(own["score"]) else null, if (scored) score(opp["score"]) else null, period, espnNetworks(comp, isHome),
+            GameInfo.abbr(oppTeam?.get("abbreviation").str()),
         ))
     }
 

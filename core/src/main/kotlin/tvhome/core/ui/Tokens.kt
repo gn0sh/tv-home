@@ -95,6 +95,9 @@ object GlanceTokens {
     const val HERO_TEXT = 0xF4F1EA
     const val HERO_SECONDARY = 0xD5DCE8
 
+    /** Body text of the pick's full ticket, on the ticket's own dark fill ([BoardPalette.ticketBody]). */
+    const val TICKET_TEXT = 0xF2F4F8
+
     /** Severe-alert card: hero text on a deep red fill. */
     const val ALERT_FILL = 0x5C1010
     const val ALERT_TEXT = HERO_TEXT

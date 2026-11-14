@@ -29,6 +29,8 @@ internal object PanelCaches {
         val team: String, val start: String, val opponent: String, val home: Boolean, val phase: String,
         val ownScore: Int? = null, val oppScore: Int? = null, val period: String? = null,
         val networks: List<String> = emptyList(),
+        /** Null default: a cache written before the scoreboard still parses. */
+        val opponentAbbr: String? = null,
     )
 
     val weather: KSerializer<WeatherNow> = mapped(WeatherDto.serializer(),
@@ -56,7 +58,7 @@ internal object PanelCaches {
 
     /** Games for [teams] only; a game of a team no longer followed is dropped, not an error. */
     fun games(teams: List<TeamConfig>): KSerializer<List<TeamGame>> = mapped(ListSerializer(GameDto.serializer()),
-        { list -> list.map { (t, g) -> GameDto(t.key, g.start.toString(), g.opponent, g.home, g.phase.name, g.ownScore, g.oppScore, g.period, g.networks) } },
+        { list -> list.map { (t, g) -> GameDto(t.key, g.start.toString(), g.opponent, g.home, g.phase.name, g.ownScore, g.oppScore, g.period, g.networks, g.opponentAbbr) } },
         { list ->
             require(list.size <= MAX_GAMES * teams.size.coerceAtLeast(1))
             list.mapNotNull { d ->
@@ -69,6 +71,7 @@ internal object PanelCaches {
                     GamePhase.entries.first { it.name == d.phase }, d.ownScore, d.oppScore,
                     d.period?.let { requireNotNull(Feeds.clean(it)) },
                     d.networks.also { require(it.size <= GameInfo.MAX_NETWORKS) }.map { requireNotNull(Feeds.clean(it)) },
+                    GameInfo.abbr(d.opponentAbbr), // the parse rule again: a bad value is no abbreviation, not no cache
                 ))
             }
         })

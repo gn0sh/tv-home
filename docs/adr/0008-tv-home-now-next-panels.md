@@ -106,6 +106,16 @@ safe margins. ux-designer may move numbers; the structure is fixed.
   frame and then fades to the usual background over 600 ms.
   Image budget: `hero_arena.webp` is 32 KB; the eight backdrops total about 135 KB (each under 120 KB).
 
+**Addendum 2026-11-14: game-day scoreboard zones** (`docs/design/tv-home-game-day-scoreboard.md`). While the context
+card has a scoreboard (today's game, both abbreviations known), `HeroZones.gameLayout(appsTop)` replaces the two hero
+zones: `GAME_LEFT = Zone(64, 112, 456, 270)` for Now/Next and `GAME_BOARD = Zone(540, 106, 676, 204)` for the board
+(surface 150, gap 10, stub row 44). Both end `APPS_GAP` above the apps row. A shorter board zone shrinks the surface
+down to 110 dp, its type scaling with it (the default 108 dp tiles give 140); with less room `gameLayout` is null and
+the text card shows in the usual zones, exactly as before. With the board the backdrop draws no image and no scrim:
+the team gradient, a glow behind the surface and two light cones (`BoardPalette`, `BoardTokens`), under which the
+hero text keeps 7:1 (`GlanceTokensTest`); the edge line and the weather overlay are not drawn. The pick stub is the
+hero's only focus target, a leaf (home-back-twice); the full ticket is a dialog.
+
 ### 4. OLED profile (LG vs Vizio, drift, idle dim)
 - **Profile.** `TvProfile.LG_OLED` (drift on, dim at 10 min, near-black at 30 min) and `TvProfile.VIZIO_LED` (drift
   off, dim at 30 min, no near-black). Resolution order: adb setting `tv_profile` (`lg` | `vizio`) if set, else EDID via

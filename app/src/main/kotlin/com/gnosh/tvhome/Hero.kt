@@ -34,6 +34,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -93,6 +94,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import tvhome.core.feeds.FeedsSnapshot
 import tvhome.core.feeds.GameDay
 import tvhome.core.feeds.GamePhase
+import tvhome.core.feeds.Pick
 import tvhome.core.feeds.WatchDefaults
 import tvhome.core.feeds.WatchMap
 import tvhome.core.feeds.WatchTarget
@@ -105,6 +107,8 @@ import tvhome.core.feeds.Precip
 import tvhome.core.feeds.Location
 import tvhome.core.ui.BackdropArt
 import tvhome.core.ui.BackdropSkyline
+import tvhome.core.ui.BoardPalette
+import tvhome.core.ui.BoardTokens
 import tvhome.core.ui.SkyNow
 import tvhome.core.ui.SunArc
 import tvhome.core.ui.SunSpot
@@ -215,7 +219,7 @@ fun HeroLayer(
     val inputs = remember(now, snap, agenda, settings, is24h, quiet) {
         // isInstalled reads a set built on IO (HeroSettings.read): no package manager call on the main thread.
         GlanceInputs(
-            instant, zone, is24h, snap, settings.switches, settings.location != null, agenda, settings.travel,
+            instant, zone, is24h, if (settings.qaPicks.isEmpty()) snap else snap.copy(picks = snap.picks + settings.qaPicks), settings.switches, settings.location != null, agenda, settings.travel,
             quiet = quiet, watchMap = settings.watchMap, isInstalled = { it in settings.installed },
         )
     }
@@ -292,10 +296,17 @@ fun HeroLayer(
         text = if (dim) OledTokens.DIM_TEXT else resolved.text,
         secondary = if (dim) OledTokens.DIM_TEXT else resolved.secondaryText,
     )
+    // Game-day scoreboard: only while the card has a board, its team has a palette and the zones have room for it.
+    // Otherwise everything below is as it was (the text card in the usual zones, the usual backdrop).
+    val gameCard = (glance.card as? ContextCard.Game)?.takeIf { it.board != null }
+    val boardPalette = gameCard?.let { BoardPalette.of(it.teamKey) }
+    val gameZones = if (boardPalette != null) HeroZones.gameLayout(appsTop.value) else null
+    val boardArt = boardPalette?.takeIf { gameZones != null }
     // Not focusable; the test tag lets the emulator QA read the idle state (scripts/ci/emulator-qa.sh).
     Box(modifier.fillMaxSize().testTag(HERO_IDLE_TAG_PREFIX + idle.value.name)) {
         HeroBackdrop(
             resolved, weather?.precipNow,
+            boardArt = boardArt,
             settled = settings.loaded,
             screenColor = screenColor,
             sun = { sun.value },
@@ -311,8 +322,9 @@ fun HeroLayer(
         // Game day accent (preds-arena): a thin full-strength team-colour line just under the hero text, in the gap
         // above the apps row where no text sits. It drifts with the text (OLED burn-in: a fixed line would mark the
         // panel), stays inside the drift's travel at both ends, and is hidden in DIM and Quiet (edge-line-burn-in).
+        // Not drawn with the scoreboard: the boards carry the team colour.
         val edge = resolved.edge
-        if (edge != null && !dim && !quiet) {
+        if (edge != null && !dim && !quiet && boardArt == null) {
             Box(
                 Modifier
                     .offset(
@@ -325,8 +337,14 @@ fun HeroLayer(
             )
         }
         HeroTopStrip(glance, resolved, ink, dim, drifting, zones.top)
-        HeroNowNext(glance.nowNext, ink, drifting, zones.left)
-        HeroCard(glance.card, ink, drifting, zones.right)
+        val board = gameCard?.board
+        if (gameCard != null && board != null && boardArt != null && gameZones != null) {
+            HeroNowNext(glance.nowNext, ink, drifting, gameZones.left)
+            HeroGameBoard(gameCard, board, boardArt, gameZones, dim, ink.text, drifting)
+        } else {
+            HeroNowNext(glance.nowNext, ink, drifting, zones.left)
+            HeroCard(glance.card, ink, drifting, zones.right)
+        }
         // In the home screen's reserved brief row (HomeLayout.BRIEF_ROW_DP, the zone map's bottom band): the text box sits
         // inside it with the drift's travel above and below, so it never leaves the row or the safe area.
         glance.brief?.let { line ->
@@ -391,6 +409,8 @@ private data class HeroSettings(
     val labels: Map<String, String> = emptyMap(),
     /** False until the settings have been read once: whether a location is set is not known yet. */
     val loaded: Boolean = true,
+    /** qa build only ([PickQaHook]): picks planted by the emulator QA, by team key. Always empty in release and debug. */
+    val qaPicks: Map<String, Pick> = emptyMap(),
 ) {
     companion object {
         /** Not read yet. */
@@ -414,6 +434,7 @@ private data class HeroSettings(
                 FeedSettings.watchMap(context).orElse(WatchDefaults.map(apps)),
                 installed,
                 apps.associate { it.packageName to it.label },
+                qaPicks = PickQaHook.planted(context),
             ).also { last = it }
         }
     }
@@ -532,19 +553,23 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier, zone: He
  */
 @Composable
 private fun PickDialog(full: String, ink: HeroInk, onDismiss: () -> Unit) {
+    // The dialog's window takes LocalDensity from the real window: the design canvas density is provided again inside.
+    val canvas = LocalDensity.current
     // Wider than the platform default, so the longest analysis (Picks.MAX_ANALYSIS) fits the screen without scrolling.
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Text(
-            full,
-            color = rgb(PICK_DIALOG_TEXT),
-            fontSize = GlanceTokens.DATE_SP.sp,
-            lineHeight = (GlanceTokens.DATE_SP + 8).sp,
-            modifier = Modifier
-                .width(900.dp)
-                .background(rgb(PICK_DIALOG_FILL), RoundedCornerShape(16.dp))
-                .border(3.dp, rgb(ink.secondary), RoundedCornerShape(16.dp))
-                .padding(32.dp),
-        )
+        CompositionLocalProvider(LocalDensity provides canvas) {
+            Text(
+                full,
+                color = rgb(PICK_DIALOG_TEXT),
+                fontSize = GlanceTokens.DATE_SP.sp,
+                lineHeight = (GlanceTokens.DATE_SP + 8).sp,
+                modifier = Modifier
+                    .width(900.dp)
+                    .background(rgb(PICK_DIALOG_FILL), RoundedCornerShape(16.dp))
+                    .border(3.dp, rgb(ink.secondary), RoundedCornerShape(16.dp))
+                    .padding(32.dp),
+            )
+        }
     }
 }
 
@@ -669,6 +694,11 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
 private fun HeroBackdrop(
     theme: HeroTheme,
     precip: Precip?,
+    /**
+     * Set while the game-day scoreboard shows: no arena or stadium image, no scrim and no weather overlay, but the team
+     * gradient with a soft glow behind the surface and two faint light cones from the top (mockup.html `.art`).
+     */
+    boardArt: BoardPalette? = null,
     settled: Boolean,
     sun: () -> SunSpot?,
     screenColor: () -> Int,
@@ -686,8 +716,9 @@ private fun HeroBackdrop(
     }
     var backdrop by remember { mutableStateOf<Backdrop?>(null) }
     val imageAlpha = remember { Animatable(0f) }
-    LaunchedEffect(ready, theme.motif) {
-        if (!ready) return@LaunchedEffect
+    val plain = boardArt != null
+    LaunchedEffect(ready, theme.motif, plain) {
+        if (!ready || plain) return@LaunchedEffect // the scoreboard's backdrop has no image: nothing is decoded
         if (backdrop?.motif == theme.motif) { imageAlpha.snapTo(1f); return@LaunchedEffect } // back to the shown image
         // Decode first, so the current image stays up until the new one is ready (backdrop-alpha-stuck).
         val image = withContext(Dispatchers.IO) { decodeBackdrop(context, theme.motif) } ?: return@LaunchedEffect
@@ -696,7 +727,8 @@ private fun HeroBackdrop(
         if (frozen) imageAlpha.snapTo(1f) else imageAlpha.animateTo(1f, tween(CROSSFADE_MS))
     }
     // No overlay (and no tick) when its capped alpha would be invisible: the Predators' indoor arena (BackdropArt).
-    val overlay = precip?.takeIf { BackdropArt.showsPrecip(theme, it) }
+    // None with the scoreboard either: its backdrop has no scrim for the particle caps to rely on.
+    val overlay = precip?.takeIf { !plain && BackdropArt.showsPrecip(theme, it) }
     val animate = ready && !frozen && (theme.motif == HeroMotif.SNOW || overlay != null)
     // The particle tick runs only while the activity is STARTED (no animation work behind another app).
     val owner = LocalLifecycleOwner.current
@@ -739,9 +771,18 @@ private fun HeroBackdrop(
                 val art = ArtFit(w, h)
                 val sky = sunLook?.let { skyPath(art, BackdropSkyline.of(theme.motif)) }
                 var sunCache: Pair<SunSpot, SunBrushes>? = null
+                val board = boardArt?.let { boardBackdrop(it, w, h) }
                 onDrawBehind {
                     // Until the settings are read, the plain screen background: the scene is not known yet.
                     val screen = screenColor()
+                    if (board != null && settled) {
+                        // The scoreboard's own backdrop: its colours are final, so no scrim; in DIM the usual black one.
+                        val dim = dimmed()
+                        drawBoardBackdrop(board, lit = !dim)
+                        if (dim) drawRect(Color.Black, alpha = 1f - OledTokens.DIM_BACKDROP_BRIGHTNESS)
+                        drawRect(fadeTo(screen))
+                        return@onDrawBehind
+                    }
                     if (settled) drawRect(base) else drawRect(rgb(screen))
                     // Read in the draw phase only: a decode or a crossfade step redraws this layer, nothing else.
                     val image = backdrop?.takeIf { it.motif == theme.motif }?.image
@@ -791,6 +832,74 @@ private fun HeroBackdrop(
 }
 
 private class Backdrop(val motif: HeroMotif, val image: ImageBitmap)
+
+/** The scoreboard backdrop's brushes and cone shapes, built once per size and palette. */
+private class BoardBackdrop(val base: Brush, val glow: Brush, val glowAt: Offset, val glowR: Float, val cones: List<ConeSlice>)
+
+/** One horizontal slice of a light cone: its [brush] fades across the cone, [alpha] down the screen. */
+private class ConeSlice(val path: Path, val brush: Brush, val alpha: Float)
+
+/**
+ * The cones' vertical fade, as fractions of the backdrop's height (396 of the 720 design canvas): full strength down to
+ * [CONE_FADE_FROM], then evenly to nothing at [CONE_FADE_TO] (y 293, above the top of the apps row at about 300).
+ * Nothing of a cone is drawn below that, so none shows behind the apps row or the dock.
+ */
+private const val CONE_FADE_FROM = 0.10f
+private const val CONE_FADE_TO = 0.74f
+
+/** Slices in the fade: one step of alpha (the cone's own 0.07 at most, over 24) is under 1/255, so no banding can show. */
+private const val CONE_FADE_STEPS = 24
+
+/**
+ * mockup.html `.art` on its 1280 x 400 box: a three-stop team gradient, a 560 x 190 glow ellipse centred at (890, 190)
+ * behind the surface, and two light cones 17 degrees wide from above the top edge at x 700 and 1080. The cones fade
+ * out down the hero band ([CONE_FADE_TO]): each is cut here, once, into horizontal slices of falling alpha, on whole
+ * pixel rows so the slices meet without a seam (snow-redraw-scope: nothing is built in the draw phase).
+ */
+private fun boardBackdrop(p: BoardPalette, w: Float, h: Float): BoardBackdrop {
+    val base = Brush.verticalGradient(0f to rgb(p.artTop), p.artMidAt to rgb(p.artMid), 1f to rgb(p.artBottom))
+    val glowAt = Offset(w * 890f / 1280f, h * 190f / 400f)
+    val glowR = h * 190f / 400f
+    val glow = Brush.radialGradient(listOf(rgb(p.glow, BoardTokens.GLOW_ALPHA), rgb(p.glow, 0f)), glowAt, glowR)
+    val light = rgb(p.cone, p.coneAlpha)
+    // (apex x, the cone's first edge in degrees clockwise from straight up): the CSS conic gradients' `from` angles.
+    // (top, bottom, alpha) of each slice: the full-strength part from above the apex, then the fade's steps.
+    val fadeFrom = kotlin.math.round(h * CONE_FADE_FROM)
+    val fadeSpan = h * (CONE_FADE_TO - CONE_FADE_FROM)
+    val rows = listOf(Triple(-h, fadeFrom, 1f)) + (0 until CONE_FADE_STEPS).map { i ->
+        Triple(
+            kotlin.math.round(h * CONE_FADE_FROM + fadeSpan * i / CONE_FADE_STEPS),
+            kotlin.math.round(h * CONE_FADE_FROM + fadeSpan * (i + 1) / CONE_FADE_STEPS),
+            1f - (i + 0.5f) / CONE_FADE_STEPS,
+        )
+    }
+    val cones = listOf(700f to 168.0, 1080f to 176.0).flatMap { (x, from) ->
+        val apex = Offset(w * x / 1280f, -h * 40f / 400f)
+        val reach = h * 1.4f
+        fun edge(deg: Double): Offset {
+            val a = Math.toRadians(deg)
+            return Offset(apex.x + reach * kotlin.math.sin(a).toFloat(), apex.y - reach * kotlin.math.cos(a).toFloat())
+        }
+        val first = edge(from)
+        val last = edge(from + 17.0)
+        val path = Path().apply { moveTo(apex.x, apex.y); lineTo(first.x, first.y); lineTo(last.x, last.y); close() }
+        // Brightest 8 degrees in, fading to nothing at both edges (across the cone, between its two far corners).
+        val brush = Brush.linearGradient(0f to Color.Transparent, 8f / 17f to light, 1f to Color.Transparent, start = first, end = last)
+        rows.filter { (top, bottom, _) -> bottom > top }.map { (top, bottom, alpha) ->
+            val row = Path().apply { moveTo(-w, top); lineTo(2f * w, top); lineTo(2f * w, bottom); lineTo(-w, bottom); close() }
+            ConeSlice(Path.combine(PathOperation.Intersect, path, row), brush, alpha)
+        }
+    }
+    return BoardBackdrop(base, glow, glowAt, glowR, cones)
+}
+
+/** [lit] is false in DIM: the gradient only, no glow and no cones. */
+private fun DrawScope.drawBoardBackdrop(b: BoardBackdrop, lit: Boolean) {
+    drawRect(b.base)
+    if (!lit) return
+    scale(560f / 190f, 1f, pivot = b.glowAt) { drawCircle(b.glow, b.glowR, b.glowAt) }
+    for (c in b.cones) drawPath(c.path, c.brush, alpha = c.alpha)
+}
 
 private const val CROSSFADE_MS = 700
 
