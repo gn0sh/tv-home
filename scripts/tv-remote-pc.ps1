@@ -152,7 +152,12 @@ function Send-Key([string]$code) {
 
 function Send-App([string]$pkg) {
     if ($Apps.Values -notcontains $pkg) { return }
-    Send-Tv "monkey -p $pkg -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1"
+    if ($pkg -eq 'com.gnosh.tvhome') {
+        # TV Home has two TV launcher entries (the dashboard and "Ask Claude"); monkey could pick either.
+        Send-Tv "am start -n com.gnosh.tvhome/.AgendaActivity -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER >/dev/null 2>&1"
+    } else {
+        Send-Tv "monkey -p $pkg -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1"
+    }
 }
 
 function Send-Text([string]$text) {
