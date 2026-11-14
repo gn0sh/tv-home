@@ -72,6 +72,43 @@ object HeroZones {
         fun fit(z: Zone) = z.copy(h = (limit - z.y).coerceIn(0, z.h))
         return Layout(TOP_STRIP, fit(HERO_LEFT), fit(HERO_RIGHT))
     }
+
+    // Game-day zones (ADR 0008 addendum; docs/design/tv-home-game-day-scoreboard.md section 2), used only while the
+    // context card has a scoreboard: Now/Next narrows, and the board (surface, gap, stub row) takes the right.
+    val GAME_LEFT = Zone(64, 112, 456, 270)
+    val GAME_BOARD = Zone(540, 106, 676, 204)
+    const val BOARD_SURFACE_DP = 150
+    const val BOARD_SURFACE_MIN_DP = 110
+    const val BOARD_GAP_DP = 10
+    const val BOARD_STUB_DP = 44
+
+    /** The game-day frame: [board] is [surface] over [stub] with [BOARD_GAP_DP] between. */
+    data class GameLayout(val top: Zone, val left: Zone, val board: Zone, val surface: Zone, val stub: Zone) {
+        val all get() = listOf(top, left, board)
+
+        /** Type and line weights on the surface scale with its height. */
+        val scale: Float get() = surface.h.toFloat() / BOARD_SURFACE_DP
+    }
+
+    /**
+     * The game-day zones when the apps row starts at [appsTop], ending [APPS_GAP] above it like [layout]. A board zone
+     * shorter than the design's shrinks the surface, down to [BOARD_SURFACE_MIN_DP]; with less room than that there is
+     * no board (null) and the caller shows the text card in [layout]'s zones.
+     */
+    fun gameLayout(appsTop: Int?): GameLayout? {
+        val limit = minOf(appsTop ?: SCREEN_H, SCREEN_H - SAFE_Y) - APPS_GAP
+        val boardH = (limit - GAME_BOARD.y).coerceAtMost(GAME_BOARD.h)
+        val surfaceH = boardH - BOARD_GAP_DP - BOARD_STUB_DP
+        if (surfaceH < BOARD_SURFACE_MIN_DP) return null
+        val board = GAME_BOARD.copy(h = boardH)
+        return GameLayout(
+            TOP_STRIP,
+            GAME_LEFT.copy(h = (limit - GAME_LEFT.y).coerceIn(0, GAME_LEFT.h)),
+            board,
+            surface = board.copy(h = surfaceH),
+            stub = board.copy(y = board.bottom - BOARD_STUB_DP, h = BOARD_STUB_DP),
+        )
+    }
 }
 
 /**

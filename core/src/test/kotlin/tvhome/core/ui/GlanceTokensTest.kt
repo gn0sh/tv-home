@@ -30,6 +30,91 @@ class GlanceTokensTest {
         assertTrue(OledTokens.DIM_BACKDROP_BRIGHTNESS < GlanceTokens.BACKDROP_BRIGHTNESS, "DIM is darker than active")
     }
 
+    // --- Game-day scoreboard (design section 6) ----------------------------------------------------------------------
+
+    private val preds = BoardPalette.PREDATORS
+    private val osu = BoardPalette.OHIO_STATE
+
+    /** The lightest surface paint the abbreviations touch: the top-lit gradient at the letters' cap line. */
+    private val rinkUnderLetters = BoardTokens.rinkAt(BoardTokens.LETTER_TOP)
+    private val fieldUnderLetters = BoardTokens.fieldAt(BoardTokens.LETTER_TOP, band = true)
+
+    @Test fun boardSurfaceGradientsRunLightToDark() {
+        assertEquals(BoardTokens.RINK_TOP, BoardTokens.rinkAt(0f))
+        assertEquals(BoardTokens.RINK_MID, BoardTokens.rinkAt(BoardTokens.RINK_MID_AT))
+        assertEquals(BoardTokens.RINK_BOTTOM, BoardTokens.rinkAt(1f))
+        assertEquals(BoardTokens.FIELD_TOP, BoardTokens.fieldAt(0f))
+        assertEquals(BoardTokens.FIELD_BOTTOM, BoardTokens.fieldAt(1f))
+        for (i in 0 until 20) {
+            assertTrue(Tokens.luminance(BoardTokens.rinkAt(i / 20f)) >= Tokens.luminance(BoardTokens.rinkAt((i + 1) / 20f)))
+            assertTrue(Tokens.luminance(BoardTokens.fieldAt(i / 20f)) >= Tokens.luminance(BoardTokens.fieldAt((i + 1) / 20f)))
+        }
+        assertTrue(BoardTokens.LETTER_TOP in 0.25f..0.32f, "the cap line: ${BoardTokens.LETTER_TOP}")
+    }
+
+    @Test fun boardLetteringThatKeepsSevenToOne() {
+        assertSeven(preds.opp, rinkUnderLetters, "opponent on the rink")
+        assertSeven(osu.own, fieldUnderLetters, "Ohio State on the field (on a light band)")
+        // Time and score: white over the rink at its lightest (inside the circle, from its top) and on the field's box.
+        assertSeven(BoardTokens.CENTER_TEXT, BoardTokens.rinkAt(0f), "time and score on the rink")
+        assertSeven(BoardTokens.CENTER_TEXT, BoardTokens.CENTRE_BOX, "time on the field's centre box")
+        assertSeven(BoardTokens.CENTER_TEXT, BoardTokens.fieldAt(0f, band = true), "score on the field")
+        // The sheen's peak over the rink under white lettering.
+        assertSeven(preds.opp, BoardTokens.mix(rinkUnderLetters, 0xFFFFFF, BoardTokens.SHEEN_ALPHA), "opponent under the sheen")
+    }
+
+    /**
+     * The approved palette (mockup.html, frames 1 and 5) puts three large-lettering pairs under the design's 7:1:
+     * Predators gold on the lit top of the rink, the opponent's grey on a light band of the field, and white on the
+     * scarlet ticket stub. They are 60 to 132 dp bold (WCAG AAA for large text is 4.5:1), so this pins what ships and
+     * fails if any gets worse. Raising them to 7:1 means changing an approved colour: a design decision (handoff).
+     */
+    @Test fun boardLetteringBelowSevenIsPinned() {
+        fun pinned(fg: Int, bg: Int, atLeast: Double, what: String) {
+            val c = Tokens.contrast(fg, bg)
+            assertTrue(c >= atLeast, "$what: ${"%.2f".format(c)}:1")
+            assertTrue(c >= 4.5, "$what: under large-text AAA")
+            assertTrue(c < 7.0, "$what now keeps 7:1 (${"%.2f".format(c)}): move it to boardLetteringThatKeepsSevenToOne")
+        }
+        pinned(preds.own, rinkUnderLetters, 5.9, "Predators gold on the rink at the cap line")
+        pinned(osu.opp, fieldUnderLetters, 6.7, "opponent grey on a light field band at the cap line")
+        pinned(osu.ticketInk, osu.ticketStub, 6.7, "white on the scarlet ticket stub")
+        // Lower on the surface the same pairs pass (the letters' baseline is at 0.71 of the height).
+        assertSeven(preds.own, BoardTokens.rinkAt(0.70f), "gold on the lower rink")
+        assertSeven(osu.opp, BoardTokens.fieldAt(0.5f, band = true), "opponent grey on the lower field")
+    }
+
+    @Test fun stubTextKeepsSevenToOne() {
+        for ((name, p) in listOf("Predators" to preds, "Ohio State" to osu)) {
+            assertSeven(p.stubAccent, p.stubFill, "$name stub label")
+            assertSeven(p.stubText, p.stubFill, "$name stub pick")
+            assertSeven(p.focusInk, p.focusFill, "$name focused stub")
+            // DIM: outline and text only, on the dimmed backdrop.
+            assertSeven(OledTokens.DIM_TEXT, dimField, "$name stub in DIM")
+        }
+    }
+
+    @Test fun ticketTextKeepsSevenToOne() {
+        for ((name, p) in listOf("Predators" to preds, "Ohio State" to osu)) {
+            assertSeven(GlanceTokens.TICKET_TEXT, p.ticketBody, "$name ticket body")
+            assertSeven(GlanceTokens.HERO_SECONDARY, p.ticketBody, "$name ticket secondary (the time, Back to close)")
+            assertSeven(p.ticketAccent, p.ticketBody, "$name stakes")
+        }
+        assertSeven(preds.ticketInk, preds.ticketStub, "Predators ticket stub")
+    }
+
+    /** With the board there is no scrim: the hero text sits on the board backdrop itself (gradient, glow, light cone). */
+    @Test fun heroTextKeepsSevenToOneOnTheBoardBackdrop() {
+        for ((name, p) in listOf("Predators" to preds, "Ohio State" to osu)) {
+            for (base in listOf(p.artTop, p.artMid, p.artBottom)) {
+                val worst = BoardTokens.mix(BoardTokens.mix(base, p.glow, BoardTokens.GLOW_TEXT_MAX), p.cone, p.coneAlpha)
+                assertSeven(GlanceTokens.HERO_TEXT, worst, "$name hero text on the board backdrop")
+                assertSeven(GlanceTokens.HERO_SECONDARY, worst, "$name hero secondary on the board backdrop")
+            }
+        }
+        assertTrue(BoardTokens.GLOW_TEXT_MAX < BoardTokens.GLOW_ALPHA)
+    }
+
     @Test fun heroTextKeepsSevenToOneOverAWhitePixelAtTheScrim() {
         assertSeven(GlanceTokens.HERO_TEXT, activeField, "hero text")
         assertSeven(GlanceTokens.HERO_SECONDARY, activeField, "hero secondary (line 2, age, chip, date)")

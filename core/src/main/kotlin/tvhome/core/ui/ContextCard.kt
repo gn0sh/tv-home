@@ -38,6 +38,13 @@ sealed interface ContextCard {
         val pick: String? = null,
         /** The whole pick and its full reason ([Picks.full]) for the pop-up; non-null makes the card selectable. */
         val pickFull: String? = null,
+        /**
+         * The game-day scoreboard, for today's game when both abbreviations are known; null keeps the text card exactly
+         * as it was (and the [NEXT_GAME] card is always text). [line] stays filled: it is the content description.
+         */
+        val board: Scoreboard? = null,
+        /** The pick as a full ticket, for the board's dialog; set only together with [board] and [pick]. */
+        val ticket: Ticket? = null,
     ) : ContextCard {
         companion object { const val NEXT_GAME = "Next game" }
     }
@@ -86,7 +93,13 @@ fun contextCard(
         }
         val line = GameDay.line(game, now, zone).let { if (tv != null) "$it · $tv" else it }
         val p = if (game.game.phase == GamePhase.FINAL) null else Picks.forGame(picks[game.team.key], game, now, zone)
-        return ContextCard.Game(line, game.team.key, game.game.phase, network, pick = p?.let(Picks::text), pickFull = p?.let(Picks::full))
+        // The board's meta names the network only when no Watch pill does (the pill already names it).
+        val board = Scoreboard.of(game, now, zone, is24h, tv.takeIf { watch == null })
+        val ticket = if (board != null && p != null) runCatching { TicketText.ticket(p, game, zone, is24h) }.getOrNull() else null
+        return ContextCard.Game(
+            line, game.team.key, game.game.phase, network, pick = p?.let(Picks::text), pickFull = p?.let(Picks::full),
+            board = board, ticket = ticket,
+        )
     }
     if (next != null) {
         return ContextCard.Game(GameDay.nextLine(next, now, zone, is24h), next.team.key, next.game.phase, null, ContextCard.Game.NEXT_GAME)

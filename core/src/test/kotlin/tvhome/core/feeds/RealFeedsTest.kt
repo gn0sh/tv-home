@@ -14,7 +14,7 @@ class RealFeedsTest {
         val games = Schedules.parse(Teams.PREDATORS, Fixtures.text("nhl-week.json"), captured)!!
         assertEquals(2, games.size)
         val (a, b) = games
-        assertEquals(GameInfo(Instant.parse("2026-11-04T01:00:00Z"), "Hurricanes", true, GamePhase.UPCOMING, null, null, null, listOf("SCRIPPS")), a)
+        assertEquals(GameInfo(Instant.parse("2026-11-04T01:00:00Z"), "Hurricanes", true, GamePhase.UPCOMING, null, null, null, listOf("SCRIPPS"), "CAR"), a)
         assertEquals(Instant.parse("2026-11-06T02:30:00Z"), b.start)
         assertEquals(GamePhase.UPCOMING, b.phase)
         assertFalse(b.home, "away game")
@@ -36,7 +36,7 @@ class RealFeedsTest {
         val games = Schedules.parse(Teams.OHIO_STATE, Fixtures.text("espn-team-194.json"), captured)!!
         assertEquals(2, games.size)
         val (a, b) = games
-        assertEquals(GameInfo(Instant.parse("2026-09-05T16:30:00Z"), "Ball State", true, GamePhase.FINAL, 56, 3, null, listOf("BTN")), a)
+        assertEquals(GameInfo(Instant.parse("2026-09-05T16:30:00Z"), "Ball State", true, GamePhase.FINAL, 56, 3, null, listOf("BTN"), "BALL"), a)
         assertEquals("Texas", b.opponent); assertFalse(b.home)
         assertEquals(23, b.ownScore); assertEquals(24, b.oppScore)
     }
