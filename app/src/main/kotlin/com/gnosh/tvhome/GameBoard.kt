@@ -34,7 +34,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -234,6 +233,7 @@ private fun BoardSurface(b: Scoreboard, p: BoardPalette, dim: Boolean, modifier:
             val inset = 2f * u
             val radius = minOf((if (rink) BoardTokens.RINK_RADIUS else BoardTokens.FIELD_RADIUS) * u, h / 2 - inset)
             val outline = Path().apply { addRoundRect(RoundRect(inset, inset, w - inset, h - inset, CornerRadius(radius))) }
+            val marks = if (rink && !dim) iceMarks(sx, u) else null
             val paint = if (rink) {
                 Brush.verticalGradient(0f to rgb(BoardTokens.RINK_TOP), BoardTokens.RINK_MID_AT to rgb(BoardTokens.RINK_MID), 1f to rgb(BoardTokens.RINK_BOTTOM))
             } else {
@@ -261,7 +261,7 @@ private fun BoardSurface(b: Scoreboard, p: BoardPalette, dim: Boolean, modifier:
                         scale(w / h, 1f, pivot = centre) { drawCircle(vignette, 0.75f * h, centre) }
                         if (rink) {
                             drawRect(sheen)
-                            drawPath(iceMarks(sx, u), Color.White.copy(alpha = 0.05f), style = Stroke(1.5f * u))
+                            if (marks != null) drawPath(marks, Color.White.copy(alpha = 0.05f), style = Stroke(1.5f * u))
                         }
                     }
                     drawPath(outline, rgb(p.boards), style = Stroke(3.5f * u))
@@ -316,7 +316,8 @@ private fun DrawScope.drawRinkLines(sx: Float, u: Float, circle: Boolean) {
     val blue = rgb(BoardTokens.BLUE_LINE, 0.75f)
     val red = rgb(BoardTokens.RED_LINE, 0.9f)
     val goal = rgb(BoardTokens.RED_LINE, 0.6f)
-    for (f in floatArrayOf(0.36f, 0.64f)) drawLine(blue, Offset(w * f, 0f), Offset(w * f, h), strokeWidth = 5f * u)
+    drawLine(blue, Offset(w * 0.36f, 0f), Offset(w * 0.36f, h), strokeWidth = 5f * u)
+    drawLine(blue, Offset(w * 0.64f, 0f), Offset(w * 0.64f, h), strokeWidth = 5f * u)
     if (circle) {
         val r = BoardTokens.CENTRE_CIRCLE_R * u
         drawLine(red, Offset(w / 2, 0f), Offset(w / 2, h / 2 - r), strokeWidth = 4f * u)
@@ -433,12 +434,16 @@ private fun PickStub(text: String, p: BoardPalette, dim: Boolean, onOpen: (() ->
             Text(label, color = accent, fontSize = 24.sp, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false)
             // The dashed tear line between the label and the pick.
             Box(
-                Modifier.padding(start = 4.dp).width(2.dp).fillMaxHeight().drawBehind {
+                Modifier.padding(start = 4.dp).width(2.dp).fillMaxHeight().drawWithCache {
                     val pad = 3.dp.toPx()
-                    drawLine(
-                        accent.copy(alpha = 0.6f), Offset(size.width / 2, pad), Offset(size.width / 2, size.height - pad),
-                        strokeWidth = size.width, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()), 0f),
-                    )
+                    val dashes = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()), 0f)
+                    val tear = accent.copy(alpha = 0.6f)
+                    onDrawBehind {
+                        drawLine(
+                            tear, Offset(size.width / 2, pad), Offset(size.width / 2, size.height - pad),
+                            strokeWidth = size.width, pathEffect = dashes,
+                        )
+                    }
                 },
             )
         }
@@ -620,11 +625,15 @@ private fun TicketContent(t: Ticket, p: BoardPalette, onDismiss: () -> Unit) {
             }
             // The footer's dashed rule, then the stakes left and the way out right.
             Box(
-                Modifier.padding(top = 18.dp).fillMaxWidth().height(2.dp).drawBehind {
-                    drawLine(
-                        rgb(p.ticketAccent, 0.45f), Offset(0f, size.height / 2), Offset(size.width, size.height / 2),
-                        strokeWidth = size.height, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx()), 0f),
-                    )
+                Modifier.padding(top = 18.dp).fillMaxWidth().height(2.dp).drawWithCache {
+                    val dashes = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx()), 0f)
+                    val rule = rgb(p.ticketAccent, 0.45f)
+                    onDrawBehind {
+                        drawLine(
+                            rule, Offset(0f, size.height / 2), Offset(size.width, size.height / 2),
+                            strokeWidth = size.height, pathEffect = dashes,
+                        )
+                    }
                 },
             )
             Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.Top) {
