@@ -212,9 +212,9 @@ fun homeGlance(i: GlanceInputs): HomeGlance {
 
     val game = if (i.switches.games) GameDay.select(i.feeds.games?.value.orEmpty(), i.now, i.zone) else null
     val timeOfDay = timeOfDayCard(weather, i.agenda, i.now, i.zone, i.quiet, i.is24h)
-    // The pill waits until 15 minutes before the broadcast's pre-game show (WatchTiming); the card still names the network.
+    // The pill waits until an hour before the start (WatchTiming); the card still names the network all day.
     val watch = game?.takeIf { it.game.phase != GamePhase.FINAL }?.let { g ->
-        i.watchMap.watch(g, i.isInstalled)?.takeIf { WatchTiming.shown(g, it.network, i.now) }
+        i.watchMap.watch(g, i.isInstalled)?.takeIf { WatchTiming.shown(g, i.now) }
     }
     val next = if (i.switches.games && game == null) GameDay.next(i.feeds.games?.value.orEmpty(), null, i.now) else null
     val card = contextCard(alerts, game, i.now, i.zone, i.is24h, timeOfDay, i.watchMap, watch, next, i.feeds.picks)
