@@ -1486,6 +1486,24 @@ fi
     }
     gd_board() { grep -oE '<node [^>]*resource-id="hero_board"[^>]*>' <<<"$ui" | head -1 || true; }
     gd_stub() { grep -oE '<node [^>]*resource-id="hero_pick_stub"[^>]*>' <<<"$ui" | head -1 || true; }
+    # design-canvas/dialog-density: the full ticket (its node in $ui) lies inside the screen's 5% safe area, in pixels
+    # (1920x1080: x 96..1824, y 54..1026). A dialog laid out at the window's density, not the design canvas's, overflows.
+    gd_ticket_safe() { # $1 = label
+      local node size sw sh x1 y1 x2 y2 l t r b
+      node=$(grep -oE '<node [^>]*content-desc="Claude(&apos;|.)s pick, full ticket"[^>]*>' <<<"$ui" | head -1 || true)
+      [[ -n $node ]] || m7_fail "board: $1: no full-ticket node in the UI dump, so its bounds cannot be checked"
+      [[ $node =~ bounds=\"\[(-?[0-9]+),(-?[0-9]+)\]\[(-?[0-9]+),(-?[0-9]+)\]\" ]] \
+        || m7_fail "board: $1: the full ticket's node has no readable bounds: $node"
+      x1=${BASH_REMATCH[1]}; y1=${BASH_REMATCH[2]}; x2=${BASH_REMATCH[3]}; y2=${BASH_REMATCH[4]}
+      size=$(sh_ wm size | tr -d '\r' | grep -oE '[0-9]+x[0-9]+' | tail -1 || true)
+      [[ $size =~ ^([0-9]+)x([0-9]+)$ ]] || m7_fail "board: $1: cannot read the screen size from 'wm size' ('$size')"
+      sw=${BASH_REMATCH[1]}; sh=${BASH_REMATCH[2]}
+      l=$(( sw * 5 / 100 )); t=$(( sh * 5 / 100 )); r=$(( sw - l )); b=$(( sh - t ))
+      if (( x2 <= x1 || y2 <= y1 || x1 < l || y1 < t || x2 > r || y2 > b )); then
+        m7_fail "board: $1: the full ticket [$x1,$y1][$x2,$y2] is not inside the 5% safe area of the ${sw}x${sh} screen (x $l..$r, y $t..$b); is the dialog laid out at the design canvas density?"
+      fi
+      pass "board: $1: the full ticket [$x1,$y1][$x2,$y2] is inside the 5% safe area (x $l..$r, y $t..$b)"
+    }
     gd_soon=$(iso '+90 minutes'); gd_ago=$(iso '-60 minutes')
     m7_rm panels/alerts.json qa-pick.json
     sh_ content delete --uri "content://$PKG.provision/watch" >/dev/null 2>&1 || true
@@ -1538,6 +1556,7 @@ fi
           grep -qF "$t" <<<"$ui" || m7_fail "board: the full ticket does not show '$t'"
         done
         gd_shot 3-full-ticket
+        gd_ticket_safe "full ticket"
         key BACK; sleep 1
         in_front || m7_fail "board: Back on the full ticket left the app"
         ui=$(ui_text); grep -qF 'Back to close' <<<"$ui" && m7_fail "board: Back did not close the full ticket"
@@ -1556,6 +1575,7 @@ fi
         gd_restart; key DPAD_UP; key DPAD_CENTER; sleep 1
         ui=$(ui_text); grep -qF 'Back to close' <<<"$ui" || m7_fail "board: the full ticket did not open for a 900-character analysis"
         gd_shot 3-full-ticket-900
+        gd_ticket_safe "full ticket, 900 characters"
         key BACK; sleep 1
       else
         warn "board: stub focus and the full ticket NOT VERIFIED: no other TV app on this image, so no apps row to come from"

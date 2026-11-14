@@ -34,7 +34,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -234,6 +233,7 @@ private fun BoardSurface(b: Scoreboard, p: BoardPalette, dim: Boolean, modifier:
             val inset = 2f * u
             val radius = minOf((if (rink) BoardTokens.RINK_RADIUS else BoardTokens.FIELD_RADIUS) * u, h / 2 - inset)
             val outline = Path().apply { addRoundRect(RoundRect(inset, inset, w - inset, h - inset, CornerRadius(radius))) }
+            val marks = if (rink && !dim) iceMarks(sx, u) else null
             val paint = if (rink) {
                 Brush.verticalGradient(0f to rgb(BoardTokens.RINK_TOP), BoardTokens.RINK_MID_AT to rgb(BoardTokens.RINK_MID), 1f to rgb(BoardTokens.RINK_BOTTOM))
             } else {
@@ -261,7 +261,7 @@ private fun BoardSurface(b: Scoreboard, p: BoardPalette, dim: Boolean, modifier:
                         scale(w / h, 1f, pivot = centre) { drawCircle(vignette, 0.75f * h, centre) }
                         if (rink) {
                             drawRect(sheen)
-                            drawPath(iceMarks(sx, u), Color.White.copy(alpha = 0.05f), style = Stroke(1.5f * u))
+                            if (marks != null) drawPath(marks, Color.White.copy(alpha = 0.05f), style = Stroke(1.5f * u))
                         }
                     }
                     drawPath(outline, rgb(p.boards), style = Stroke(3.5f * u))
@@ -297,11 +297,16 @@ private fun BoardSurface(b: Scoreboard, p: BoardPalette, dim: Boolean, modifier:
     )
 }
 
-/** A soft shadow under the surface (the mockup's 14 px drop shadow), as a few stacked translucent shapes. */
+/**
+ * A soft shadow under the surface (the mockup's 14 px drop shadow), as a few stacked translucent shapes. The outer ring
+ * grows no more than the inset plus 6 dp, so it reaches at most 6 dp past the board zone's sides and stays inside the
+ * safe area with drift (safe-area/board-shadow).
+ */
 private fun DrawScope.drawSurfaceShadow(inset: Float, radius: Float, u: Float) {
     val colour = Color(0xFF010A1C).copy(alpha = 0.08f)
+    val step = minOf(2.5f * u, (inset + 6.dp.toPx()) / 6)
     for (i in 1..6) {
-        val grow = i * 2.5f * u
+        val grow = i * step
         drawRoundRect(
             colour, Offset(inset - grow, inset + 10f * u - grow), Size(size.width - 2 * inset + 2 * grow, size.height - 2 * inset + 2 * grow),
             CornerRadius(radius + grow),
@@ -316,7 +321,8 @@ private fun DrawScope.drawRinkLines(sx: Float, u: Float, circle: Boolean) {
     val blue = rgb(BoardTokens.BLUE_LINE, 0.75f)
     val red = rgb(BoardTokens.RED_LINE, 0.9f)
     val goal = rgb(BoardTokens.RED_LINE, 0.6f)
-    for (f in floatArrayOf(0.36f, 0.64f)) drawLine(blue, Offset(w * f, 0f), Offset(w * f, h), strokeWidth = 5f * u)
+    drawLine(blue, Offset(w * 0.36f, 0f), Offset(w * 0.36f, h), strokeWidth = 5f * u)
+    drawLine(blue, Offset(w * 0.64f, 0f), Offset(w * 0.64f, h), strokeWidth = 5f * u)
     if (circle) {
         val r = BoardTokens.CENTRE_CIRCLE_R * u
         drawLine(red, Offset(w / 2, 0f), Offset(w / 2, h / 2 - r), strokeWidth = 4f * u)
@@ -433,12 +439,16 @@ private fun PickStub(text: String, p: BoardPalette, dim: Boolean, onOpen: (() ->
             Text(label, color = accent, fontSize = 24.sp, fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false)
             // The dashed tear line between the label and the pick.
             Box(
-                Modifier.padding(start = 4.dp).width(2.dp).fillMaxHeight().drawBehind {
+                Modifier.padding(start = 4.dp).width(2.dp).fillMaxHeight().drawWithCache {
                     val pad = 3.dp.toPx()
-                    drawLine(
-                        accent.copy(alpha = 0.6f), Offset(size.width / 2, pad), Offset(size.width / 2, size.height - pad),
-                        strokeWidth = size.width, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()), 0f),
-                    )
+                    val dashes = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()), 0f)
+                    val tear = accent.copy(alpha = 0.6f)
+                    onDrawBehind {
+                        drawLine(
+                            tear, Offset(size.width / 2, pad), Offset(size.width / 2, size.height - pad),
+                            strokeWidth = size.width, pathEffect = dashes,
+                        )
+                    }
                 },
             )
         }
@@ -487,142 +497,156 @@ private fun fitSp(measurer: TextMeasurer, text: String, style: TextStyle, maxSp:
  */
 @Composable
 private fun TicketDialog(t: Ticket, p: BoardPalette, onDismiss: () -> Unit) {
+    // A dialog is a new window whose composition takes LocalDensity from the real window, not from the design canvas:
+    // the canvas density is captured here and provided again inside, so the ticket's dp and sp are canvas units.
+    val canvas = LocalDensity.current
+    // Not the platform default width: the window wraps the content, up to the screen.
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        // The veil is the dialog window's own dim, so nothing of the app's is drawn over the home screen.
-        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
-        SideEffect { window?.setDimAmount(BoardTokens.VEIL_ALPHA) }
-        val d = LocalDensity.current
-        val measurer = rememberTextMeasurer()
-        val scroll = rememberScrollState()
-        val scope = rememberCoroutineScope()
-        val focus = remember { FocusRequester() }
-        var okDown by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-        val text = rgb(GlanceTokens.TICKET_TEXT)
-        val secondary = rgb(GlanceTokens.HERO_SECONDARY)
-        val stubInk = rgb(p.ticketInk)
+        CompositionLocalProvider(LocalDensity provides canvas) { TicketContent(t, p, onDismiss) }
+    }
+}
 
-        val bodyStyle = remember(t, d.density, d.fontScale) {
-            with(d) {
-                val bodyW = (TICKET_W_DP - TICKET_STUB_DP - 2 * TICKET_BODY_PAD_H_DP).dp.roundToPx()
-                fun height(s: String, style: TextStyle, width: Int) =
-                    measurer.measure(s, style, constraints = Constraints(maxWidth = width.coerceAtLeast(1)), density = d).size.height
-                val close = measurer.measure(TicketText.CLOSE, TICKET_CLOSE_STYLE, softWrap = false, maxLines = 1, density = d).size
-                val footer = t.stakes?.let { height(it, TICKET_STAKES_STYLE, bodyW - close.width - 24.dp.roundToPx()) } ?: close.height
-                // Padding 32 + 28, the gap under the title 14, the footer's 18 + 2 + 14.
-                val room = TICKET_MAX_H_DP.dp.toPx() - (32 + 28 + TICKET_PARA_GAP_DP + 18 + 2 + 14).dp.toPx() -
-                    height(t.title, TICKET_TITLE_STYLE, bodyW) - footer
-                val gaps = (t.paragraphs.size - 1).coerceAtLeast(0) * TICKET_PARA_GAP_DP.dp.toPx()
-                TICKET_BODY_STYLES.firstOrNull { style -> t.paragraphs.sumOf { height(it, style, bodyW) } + gaps <= room }
-                    ?: TICKET_BODY_STYLES.last()
+/** The ticket itself, composed inside the dialog window under the design canvas density. */
+@Composable
+private fun TicketContent(t: Ticket, p: BoardPalette, onDismiss: () -> Unit) {
+    // The veil is the dialog window's own dim, so nothing of the app's is drawn over the home screen.
+    val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+    SideEffect { window?.setDimAmount(BoardTokens.VEIL_ALPHA) }
+    val d = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    val scroll = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    val focus = remember { FocusRequester() }
+    var okDown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    val text = rgb(GlanceTokens.TICKET_TEXT)
+    val secondary = rgb(GlanceTokens.HERO_SECONDARY)
+    val stubInk = rgb(p.ticketInk)
+
+    val bodyStyle = remember(t, d.density, d.fontScale) {
+        with(d) {
+            val bodyW = (TICKET_W_DP - TICKET_STUB_DP - 2 * TICKET_BODY_PAD_H_DP).dp.roundToPx()
+            fun height(s: String, style: TextStyle, width: Int) =
+                measurer.measure(s, style, constraints = Constraints(maxWidth = width.coerceAtLeast(1)), density = d).size.height
+            val close = measurer.measure(TicketText.CLOSE, TICKET_CLOSE_STYLE, softWrap = false, maxLines = 1, density = d).size
+            val footer = t.stakes?.let { height(it, TICKET_STAKES_STYLE, bodyW - close.width - 24.dp.roundToPx()) } ?: close.height
+            // Padding 32 + 28, the gap under the title 14, the footer's 18 + 2 + 14.
+            val room = TICKET_MAX_H_DP.dp.toPx() - (32 + 28 + TICKET_PARA_GAP_DP + 18 + 2 + 14).dp.toPx() -
+                height(t.title, TICKET_TITLE_STYLE, bodyW) - footer
+            val gaps = (t.paragraphs.size - 1).coerceAtLeast(0) * TICKET_PARA_GAP_DP.dp.toPx()
+            TICKET_BODY_STYLES.firstOrNull { style -> t.paragraphs.sumOf { height(it, style, bodyW) } + gaps <= room }
+                ?: TICKET_BODY_STYLES.last()
+        }
+    }
+    val stubTextW = with(d) { (TICKET_STUB_DP - 36 - 24).dp.toPx() }
+    val bigStyle = TextStyle(fontFamily = CONDENSED, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+    val lineStyle = TextStyle(fontFamily = CONDENSED, fontWeight = FontWeight.ExtraBold)
+    val bigSp = remember(t.big, d.density, d.fontScale) { fitSp(measurer, t.big, bigStyle, 132f, stubTextW, d) }
+    val lineSp = remember(t.line, d.density, d.fontScale) { t.line?.let { fitSp(measurer, it, lineStyle, 60f, stubTextW, d) } }
+    val step = with(d) { 96.dp.toPx() }
+
+    Row(
+        Modifier
+            .width(TICKET_W_DP.dp)
+            .heightIn(max = TICKET_MAX_H_DP.dp)
+            .height(IntrinsicSize.Min)
+            .semantics { contentDescription = PICK_TICKET_DESC }
+            .focusRequester(focus)
+            .onKeyEvent { e ->
+                val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                val down = e.type == KeyEventType.KeyDown
+                when {
+                    // OK closes on its release, and only when its press was seen here (not the press that opened it).
+                    ok && down -> { okDown = true; true }
+                    ok && e.type == KeyEventType.KeyUp -> { if (okDown) onDismiss(); true }
+                    down && e.key == Key.DirectionDown -> { if (scroll.value < scroll.maxValue) scope.launch { scroll.animateScrollBy(step) }; true }
+                    down && e.key == Key.DirectionUp -> { if (scroll.value > 0) scope.launch { scroll.animateScrollBy(-step) }; true }
+                    else -> false
+                }
+            }
+            .focusable()
+            .drawWithCache {
+                val w = size.width
+                val h = size.height
+                val split = TICKET_STUB_DP.dp.toPx()
+                val notch = 13.dp.toPx()
+                val whole = Path().apply { addRoundRect(RoundRect(0f, 0f, w, h, CornerRadius(18.dp.toPx()))) }
+                val notches = Path().apply {
+                    addOval(Rect(Offset(split, 0f), notch))
+                    addOval(Rect(Offset(split, h), notch))
+                }
+                val shape = Path.combine(PathOperation.Difference, whole, notches)
+                val perforation = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()), 0f)
+                onDrawBehind {
+                    clipPath(shape) {
+                        drawRect(rgb(p.ticketBody))
+                        drawRect(rgb(p.ticketStub), Offset.Zero, Size(split, h))
+                        drawLine(
+                            rgb(p.focusInk, 0.9f), Offset(split, notch), Offset(split, h - notch),
+                            strokeWidth = 3.dp.toPx(), pathEffect = perforation,
+                        )
+                    }
+                }
+            },
+    ) {
+        Column(Modifier.width(TICKET_STUB_DP.dp).fillMaxHeight().padding(start = 36.dp, top = 32.dp, end = 24.dp, bottom = 30.dp)) {
+            Text("✦ " + TicketText.LABEL, color = stubInk, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+            Text(
+                t.big, color = stubInk, style = bigStyle.copy(fontSize = bigSp, lineHeight = bigSp * 0.9f),
+                maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 14.dp),
+            )
+            if (t.line != null && lineSp != null) {
+                Text(
+                    t.line.orEmpty(), color = stubInk, style = lineStyle.copy(fontSize = lineSp, lineHeight = lineSp),
+                    maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            t.short?.let { short ->
+                Box(Modifier.padding(top = 16.dp).fillMaxWidth().height(2.dp).background(stubInk.copy(alpha = 0.35f)))
+                Text(
+                    short, color = stubInk, fontSize = 24.sp, lineHeight = 31.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 14.dp),
+                )
             }
         }
-        val stubTextW = with(d) { (TICKET_STUB_DP - 36 - 24).dp.toPx() }
-        val bigStyle = TextStyle(fontFamily = CONDENSED, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
-        val lineStyle = TextStyle(fontFamily = CONDENSED, fontWeight = FontWeight.ExtraBold)
-        val bigSp = remember(t.big, d.density, d.fontScale) { fitSp(measurer, t.big, bigStyle, 132f, stubTextW, d) }
-        val lineSp = remember(t.line, d.density, d.fontScale) { t.line?.let { fitSp(measurer, it, lineStyle, 60f, stubTextW, d) } }
-        val step = with(d) { 96.dp.toPx() }
-
-        Row(
-            Modifier
-                .width(TICKET_W_DP.dp)
-                .heightIn(max = TICKET_MAX_H_DP.dp)
-                .height(IntrinsicSize.Min)
-                .semantics { contentDescription = PICK_TICKET_DESC }
-                .focusRequester(focus)
-                .onKeyEvent { e ->
-                    val ok = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
-                    val down = e.type == KeyEventType.KeyDown
-                    when {
-                        // OK closes on its release, and only when its press was seen here (not the press that opened it).
-                        ok && down -> { okDown = true; true }
-                        ok && e.type == KeyEventType.KeyUp -> { if (okDown) onDismiss(); true }
-                        down && e.key == Key.DirectionDown -> { if (scroll.value < scroll.maxValue) scope.launch { scroll.animateScrollBy(step) }; true }
-                        down && e.key == Key.DirectionUp -> { if (scroll.value > 0) scope.launch { scroll.animateScrollBy(-step) }; true }
-                        else -> false
-                    }
-                }
-                .focusable()
-                .drawWithCache {
-                    val w = size.width
-                    val h = size.height
-                    val split = TICKET_STUB_DP.dp.toPx()
-                    val notch = 13.dp.toPx()
-                    val whole = Path().apply { addRoundRect(RoundRect(0f, 0f, w, h, CornerRadius(18.dp.toPx()))) }
-                    val notches = Path().apply {
-                        addOval(Rect(Offset(split, 0f), notch))
-                        addOval(Rect(Offset(split, h), notch))
-                    }
-                    val shape = Path.combine(PathOperation.Difference, whole, notches)
-                    val perforation = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()), 0f)
+        Column(
+            Modifier.weight(1f).fillMaxHeight()
+                .padding(start = TICKET_BODY_PAD_H_DP.dp, top = 32.dp, end = TICKET_BODY_PAD_H_DP.dp, bottom = 28.dp),
+        ) {
+            val cut = t.title.lastIndexOf(" · ")
+            Text(
+                buildAnnotatedString {
+                    append(if (cut >= 0) t.title.substring(0, cut) else t.title)
+                    if (cut >= 0) withStyle(SpanStyle(color = secondary, fontWeight = FontWeight.Normal)) { append(t.title.substring(cut)) }
+                },
+                color = text, style = TICKET_TITLE_STYLE,
+            )
+            Column(
+                Modifier.weight(1f, fill = false).padding(top = TICKET_PARA_GAP_DP.dp).verticalScroll(scroll),
+                verticalArrangement = Arrangement.spacedBy(TICKET_PARA_GAP_DP.dp),
+            ) {
+                for (para in t.paragraphs) Text(para, color = text, style = bodyStyle)
+            }
+            // The footer's dashed rule, then the stakes left and the way out right.
+            Box(
+                Modifier.padding(top = 18.dp).fillMaxWidth().height(2.dp).drawWithCache {
+                    val dashes = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx()), 0f)
+                    val rule = rgb(p.ticketAccent, 0.45f)
                     onDrawBehind {
-                        clipPath(shape) {
-                            drawRect(rgb(p.ticketBody))
-                            drawRect(rgb(p.ticketStub), Offset.Zero, Size(split, h))
-                            drawLine(
-                                rgb(p.focusInk, 0.9f), Offset(split, notch), Offset(split, h - notch),
-                                strokeWidth = 3.dp.toPx(), pathEffect = perforation,
-                            )
-                        }
+                        drawLine(
+                            rule, Offset(0f, size.height / 2), Offset(size.width, size.height / 2),
+                            strokeWidth = size.height, pathEffect = dashes,
+                        )
                     }
                 },
-        ) {
-            Column(Modifier.width(TICKET_STUB_DP.dp).fillMaxHeight().padding(start = 36.dp, top = 32.dp, end = 24.dp, bottom = 30.dp)) {
-                Text("✦ " + TicketText.LABEL, color = stubInk, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+            )
+            Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.Top) {
+                Text(t.stakes.orEmpty(), color = rgb(p.ticketAccent), style = TICKET_STAKES_STYLE, modifier = Modifier.weight(1f))
                 Text(
-                    t.big, color = stubInk, style = bigStyle.copy(fontSize = bigSp, lineHeight = bigSp * 0.9f),
-                    maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 14.dp),
+                    TicketText.CLOSE, color = secondary, style = TICKET_CLOSE_STYLE, maxLines = 1, softWrap = false,
+                    modifier = Modifier.padding(start = 24.dp),
                 )
-                if (t.line != null && lineSp != null) {
-                    Text(
-                        t.line.orEmpty(), color = stubInk, style = lineStyle.copy(fontSize = lineSp, lineHeight = lineSp),
-                        maxLines = 1, softWrap = false, modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                t.short?.let { short ->
-                    Box(Modifier.padding(top = 16.dp).fillMaxWidth().height(2.dp).background(stubInk.copy(alpha = 0.35f)))
-                    Text(
-                        short, color = stubInk, fontSize = 24.sp, lineHeight = 31.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 14.dp),
-                    )
-                }
-            }
-            Column(
-                Modifier.weight(1f).fillMaxHeight()
-                    .padding(start = TICKET_BODY_PAD_H_DP.dp, top = 32.dp, end = TICKET_BODY_PAD_H_DP.dp, bottom = 28.dp),
-            ) {
-                val cut = t.title.lastIndexOf(" · ")
-                Text(
-                    buildAnnotatedString {
-                        append(if (cut >= 0) t.title.substring(0, cut) else t.title)
-                        if (cut >= 0) withStyle(SpanStyle(color = secondary, fontWeight = FontWeight.Normal)) { append(t.title.substring(cut)) }
-                    },
-                    color = text, style = TICKET_TITLE_STYLE,
-                )
-                Column(
-                    Modifier.weight(1f, fill = false).padding(top = TICKET_PARA_GAP_DP.dp).verticalScroll(scroll),
-                    verticalArrangement = Arrangement.spacedBy(TICKET_PARA_GAP_DP.dp),
-                ) {
-                    for (para in t.paragraphs) Text(para, color = text, style = bodyStyle)
-                }
-                // The footer's dashed rule, then the stakes left and the way out right.
-                Box(
-                    Modifier.padding(top = 18.dp).fillMaxWidth().height(2.dp).drawBehind {
-                        drawLine(
-                            rgb(p.ticketAccent, 0.45f), Offset(0f, size.height / 2), Offset(size.width, size.height / 2),
-                            strokeWidth = size.height, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx()), 0f),
-                        )
-                    },
-                )
-                Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.Top) {
-                    Text(t.stakes.orEmpty(), color = rgb(p.ticketAccent), style = TICKET_STAKES_STYLE, modifier = Modifier.weight(1f))
-                    Text(
-                        TicketText.CLOSE, color = secondary, style = TICKET_CLOSE_STYLE, maxLines = 1, softWrap = false,
-                        modifier = Modifier.padding(start = 24.dp),
-                    )
-                }
             }
         }
     }

@@ -879,11 +879,15 @@ private enum class TileAction(val label: String) {
 @Composable
 private fun TileMenu(theme: HomeTheme, title: String, onAction: (TileAction) -> Unit, onDismiss: () -> Unit) {
     val first = remember { FocusRequester() }
+    // The dialog's window takes LocalDensity from the real window: the design canvas density is provided again inside.
+    val canvas = LocalDensity.current
     Dialog(onDismissRequest = onDismiss) {
         LaunchedEffect(Unit) { focusSoon(first) }
-        DialogCard(theme, title) {
-            TileAction.entries.forEachIndexed { i, action ->
-                MenuRow(theme, action.label, if (i == 0) first else null) { onAction(action) }
+        CompositionLocalProvider(LocalDensity provides canvas) {
+            DialogCard(theme, title) {
+                TileAction.entries.forEachIndexed { i, action ->
+                    MenuRow(theme, action.label, if (i == 0) first else null) { onAction(action) }
+                }
             }
         }
     }
@@ -893,15 +897,19 @@ private fun TileMenu(theme: HomeTheme, title: String, onAction: (TileAction) -> 
 @Composable
 private fun HiddenAppsDialog(theme: HomeTheme, hidden: List<TileApp>, onUnhide: (TileApp) -> Unit, onDismiss: () -> Unit) {
     val first = remember { FocusRequester() }
+    // The dialog's window takes LocalDensity from the real window: the design canvas density is provided again inside.
+    val canvas = LocalDensity.current
     Dialog(onDismissRequest = onDismiss) {
         // On open, and after an app leaves the list (the focused row is gone), focus goes to the first row.
         LaunchedEffect(hidden.size) { focusSoon(first) }
-        DialogCard(theme, "Hidden apps") {
-            Text("OK on an app puts it back on the row.", color = color(theme.secondaryText), fontSize = Tokens.SECONDARY_SP.sp)
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                itemsIndexed(hidden, key = { _, t -> t.app.packageName }) { i, t ->
-                    MenuRow(theme, t.app.label, if (i == 0) first else null) { onUnhide(t) }
+        CompositionLocalProvider(LocalDensity provides canvas) {
+            DialogCard(theme, "Hidden apps") {
+                Text("OK on an app puts it back on the row.", color = color(theme.secondaryText), fontSize = Tokens.SECONDARY_SP.sp)
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    itemsIndexed(hidden, key = { _, t -> t.app.packageName }) { i, t ->
+                        MenuRow(theme, t.app.label, if (i == 0) first else null) { onUnhide(t) }
+                    }
                 }
             }
         }
