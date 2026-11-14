@@ -128,3 +128,4 @@ Stage (2026-11-14 03:45Z): Game-day scoreboard (Fable redesign, Brian approved t
 | 2026-11-14 | code-reviewer | opus/high | PR #47 fresh review | request changes: 1 must-fix (design-canvas/dialog-density), 1 should-fix, 2 nits |
 | 2026-11-14 | frontend-engineer | fable/default | PR #47 review fixes (4 findings) | done (ac1c8f7) |
 | 2026-11-14 | frontend-engineer | fable/default | PR #47 polish from real emulator frames (cones, meta, stub overlap) | done (b08d11d), core 793 tests pass |
+| 2026-11-14 | code-reviewer | opus/high | PR #47 delta re-review at 15aaed0 | approve, no new findings |
