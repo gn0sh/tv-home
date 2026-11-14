@@ -111,4 +111,14 @@ class WatchDefaultsTest {
         for (n in listOf("WWE", "KAYO", "WWE Network", "Kayo Sports", "WNBA League Pass", "KICK")) assertNull(WatchDefaults.kindOf(n), n)
         for (n in listOf("WKRN", "WZTV", "WSYX", "WOSU", "WXYZ-TV", "KABC 7", "WSMV-DT")) assertEquals(WatchDefaults.Kind.BROADCAST, WatchDefaults.kindOf(n), n)
     }
+
+    @Test fun scrippsGoesToThePredatorsAppWhenInstalled() {
+        val preds = app("com.example.predators", "Nashville Predators")
+        assertEquals("com.example.predators", watch(listOf(cde, preds, youtube), "SCRIPPS")!!.packageName)
+        assertEquals("com.example.predators", watch(listOf(cde, preds), "The Spot")!!.packageName)
+        assertEquals("net.example.cdetv", watch(listOf(cde, youtube), "SCRIPPS")!!.packageName, "no Predators app: CDE")
+        val two = listOf(preds, app("com.other.predators", "Predators Fan"), cde)
+        assertEquals("net.example.cdetv", watch(two, "SCRIPPS")!!.packageName, "two Predators apps: ambiguous, CDE")
+        assertEquals("net.example.cdetv", watch(listOf(cde, preds), "NBC")!!.packageName, "other channels unchanged")
+    }
 }

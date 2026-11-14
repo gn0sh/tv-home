@@ -10,6 +10,7 @@ import java.util.Locale
  * found by its label, never by a guessed package.
  *
  * Order, per network the feed lists:
+ * 0. Scripps (Scripps, Scripps Sports, The Spot, WNPX): the Nashville Predators app when installed, else as 1.
  * 1. Broadcast and local ([Kind.BROADCAST]: ABC, CBS, NBC, FOX, The CW, ION, MyNetworkTV, PBS, Scripps / Scripps Sports,
  *    The Spot, "<network> <channel>" forms like "NBC 4", the Nashville and Columbus call signs like "WTVF", and other
  *    US call signs with a suffix or channel like "WXYZ-TV"): the CDE app, when exactly one CDE app is installed.
@@ -62,6 +63,14 @@ object WatchDefaults {
     private val DISNEY = AppRule(setOf("com.disney.disneyplus"), setOf("disney+", "disney plus"))
     private val FOX_SPORTS = AppRule(labels = setOf("fox sports", "fox one"))
     private val FANDUEL = AppRule(labelWords = listOf("fanduel sports"))
+
+    /**
+     * Brian 2026-11-13: "for games on scripps, use the nashville predators app. that is where we watch it." Its package is
+     * not known here, so it is found by its launcher label (any label with the word "predators"), only when exactly one
+     * app matches. Scripps games fall back to the CDE app when the Predators app is not installed.
+     */
+    private val PREDATORS_APP = AppRule(labelWords = listOf("predators"), unique = true)
+    private val SCRIPPS = setOf("scripps", "scripps sports", "the spot", "wnpx")
 
     private val BROADCAST = setOf(
         "abc", "cbs", "nbc", "fox", "cw", "the cw", "ion", "ion tv", "mynetworktv", "mytv", "pbs",
@@ -118,7 +127,7 @@ object WatchDefaults {
         val sorted = apps.sortedBy { it.packageName }
         val n = norm(network)
         val app = when (kindOf(network)) {
-            Kind.BROADCAST -> CDE.find(sorted)
+            Kind.BROADCAST -> if (n in SCRIPPS) PREDATORS_APP.find(sorted) ?: CDE.find(sorted) else CDE.find(sorted)
             Kind.CABLE -> (if (isFanDuel(n)) FANDUEL else CABLE[n])?.find(sorted) ?: CDE.find(sorted)
             Kind.STREAMING -> STREAMING.getValue(n).find(sorted)
             null -> null
