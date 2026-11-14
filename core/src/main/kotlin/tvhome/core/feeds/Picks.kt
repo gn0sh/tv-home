@@ -32,8 +32,10 @@ data class Pick(
     val line: String?,
     val reason: String,
     val at: Instant,
-    /** The card's version of [reason] (pick-cut-off): at most [Picks.MAX_CARD_REASON] characters, or null. */
+    /** A short reason some files carry; accepted but not shown (Brian: the reasoning lives behind OK). */
     val short: String? = null,
+    /** The longer write-up for the pop-up, or null (then [reason] is shown there). */
+    val analysis: String? = null,
 )
 
 object Picks {
@@ -50,12 +52,11 @@ object Picks {
     const val MAX_REASON = 160
     const val MAX_SHORT = 24
 
-    /**
-     * The card has two lines of about 37 characters for the pick (Brian's TV, 2026-11-13: a 120-character reason was
-     * cut off mid-sentence). The heading takes about 30, so the reason on the card is at most this long: the file's
-     * `short`, else its `reason` when that is already short enough, else none (the pick alone is still shown).
-     */
+    /** The `short` field's cap (the picks thread writes one; nothing shows it now). */
     const val MAX_CARD_REASON = 40
+
+    /** The pop-up fits about 20 lines of 50 characters at the card's type size, with no scrolling (no focus inside). */
+    const val MAX_ANALYSIS = 900
 
     /** A pick older than this is not shown, whatever its date says (the thread stopped writing). */
     val MAX_AGE: Duration = Duration.ofHours(36)
@@ -91,6 +92,7 @@ object Picks {
             reason = required("reason", MAX_REASON),
             at = Instant.parse((o["at"] as? JsonPrimitive)?.content ?: return null),
             short = optional("short", MAX_CARD_REASON),
+            analysis = optional("analysis", MAX_ANALYSIS),
         )
     }.getOrNull()
 
@@ -107,24 +109,23 @@ object Picks {
     }
 
     /**
-     * "Claude's pick: NSH 4-2 (+1.5) · Saros is sharper": the line loses the team when it repeats the pick, and the
-     * reason is [Pick.short] or a [reason] of at most [MAX_CARD_REASON] characters, else left out, so it fits two lines.
+     * Everything behind OK on the card (Brian 2026-11-13: "put everything else behind the hover"): the heading with the
+     * opponent, then the file's [Pick.analysis], or its [Pick.reason] when it has none.
      */
-    /** Everything the file says, for the pop-up that OK on the card opens (Brian: "when i select it, the full quote
-     * pops out"): the heading line, then the full reason. */
     fun full(p: Pick): String {
         val head = listOfNotNull(p.pick, p.score).joinToString(" ")
         val line = p.line?.let { " ($it)" } ?: ""
         val vs = p.opponent?.let { " vs $it" } ?: ""
-        return "Claude's pick$vs: $head$line
-
-${p.reason}"
+        return "Claude's pick$vs: $head$line\n\n${p.analysis ?: p.reason}"
     }
 
+    /**
+     * The card line: "Claude's pick: NSH 4-2 (+1.5)", the pick only (Brian 2026-11-13: everything else goes behind
+     * the select). The line loses the team when it repeats the pick. Always fits the card's two lines.
+     */
     fun text(p: Pick): String {
         val head = listOfNotNull(p.pick, p.score).joinToString(" ")
         val line = p.line?.let { " (" + it.removePrefix(p.pick + " ").trim() + ")" } ?: ""
-        val reason = (p.short ?: p.reason.takeIf { it.length <= MAX_CARD_REASON })?.trimEnd('.', ' ')
-        return "Claude's pick: $head$line" + (reason?.let { " · $it" } ?: "")
+        return "Claude's pick: $head$line"
     }
 }
