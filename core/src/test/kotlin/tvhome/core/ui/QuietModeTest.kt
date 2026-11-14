@@ -146,7 +146,7 @@ class QuietModeTest {
     private val map = WatchMap.parse("ESPN+=com.espn.gtv", "predators=ESPN+")
     private fun watchFor(phase: GamePhase, installed: Boolean, nets: List<String> = listOf("ESPN+"), mapp: WatchMap = map): HomeGlance {
         val now = at(16, 50)
-        val start = if (phase == GamePhase.UPCOMING) at(19) else at(16)
+        val start = if (phase == GamePhase.UPCOMING) at(17, 30) else at(16) // upcoming: inside the pill's window (WatchTiming)
         val game = TeamGame(Teams.PREDATORS, GameInfo(start, "Blues", true, phase, 1, 0, null, nets))
         val feeds = FeedsSnapshot(games = Stamped(listOf(game), now))
         return homeGlance(GlanceInputs(now, zone, false, feeds, PanelSwitches(), true, AgendaState.NotSetUp, watchMap = mapp, isInstalled = { installed }))
