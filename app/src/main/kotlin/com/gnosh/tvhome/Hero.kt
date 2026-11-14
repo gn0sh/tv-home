@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -531,14 +532,15 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier, zone: He
  */
 @Composable
 private fun PickDialog(full: String, ink: HeroInk, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
+    // Wider than the platform default, so the longest analysis (Picks.MAX_ANALYSIS) fits the screen without scrolling.
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Text(
             full,
             color = rgb(PICK_DIALOG_TEXT),
             fontSize = GlanceTokens.DATE_SP.sp,
             lineHeight = (GlanceTokens.DATE_SP + 8).sp,
             modifier = Modifier
-                .width(640.dp)
+                .width(900.dp)
                 .background(rgb(PICK_DIALOG_FILL), RoundedCornerShape(16.dp))
                 .border(3.dp, rgb(ink.secondary), RoundedCornerShape(16.dp))
                 .padding(32.dp),
