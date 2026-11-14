@@ -1538,12 +1538,14 @@ fi
       gd_pick "$gd_text"
       gd_restart; ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-board-pick.xml"
       node=$(gd_stub); [[ -n $node ]] || m7_fail "board: the planted pick shows no stub (hero_pick_stub)"
-      # uiautomator shows a description on a non-focusable child with the same bounds as its focus target, app-wide
-      # (pill-a11y-node), so the stub's words are looked for on any node that shares the stub's bounds.
-      gd_b=$(grep -oE 'bounds="[^"]*"' <<<"$node" | head -1)
-      gd_same=$(grep -oE '<node [^>]*>' <<<"$ui" | grep -F "$gd_b" || true)
-      grep -qF 'content-desc="Claude&apos;s pick: NSH (+1.5)"' <<<"$gd_same" || grep -qF "content-desc=\"Claude's pick: NSH (+1.5)\"" <<<"$gd_same" \
-        || m7_fail "board: the stub's text is not Picks.text ('Claude's pick: NSH (+1.5)'): $gd_same"
+      # The stub's words, exactly Picks.text, are looked for on any node, as for the dock pills above: uiautomator shows
+      # a focus target's description on a non-focusable child node, app-wide (pill-a11y-node). On a miss, the nodes
+      # after the stub are printed so the dump says where the words went.
+      if ! grep -qF 'content-desc="Claude&apos;s pick: NSH (+1.5)"' <<<"$ui" && ! grep -qF "content-desc=\"Claude's pick: NSH (+1.5)\"" <<<"$ui"; then
+        echo "---- board diagnostics: the stub's node and the 8 nodes after it"
+        grep -oE '<node [^>]*>' <<<"$ui" | grep -A8 -F 'resource-id="hero_pick_stub"' | sed -E 's/ (checkable|checked|enabled|scrollable|long-clickable|password|selected|package|class|index)="[^"]*"//g' || true
+        m7_fail "board: no node carries the stub's words, Picks.text ('Claude's pick: NSH (+1.5)')"
+      fi
       grep -q 'focusable="true"' <<<"$node" || m7_fail "board: the pick stub is not a focus target"
       grep -q 'focusable="true"' <<<"$(gd_board)" && m7_fail "board: the surface is focusable with a pick (home-back-twice)"
       grep -qF 'Saros' <<<"$ui" && m7_fail "board: more of the pick than Picks.text is on the home screen"
