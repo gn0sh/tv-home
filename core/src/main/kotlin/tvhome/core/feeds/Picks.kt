@@ -32,7 +32,7 @@ data class Pick(
     val line: String?,
     val reason: String,
     val at: Instant,
-    /** A short reason some files carry; accepted but not shown (Brian: the reasoning lives behind OK). */
+    /** A short reason some files carry: shown on the full ticket's stub (behind OK), never on the home screen. */
     val short: String? = null,
     /** The longer write-up for the pop-up, or null (then [reason] is shown there). */
     val analysis: String? = null,
@@ -52,7 +52,7 @@ object Picks {
     const val MAX_REASON = 160
     const val MAX_SHORT = 24
 
-    /** The `short` field's cap (the picks thread writes one; nothing shows it now). */
+    /** The `short` field's cap (the picks thread writes one; the full ticket's stub shows it). */
     const val MAX_CARD_REASON = 40
 
     /** The pop-up fits about 20 lines of 50 characters at the card's type size, with no scrolling (no focus inside). */
