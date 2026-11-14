@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -59,6 +60,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -85,6 +87,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.tv.material3.LocalTextStyle
 import androidx.tv.material3.Text
 import kotlinx.coroutines.launch
 import tvhome.core.ui.BoardPalette
@@ -116,6 +119,19 @@ private fun rgb(c: Int, alpha: Float = 1f) = Color(c or OPAQUE).copy(alpha = alp
 
 /** The stub row's text follows the system font scale only this far: the row is 44 dp tall whatever the scale. */
 private const val STUB_MAX_FONT_SCALE = 1.15f
+
+/** The stub's widest, and how far it grows from its left edge when focused. */
+private const val STUB_MAX_W_DP = 520
+private const val STUB_FOCUS_SCALE = 1.07f
+
+/** Clear space between the focused stub's edge and the meta line (its glow fades out over it). */
+private const val STUB_META_GAP_DP = 16
+
+/** The lamp before a live meta: its dot and the gap after it. */
+private const val LAMP_DP = 14
+private const val LAMP_GAP_DP = 10
+
+private val META_TEXT_STYLE = TextStyle(fontSize = 26.sp, fontWeight = FontWeight.Medium)
 
 /**
  * The game-day board (docs/design/tv-home-game-day-scoreboard.md): the surface, and under it the pick stub and the meta
@@ -153,20 +169,44 @@ internal fun HeroGameBoard(
         Spacer(Modifier.height(HeroZones.BOARD_GAP_DP.dp))
         val d = LocalDensity.current
         CompositionLocalProvider(LocalDensity provides Density(d.density, minOf(d.fontScale, STUB_MAX_FONT_SCALE))) {
+            val density = LocalDensity.current
+            val measurer = rememberTextMeasurer()
+            val metaStyle = LocalTextStyle.current.merge(META_TEXT_STYLE)
+            // The stub's laid-out width (its layout size: the focus scale does not change it). Until the first layout
+            // reports it, the widest stub is assumed, so the meta only ever gains room, and it is right-aligned.
+            var stubPx by remember { mutableStateOf(0) }
             Row(Modifier.fillMaxWidth().height(HeroZones.BOARD_STUB_DP.dp), verticalAlignment = Alignment.CenterVertically) {
-                card.pick?.let { PickStub(it, palette, dim, onOpen = if (ticket != null) ({ open = true }) else null) }
-                Row(
-                    Modifier.weight(1f).padding(start = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    if (board.live && !dim) {
-                        Box(Modifier.padding(end = 10.dp).size(14.dp).background(rgb(BoardTokens.LAMP), CircleShape))
+                val pick = card.pick
+                if (pick != null) {
+                    Box(Modifier.onGloballyPositioned { stubPx = it.size.width }) {
+                        PickStub(pick, palette, dim, onOpen = if (ticket != null) ({ open = true }) else null)
                     }
-                    Text(
-                        board.meta, color = rgb(textColor), fontSize = 26.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
-                    )
+                }
+                // Room for the stub's focus scale and glow, kept in every state: the focused stub never covers the meta
+                // and nothing moves when focus comes or goes.
+                val reserve = if (pick == null) 0.dp else {
+                    val stubDp = if (stubPx > 0) stubPx / density.density else STUB_MAX_W_DP.toFloat()
+                    (stubDp * (STUB_FOCUS_SCALE - 1f)).dp + STUB_META_GAP_DP.dp
+                }
+                val lamp = board.live && !dim
+                BoxWithConstraints(Modifier.weight(1f).padding(start = reserve), contentAlignment = Alignment.CenterEnd) {
+                    // The whole meta when it fits on the line; else without the network; only then an ellipsis.
+                    val lampPx = if (lamp) with(density) { (LAMP_DP + LAMP_GAP_DP).dp.roundToPx() } else 0
+                    val room = constraints.maxWidth - lampPx
+                    val meta = remember(board.meta, board.metaShort, room, density, metaStyle) {
+                        val fits = board.metaShort == board.meta ||
+                            measurer.measure(board.meta, metaStyle, maxLines = 1, softWrap = false, density = density).size.width <= room
+                        if (fits) board.meta else board.metaShort
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (lamp) {
+                            Box(Modifier.padding(end = LAMP_GAP_DP.dp).size(LAMP_DP.dp).background(rgb(BoardTokens.LAMP), CircleShape))
+                        }
+                        Text(
+                            meta, color = rgb(textColor), style = metaStyle,
+                            maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -392,9 +432,9 @@ private fun PickStub(text: String, p: BoardPalette, dim: Boolean, onOpen: (() ->
     val interaction = remember { MutableInteractionSource() }
     Row(
         Modifier
-            .widthIn(max = 520.dp)
+            .widthIn(max = STUB_MAX_W_DP.dp)
             .graphicsLayer {
-                val s = if (lit) 1.07f else 1f
+                val s = if (lit) STUB_FOCUS_SCALE else 1f
                 scaleX = s
                 scaleY = s
                 transformOrigin = TransformOrigin(0f, 0.5f)

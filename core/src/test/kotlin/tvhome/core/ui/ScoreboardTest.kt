@@ -51,9 +51,32 @@ class ScoreboardTest {
         assertEquals("Away · in 1h 59m · ESPN+", card(preds(), watch = null).board!!.meta)
         // No pill and nothing mapped: what the feed lists, as the text card says it.
         assertEquals("Away · in 1h 59m · TV: FanDuel", card(preds(nets = listOf("FanDuel")), watch = null, m = WatchMap.EMPTY).board!!.meta)
-        assertEquals("Away · in 1h 59m · " + GameDay.TV_NOT_ANNOUNCED, card(preds(nets = emptyList()), watch = null, m = WatchMap.EMPTY).board!!.meta)
         // With the pill the board never names it.
         assertFalse("ESPN" in card(preds()).board!!.meta)
+    }
+
+    @Test fun unknownNetworkIsNeverOnTheBoard() {
+        // No pill and the feed lists no network: the board says nothing about TV, upcoming or live.
+        val c = card(preds(nets = emptyList()), watch = null, m = WatchMap.EMPTY)
+        assertEquals("Away · in 1h 59m", c.board!!.meta)
+        val live = card(preds(GamePhase.LIVE, own = 2, opp = 1, period = "2nd", nets = emptyList()), local(22, 7), watch = null, m = WatchMap.EMPTY)
+        assertEquals("2nd", live.board!!.meta)
+        // The line (the content description and the text card) still says so.
+        assertTrue(c.line.endsWith(" · " + GameDay.TV_NOT_ANNOUNCED), c.line)
+        assertTrue(live.line.endsWith(" · " + GameDay.TV_NOT_ANNOUNCED), live.line)
+    }
+
+    @Test fun metaShortDropsOnlyTheNetwork() {
+        // What the board shows when the whole meta does not fit beside the stub.
+        val named = card(preds(), watch = null).board!!
+        assertEquals("Away · in 1h 59m · ESPN+", named.meta)
+        assertEquals("Away · in 1h 59m", named.metaShort)
+        assertEquals("2nd", card(preds(GamePhase.LIVE, own = 2, opp = 1, period = "2nd"), local(22, 7), watch = null).board!!.metaShort)
+        // No network on the board: nothing to drop.
+        val pill = card(preds()).board!!
+        assertEquals(pill.meta, pill.metaShort)
+        val final = card(preds(GamePhase.FINAL, own = 3, opp = 2, period = "OT"), local(23, 30), watch = null).board!!
+        assertEquals("Final (OT)", final.metaShort)
     }
 
     @Test fun twentyFourHourClock() {

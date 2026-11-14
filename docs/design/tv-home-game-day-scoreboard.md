@@ -28,13 +28,15 @@ Kept from PR #45 and #46, unchanged in behaviour:
 ```
 Scoreboard(surface: RINK | FIELD, own: "NSH", opp: "VGK",
            center: Time("9:00", "PM") | Score(own = 2, opp = 1),   // 24h clock: Time("21:00", null)
-           meta: String, live: Boolean)
+           meta: String, live: Boolean, metaShort: String)
 ```
 - Followed team is always on the left, in its colour; opponent right.
 - `meta`, upcoming: `"Away · in 1h 59m"` or `"Home · in 3h 29m"` (reuse `GameDay`'s countdown). Live: the period label
   (`"2nd"`, `"Q3 8:12"`; "live" when unknown). Final: `"Final"` or `"Final (OT)"`.
-- The network is appended (`" · ESPN+"`, or the existing "TV: not announced yet" text) only when there is **no** Watch
-  pill for the game, because the pill already names it. Never for a final.
+- The network is appended (`" · ESPN+"`, or `" · TV: FanDuel"` from the feed's list) only when there is **no** Watch
+  pill for the game, because the pill already names it, **and** a real network name is known. The "TV: not announced
+  yet" text is never on the board (it stays in `ContextCard.Game.line`: the content description and the text card).
+  Never for a final. `metaShort` is `meta` without the network (the same text when none is appended).
 - Live with no scores yet: `center` stays `Time`.
 - `ContextCard.Game.line` stays filled as now: it is the card's content description.
 
@@ -84,7 +86,10 @@ the colour). With the text-card fallback, the backdrop is as today.
   divider, the rest of `Picks.text` (condensed, 31 sp, weight 800, text colour). Split `Picks.text` at the first ": ".
 - Focused: fill and outline become the accent (Ohio State: white), ink becomes the team's dark colour, scale 1.07 from
   its left edge, soft glow. No ring elsewhere.
-- Right, right-aligned: `meta` (26 sp, medium), one line, ellipsis; live adds a red lamp dot before it.
+- Right, right-aligned to the board's right edge: `meta` (26 sp, medium), one line; live adds a red lamp dot before
+  it. When `meta` does not fit, `metaShort` shows (the network is dropped), and only then an ellipsis.
+- Between stub and meta, focused or not: the stub's width x 0.07 plus 16 dp, the room its focus scale and glow take, so
+  nothing overlaps and nothing moves on focus.
 - No pick: no stub, `meta` alone. The stub is the only focus target in the hero.
 
 ## 5. The full ticket (dialog, replaces `PickDialog`)

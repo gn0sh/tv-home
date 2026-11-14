@@ -93,8 +93,10 @@ fun contextCard(
         }
         val line = GameDay.line(game, now, zone).let { if (tv != null) "$it · $tv" else it }
         val p = if (game.game.phase == GamePhase.FINAL) null else Picks.forGame(picks[game.team.key], game, now, zone)
-        // The board's meta names the network only when no Watch pill does (the pill already names it).
-        val board = Scoreboard.of(game, now, zone, is24h, tv.takeIf { watch == null })
+        // The board's meta names the network only when no Watch pill does (the pill already names it) and one is known:
+        // the "TV: not announced yet" fallback stays in the line (the description and the text card), never on the board.
+        val known = network != null || game.game.networks.isNotEmpty()
+        val board = Scoreboard.of(game, now, zone, is24h, tv.takeIf { watch == null && known })
         val ticket = if (board != null && p != null) runCatching { TicketText.ticket(p, game, zone, is24h) }.getOrNull() else null
         return ContextCard.Game(
             line, game.team.key, game.game.phase, network, pick = p?.let(Picks::text), pickFull = p?.let(Picks::full),

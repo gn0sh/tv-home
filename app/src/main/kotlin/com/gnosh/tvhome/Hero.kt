@@ -834,11 +834,27 @@ private fun HeroBackdrop(
 private class Backdrop(val motif: HeroMotif, val image: ImageBitmap)
 
 /** The scoreboard backdrop's brushes and cone shapes, built once per size and palette. */
-private class BoardBackdrop(val base: Brush, val glow: Brush, val glowAt: Offset, val glowR: Float, val cones: List<Pair<Path, Brush>>)
+private class BoardBackdrop(val base: Brush, val glow: Brush, val glowAt: Offset, val glowR: Float, val cones: List<ConeSlice>)
+
+/** One horizontal slice of a light cone: its [brush] fades across the cone, [alpha] down the screen. */
+private class ConeSlice(val path: Path, val brush: Brush, val alpha: Float)
+
+/**
+ * The cones' vertical fade, as fractions of the backdrop's height (396 of the 720 design canvas): full strength down to
+ * [CONE_FADE_FROM], then evenly to nothing at [CONE_FADE_TO] (y 293, above the top of the apps row at about 300).
+ * Nothing of a cone is drawn below that, so none shows behind the apps row or the dock.
+ */
+private const val CONE_FADE_FROM = 0.10f
+private const val CONE_FADE_TO = 0.74f
+
+/** Slices in the fade: one step of alpha (the cone's own 0.07 at most, over 24) is under 1/255, so no banding can show. */
+private const val CONE_FADE_STEPS = 24
 
 /**
  * mockup.html `.art` on its 1280 x 400 box: a three-stop team gradient, a 560 x 190 glow ellipse centred at (890, 190)
- * behind the surface, and two light cones 17 degrees wide from above the top edge at x 700 and 1080.
+ * behind the surface, and two light cones 17 degrees wide from above the top edge at x 700 and 1080. The cones fade
+ * out down the hero band ([CONE_FADE_TO]): each is cut here, once, into horizontal slices of falling alpha, on whole
+ * pixel rows so the slices meet without a seam (snow-redraw-scope: nothing is built in the draw phase).
  */
 private fun boardBackdrop(p: BoardPalette, w: Float, h: Float): BoardBackdrop {
     val base = Brush.verticalGradient(0f to rgb(p.artTop), p.artMidAt to rgb(p.artMid), 1f to rgb(p.artBottom))
@@ -847,7 +863,17 @@ private fun boardBackdrop(p: BoardPalette, w: Float, h: Float): BoardBackdrop {
     val glow = Brush.radialGradient(listOf(rgb(p.glow, BoardTokens.GLOW_ALPHA), rgb(p.glow, 0f)), glowAt, glowR)
     val light = rgb(p.cone, p.coneAlpha)
     // (apex x, the cone's first edge in degrees clockwise from straight up): the CSS conic gradients' `from` angles.
-    val cones = listOf(700f to 168.0, 1080f to 176.0).map { (x, from) ->
+    // (top, bottom, alpha) of each slice: the full-strength part from above the apex, then the fade's steps.
+    val fadeFrom = kotlin.math.round(h * CONE_FADE_FROM)
+    val fadeSpan = h * (CONE_FADE_TO - CONE_FADE_FROM)
+    val rows = listOf(Triple(-h, fadeFrom, 1f)) + (0 until CONE_FADE_STEPS).map { i ->
+        Triple(
+            kotlin.math.round(h * CONE_FADE_FROM + fadeSpan * i / CONE_FADE_STEPS),
+            kotlin.math.round(h * CONE_FADE_FROM + fadeSpan * (i + 1) / CONE_FADE_STEPS),
+            1f - (i + 0.5f) / CONE_FADE_STEPS,
+        )
+    }
+    val cones = listOf(700f to 168.0, 1080f to 176.0).flatMap { (x, from) ->
         val apex = Offset(w * x / 1280f, -h * 40f / 400f)
         val reach = h * 1.4f
         fun edge(deg: Double): Offset {
@@ -858,7 +884,11 @@ private fun boardBackdrop(p: BoardPalette, w: Float, h: Float): BoardBackdrop {
         val last = edge(from + 17.0)
         val path = Path().apply { moveTo(apex.x, apex.y); lineTo(first.x, first.y); lineTo(last.x, last.y); close() }
         // Brightest 8 degrees in, fading to nothing at both edges (across the cone, between its two far corners).
-        path to Brush.linearGradient(0f to Color.Transparent, 8f / 17f to light, 1f to Color.Transparent, start = first, end = last)
+        val brush = Brush.linearGradient(0f to Color.Transparent, 8f / 17f to light, 1f to Color.Transparent, start = first, end = last)
+        rows.filter { (top, bottom, _) -> bottom > top }.map { (top, bottom, alpha) ->
+            val row = Path().apply { moveTo(-w, top); lineTo(2f * w, top); lineTo(2f * w, bottom); lineTo(-w, bottom); close() }
+            ConeSlice(Path.combine(PathOperation.Intersect, path, row), brush, alpha)
+        }
     }
     return BoardBackdrop(base, glow, glowAt, glowR, cones)
 }
@@ -868,7 +898,7 @@ private fun DrawScope.drawBoardBackdrop(b: BoardBackdrop, lit: Boolean) {
     drawRect(b.base)
     if (!lit) return
     scale(560f / 190f, 1f, pivot = b.glowAt) { drawCircle(b.glow, b.glowR, b.glowAt) }
-    for ((path, brush) in b.cones) drawPath(path, brush)
+    for (c in b.cones) drawPath(c.path, c.brush, alpha = c.alpha)
 }
 
 private const val CROSSFADE_MS = 700

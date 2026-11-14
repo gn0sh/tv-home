@@ -16,7 +16,8 @@ import java.util.Locale
 /**
  * The game-day scoreboard (docs/design/tv-home-game-day-scoreboard.md): the playing surface seen from above with both
  * teams' abbreviations on it. The followed team ([own]) is always on the left. [meta] is the one line beside the pick
- * stub; [live] puts the red lamp before it. Pure: the app only draws it.
+ * stub; [live] puts the red lamp before it. [metaShort] is [meta] without the network, shown when [meta] does not fit on
+ * the line (the same text when no network is named). Pure: the app only draws it.
  */
 data class Scoreboard(
     val surface: Surface,
@@ -25,6 +26,7 @@ data class Scoreboard(
     val center: Center,
     val meta: String,
     val live: Boolean,
+    val metaShort: String = meta,
 ) {
     enum class Surface { RINK, FIELD }
 
@@ -44,8 +46,9 @@ data class Scoreboard(
 
         /**
          * The board for today's [tg] ([GameDay.select]'s game), or null when either abbreviation is unknown: the text
-         * card then shows as before. [tv] is the network text to append (the mapped network, or [GameDay.tvText]) and
-         * must be null when a Watch pill names it already; it is never shown for a final. Never throws.
+         * card then shows as before. [tv] is the network text to append (the mapped network, or [GameDay.tvText] when the
+         * feed lists one) and must be null when a Watch pill names it already or no network is known (the board never
+         * says "TV: not announced yet"); it is never shown for a final. Never throws.
          */
         fun of(tg: TeamGame, now: Instant, zone: ZoneId, is24h: Boolean, tv: String?): Scoreboard? = runCatching {
             val (team, g) = tg
@@ -63,7 +66,7 @@ data class Scoreboard(
             }
             val meta = if (tv != null && g.phase != GamePhase.FINAL) "$base · $tv" else base
             val surface = if (team.venue == Venue.ARENA) Surface.RINK else Surface.FIELD
-            Scoreboard(surface, own, opp, center, meta, g.phase == GamePhase.LIVE)
+            Scoreboard(surface, own, opp, center, meta, g.phase == GamePhase.LIVE, metaShort = base)
         }.getOrNull()
     }
 }
