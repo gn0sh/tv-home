@@ -34,6 +34,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
@@ -552,19 +553,23 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier, zone: He
  */
 @Composable
 private fun PickDialog(full: String, ink: HeroInk, onDismiss: () -> Unit) {
+    // The dialog's window takes LocalDensity from the real window: the design canvas density is provided again inside.
+    val canvas = LocalDensity.current
     // Wider than the platform default, so the longest analysis (Picks.MAX_ANALYSIS) fits the screen without scrolling.
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Text(
-            full,
-            color = rgb(PICK_DIALOG_TEXT),
-            fontSize = GlanceTokens.DATE_SP.sp,
-            lineHeight = (GlanceTokens.DATE_SP + 8).sp,
-            modifier = Modifier
-                .width(900.dp)
-                .background(rgb(PICK_DIALOG_FILL), RoundedCornerShape(16.dp))
-                .border(3.dp, rgb(ink.secondary), RoundedCornerShape(16.dp))
-                .padding(32.dp),
-        )
+        CompositionLocalProvider(LocalDensity provides canvas) {
+            Text(
+                full,
+                color = rgb(PICK_DIALOG_TEXT),
+                fontSize = GlanceTokens.DATE_SP.sp,
+                lineHeight = (GlanceTokens.DATE_SP + 8).sp,
+                modifier = Modifier
+                    .width(900.dp)
+                    .background(rgb(PICK_DIALOG_FILL), RoundedCornerShape(16.dp))
+                    .border(3.dp, rgb(ink.secondary), RoundedCornerShape(16.dp))
+                    .padding(32.dp),
+            )
+        }
     }
 }
 
