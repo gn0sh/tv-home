@@ -87,9 +87,17 @@ def volume_key_line(cmd: str) -> str:
     return f"input keyevent KEYCODE_{VOLUME_KEYS[cmd]}"
 
 
+# Apps with more than one TV launcher entry, opened by their exact activity (dashboard-opens-ask): TV Home also lists
+# "Ask Claude" (the .AskClaudeEntry alias), and monkey picks any LEANBACK_LAUNCHER entry, so it opened Ask Claude.
+EXACT_ACTIVITY = {"com.gnosh.tvhome": "com.gnosh.tvhome/.AgendaActivity"}
+
+
 def app_line(pkg: object) -> str | None:
     if not isinstance(pkg, str) or pkg not in PACKAGES:
         return None
+    if pkg in EXACT_ACTIVITY:
+        return (f"am start -n {EXACT_ACTIVITY[pkg]} -a android.intent.action.MAIN "
+                "-c android.intent.category.LEANBACK_LAUNCHER >/dev/null 2>&1")
     return f"monkey -p {pkg} -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1"
 
 

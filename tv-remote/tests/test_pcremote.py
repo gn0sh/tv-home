@@ -895,3 +895,9 @@ def test_input_without_the_lg_or_on_the_vizio_uses_the_google_tv_key():
     finally:
         vol.close()
     assert any("KEYCODE_TV_INPUT" in line for line in fake.lines)
+
+
+def test_dashboard_opens_the_dashboard_activity_not_ask_claude():
+    line = pcremote.app_line("com.gnosh.tvhome")
+    assert line.startswith("am start -n com.gnosh.tvhome/.AgendaActivity ") and "monkey" not in line
+    assert "AskClaudeEntry" not in line
