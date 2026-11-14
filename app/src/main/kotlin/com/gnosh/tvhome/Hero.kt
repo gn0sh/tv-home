@@ -3,6 +3,11 @@ package com.gnosh.tvhome
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -518,10 +523,40 @@ private fun HeroNowNext(nn: NowNext?, ink: HeroInk, drifting: Modifier, zone: He
 }
 
 /** Hero right 40%: a severe alert on an opaque red card (40 sp), or today's game line. Nothing when there is neither. */
+/**
+ * The game card with a pick is one focus target (Up from the apps row reaches it, being the only target above): a ring
+ * while focused, and OK opens the whole pick in a dialog (Brian 2026-11-13: "make it selectable.. the full quote pops
+ * out"). A leaf with no focusable parent, so Back from it still leaves the screen in one press (home-back-twice), and
+ * the dialog is its own window, so it adds no target to the home window. Back closes it.
+ */
+@Composable
+private fun PickDialog(full: String, ink: HeroInk, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Text(
+            full,
+            color = rgb(PICK_DIALOG_TEXT),
+            fontSize = GlanceTokens.DATE_SP.sp,
+            lineHeight = (GlanceTokens.DATE_SP + 8).sp,
+            modifier = Modifier
+                .width(640.dp)
+                .background(rgb(PICK_DIALOG_FILL), RoundedCornerShape(16.dp))
+                .border(3.dp, rgb(ink.secondary), RoundedCornerShape(16.dp))
+                .padding(32.dp),
+        )
+    }
+}
+
+private const val PICK_DIALOG_TEXT = 0xF2F4F8
+private const val PICK_DIALOG_FILL = 0x0B0D12
+
 @Composable
 private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier, zone: HeroZones.Zone) {
     card ?: return
     if (zone.h <= 0) return
+    var pickFocused by remember { mutableStateOf(false) }
+    var pickOpen by remember { mutableStateOf(false) }
+    val pickFull = (card as? ContextCard.Game)?.pickFull?.takeIf { ink.text != OledTokens.DIM_TEXT }
+    if (pickOpen && pickFull != null) PickDialog(pickFull, ink) { pickOpen = false }
     Box(drifting.zone(zone), contentAlignment = Alignment.TopStart) {
         when (card) {
             is ContextCard.Alert -> Column(
@@ -541,7 +576,16 @@ private fun HeroCard(card: ContextCard?, ink: HeroInk, drifting: Modifier, zone:
                 card.until?.let { Text(it, color = rgb(c), fontSize = GlanceTokens.ALERT_UNTIL_SP.sp, maxLines = 1) }
             }
             is ContextCard.Game -> Column(
-                Modifier.semantics(mergeDescendants = true) { contentDescription = HERO_CARD_DESC_PREFIX + card.line },
+                Modifier
+                    .then(
+                        if (pickFull == null) Modifier
+                        else Modifier
+                            .onFocusChanged { pickFocused = it.isFocused }
+                            .border(3.dp, if (pickFocused) rgb(ink.text) else Color.Transparent, RoundedCornerShape(12.dp))
+                            .clickable { pickOpen = true }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                    .semantics(mergeDescendants = true) { contentDescription = HERO_CARD_DESC_PREFIX + card.line },
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(

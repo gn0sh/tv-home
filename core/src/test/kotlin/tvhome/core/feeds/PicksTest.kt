@@ -60,6 +60,9 @@ class PicksTest {
         val picks = mapOf(Teams.PREDATORS.key to Picks.parse(preds)!!)
         val card = contextCard(null, game, now, zone, false, picks = picks) as ContextCard.Game
         assertTrue(card.pick!!.startsWith("Claude's pick: NSH 4-2"))
+        assertEquals("Claude's pick vs DAL: NSH 4-2 (NSH -1.5)
+
+Saros is 7-1 against Dallas at home.", card.pickFull)
         val final = game.copy(game = game.game.copy(phase = GamePhase.FINAL))
         assertNull((contextCard(null, final, now, zone, false, picks = picks) as ContextCard.Game).pick)
         assertNull((contextCard(null, game, now, zone, false) as ContextCard.Game).pick)

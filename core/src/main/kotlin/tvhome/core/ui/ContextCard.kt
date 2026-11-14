@@ -36,6 +36,8 @@ sealed interface ContextCard {
         val heading: String? = null,
         /** Claude's pick for today's game ([Picks.text]), or null. */
         val pick: String? = null,
+        /** The whole pick and its full reason ([Picks.full]) for the pop-up; non-null makes the card selectable. */
+        val pickFull: String? = null,
     ) : ContextCard {
         companion object { const val NEXT_GAME = "Next game" }
     }
@@ -83,9 +85,8 @@ fun contextCard(
             else -> GameDay.tvText(game.game)
         }
         val line = GameDay.line(game, now, zone).let { if (tv != null) "$it · $tv" else it }
-        val pick = if (game.game.phase == GamePhase.FINAL) null
-        else Picks.forGame(picks[game.team.key], game, now, zone)?.let(Picks::text)
-        return ContextCard.Game(line, game.team.key, game.game.phase, network, pick = pick)
+        val p = if (game.game.phase == GamePhase.FINAL) null else Picks.forGame(picks[game.team.key], game, now, zone)
+        return ContextCard.Game(line, game.team.key, game.game.phase, network, pick = p?.let(Picks::text), pickFull = p?.let(Picks::full))
     }
     if (next != null) {
         return ContextCard.Game(GameDay.nextLine(next, now, zone, is24h), next.team.key, next.game.phase, null, ContextCard.Game.NEXT_GAME)

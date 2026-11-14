@@ -110,6 +110,17 @@ object Picks {
      * "Claude's pick: NSH 4-2 (+1.5) · Saros is sharper": the line loses the team when it repeats the pick, and the
      * reason is [Pick.short] or a [reason] of at most [MAX_CARD_REASON] characters, else left out, so it fits two lines.
      */
+    /** Everything the file says, for the pop-up that OK on the card opens (Brian: "when i select it, the full quote
+     * pops out"): the heading line, then the full reason. */
+    fun full(p: Pick): String {
+        val head = listOfNotNull(p.pick, p.score).joinToString(" ")
+        val line = p.line?.let { " ($it)" } ?: ""
+        val vs = p.opponent?.let { " vs $it" } ?: ""
+        return "Claude's pick$vs: $head$line
+
+${p.reason}"
+    }
+
     fun text(p: Pick): String {
         val head = listOfNotNull(p.pick, p.score).joinToString(" ")
         val line = p.line?.let { " (" + it.removePrefix(p.pick + " ").trim() + ")" } ?: ""
