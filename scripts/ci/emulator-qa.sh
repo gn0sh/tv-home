@@ -1538,8 +1538,12 @@ fi
       gd_pick "$gd_text"
       gd_restart; ui=$(ui_text); printf '%s\n' "$ui" > "$OUT/ui-board-pick.xml"
       node=$(gd_stub); [[ -n $node ]] || m7_fail "board: the planted pick shows no stub (hero_pick_stub)"
-      grep -qF 'content-desc="Claude&apos;s pick: NSH (+1.5)"' <<<"$node" || grep -qF "content-desc=\"Claude's pick: NSH (+1.5)\"" <<<"$node" \
-        || m7_fail "board: the stub's text is not Picks.text ('Claude's pick: NSH (+1.5)'): $node"
+      # uiautomator shows a description on a non-focusable child with the same bounds as its focus target, app-wide
+      # (pill-a11y-node), so the stub's words are looked for on any node that shares the stub's bounds.
+      gd_b=$(grep -oE 'bounds="[^"]*"' <<<"$node" | head -1)
+      gd_same=$(grep -oE '<node [^>]*>' <<<"$ui" | grep -F "$gd_b" || true)
+      grep -qF 'content-desc="Claude&apos;s pick: NSH (+1.5)"' <<<"$gd_same" || grep -qF "content-desc=\"Claude's pick: NSH (+1.5)\"" <<<"$gd_same" \
+        || m7_fail "board: the stub's text is not Picks.text ('Claude's pick: NSH (+1.5)'): $gd_same"
       grep -q 'focusable="true"' <<<"$node" || m7_fail "board: the pick stub is not a focus target"
       grep -q 'focusable="true"' <<<"$(gd_board)" && m7_fail "board: the surface is focusable with a pick (home-back-twice)"
       grep -qF 'Saros' <<<"$ui" && m7_fail "board: more of the pick than Picks.text is on the home screen"
