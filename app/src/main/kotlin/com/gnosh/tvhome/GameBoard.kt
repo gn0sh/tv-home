@@ -297,11 +297,16 @@ private fun BoardSurface(b: Scoreboard, p: BoardPalette, dim: Boolean, modifier:
     )
 }
 
-/** A soft shadow under the surface (the mockup's 14 px drop shadow), as a few stacked translucent shapes. */
+/**
+ * A soft shadow under the surface (the mockup's 14 px drop shadow), as a few stacked translucent shapes. The outer ring
+ * grows no more than the inset plus 6 dp, so it reaches at most 6 dp past the board zone's sides and stays inside the
+ * safe area with drift (safe-area/board-shadow).
+ */
 private fun DrawScope.drawSurfaceShadow(inset: Float, radius: Float, u: Float) {
     val colour = Color(0xFF010A1C).copy(alpha = 0.08f)
+    val step = minOf(2.5f * u, (inset + 6.dp.toPx()) / 6)
     for (i in 1..6) {
-        val grow = i * 2.5f * u
+        val grow = i * step
         drawRoundRect(
             colour, Offset(inset - grow, inset + 10f * u - grow), Size(size.width - 2 * inset + 2 * grow, size.height - 2 * inset + 2 * grow),
             CornerRadius(radius + grow),
