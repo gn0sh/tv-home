@@ -24,12 +24,15 @@ class PicksTest {
         assertEquals("NSH", p.pick); assertEquals("4-2", p.score); assertEquals("NSH -1.5", p.line); assertEquals("DAL", p.opponent)
         val b = Picks.parse(buckeyes)!!
         assertEquals("OSU -24.5", b.line)
-        assertEquals("Claude's pick: NSH 4-2 (NSH -1.5). Saros is 7-1 against Dallas at home.", Picks.text(p))
+        assertEquals("Claude's pick: NSH 4-2 (-1.5)", Picks.text(p)) // the reasoning is behind OK, never on the card
+        assertEquals("Claude's pick: NSH 4-2 (-1.5)", Picks.text(p.copy(short = "Saros owns Dallas.")))
+        assertEquals("Claude's pick vs DAL: NSH 4-2 (NSH -1.5)\n\nLong write-up.", Picks.full(p.copy(analysis = "Long write-up.")))
     }
 
     @Test fun onlyTheRequiredFieldsAreNeeded() {
         val p = Picks.parse("""{"v":1,"date":"2026-11-13","pick":"NSH","reason":"Home ice","at":"2026-11-13T22:45:00Z"}""")!!
-        assertEquals("Claude's pick: NSH. Home ice.", Picks.text(p))
+        assertEquals("Claude's pick: NSH", Picks.text(p))
+        assertEquals("Claude's pick: NSH\n\nHome ice", Picks.full(p))
     }
 
     @Test fun anythingOddIsIgnoredWhole() {
@@ -59,6 +62,7 @@ class PicksTest {
         val picks = mapOf(Teams.PREDATORS.key to Picks.parse(preds)!!)
         val card = contextCard(null, game, now, zone, false, picks = picks) as ContextCard.Game
         assertTrue(card.pick!!.startsWith("Claude's pick: NSH 4-2"))
+        assertEquals("Claude's pick vs DAL: NSH 4-2 (NSH -1.5)\n\nSaros is 7-1 against Dallas at home.", card.pickFull)
         val final = game.copy(game = game.game.copy(phase = GamePhase.FINAL))
         assertNull((contextCard(null, final, now, zone, false, picks = picks) as ContextCard.Game).pick)
         assertNull((contextCard(null, game, now, zone, false) as ContextCard.Game).pick)
@@ -83,5 +87,28 @@ class PicksTest {
         assertEquals(setOf(Teams.PREDATORS.key), FeedTiming.pickTeams(listOf(game, osuTomorrow), now))
         val final = game.copy(game = game.game.copy(phase = GamePhase.FINAL))
         assertEquals(emptySet<String>(), FeedTiming.pickTeams(listOf(final), now))
+    }
+}
+
+class PicksCardFitTest {
+    @Test fun tonightsRealFileFitsTwoLines() {
+        val raw = """{"v":1,"date":"2026-11-13","opponent":"VGK","pick":"NSH","puckLine":"NSH +1.5","reason":"Preds have won 6 straight and Saros (.919) tops Hill (.903). Vegas is favored at home, but Nashville is the better bet tonight.","at":"2026-11-14T00:25:00Z","short":"6 straight wins, Saros sharper"}"""
+        val text = Picks.text(Picks.parse(raw)!!)
+        assertEquals("Claude's pick: NSH (+1.5)", text)
+        assertTrue(text.length <= 74, "two card lines of about 37 characters: ${text.length}")
+    }
+
+    @Test fun aShortLongerThanTheCardAllowsDropsTheFile() {
+        val raw = """{"v":1,"date":"2026-11-13","pick":"NSH","reason":"r","at":"2026-11-14T00:25:00Z","short":"${"x".repeat(41)}"}"""
+        assertNull(Picks.parse(raw))
+    }
+}
+
+class PicksAnalysisTest {
+    @Test fun analysisUpToTheCapIsKeptLongerDropsTheFile() {
+        fun raw(n: Int) = "{\"v\":1,\"date\":\"2026-11-13\",\"pick\":\"NSH\",\"reason\":\"r\",\"at\":\"2026-11-14T00:25:00Z\",\"analysis\":\"" +
+            "a".repeat(n) + "\"}"
+        assertEquals(Picks.MAX_ANALYSIS, Picks.parse(raw(Picks.MAX_ANALYSIS))!!.analysis!!.length)
+        assertNull(Picks.parse(raw(Picks.MAX_ANALYSIS + 1)))
     }
 }

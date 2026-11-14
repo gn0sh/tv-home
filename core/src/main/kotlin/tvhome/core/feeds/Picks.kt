@@ -32,6 +32,10 @@ data class Pick(
     val line: String?,
     val reason: String,
     val at: Instant,
+    /** A short reason some files carry; accepted but not shown (Brian: the reasoning lives behind OK). */
+    val short: String? = null,
+    /** The longer write-up for the pop-up, or null (then [reason] is shown there). */
+    val analysis: String? = null,
 )
 
 object Picks {
@@ -47,6 +51,12 @@ object Picks {
     const val MAX_BODY = 4L * 1024
     const val MAX_REASON = 160
     const val MAX_SHORT = 24
+
+    /** The `short` field's cap (the picks thread writes one; nothing shows it now). */
+    const val MAX_CARD_REASON = 40
+
+    /** The pop-up fits about 20 lines of 50 characters at the card's type size, with no scrolling (no focus inside). */
+    const val MAX_ANALYSIS = 900
 
     /** A pick older than this is not shown, whatever its date says (the thread stopped writing). */
     val MAX_AGE: Duration = Duration.ofHours(36)
@@ -81,6 +91,8 @@ object Picks {
             line = optional("puckLine", MAX_SHORT) ?: optional("spread", MAX_SHORT),
             reason = required("reason", MAX_REASON),
             at = Instant.parse((o["at"] as? JsonPrimitive)?.content ?: return null),
+            short = optional("short", MAX_CARD_REASON),
+            analysis = optional("analysis", MAX_ANALYSIS),
         )
     }.getOrNull()
 
@@ -96,11 +108,24 @@ object Picks {
         return pick
     }
 
-    /** "Claude's pick: NSH 4-2 (NSH -1.5). Reason." */
-    fun text(p: Pick): String {
+    /**
+     * Everything behind OK on the card (Brian 2026-11-13: "put everything else behind the hover"): the heading with the
+     * opponent, then the file's [Pick.analysis], or its [Pick.reason] when it has none.
+     */
+    fun full(p: Pick): String {
         val head = listOfNotNull(p.pick, p.score).joinToString(" ")
         val line = p.line?.let { " ($it)" } ?: ""
-        val reason = p.reason.trimEnd('.', ' ')
-        return "Claude's pick: $head$line. $reason."
+        val vs = p.opponent?.let { " vs $it" } ?: ""
+        return "Claude's pick$vs: $head$line\n\n${p.analysis ?: p.reason}"
+    }
+
+    /**
+     * The card line: "Claude's pick: NSH 4-2 (+1.5)", the pick only (Brian 2026-11-13: everything else goes behind
+     * the select). The line loses the team when it repeats the pick. Always fits the card's two lines.
+     */
+    fun text(p: Pick): String {
+        val head = listOfNotNull(p.pick, p.score).joinToString(" ")
+        val line = p.line?.let { " (" + it.removePrefix(p.pick + " ").trim() + ")" } ?: ""
+        return "Claude's pick: $head$line"
     }
 }
