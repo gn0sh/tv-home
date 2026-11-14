@@ -51,6 +51,8 @@ Stage (2026-11-14 03:45Z): Game-day scoreboard (Fable redesign, Brian approved t
 
 - Nov 5: continue-late-insert, continue-stale-pick, continue-hidden-app, usage-op-regrant, usage-op-undo-not-sticky, continue-pick-self-usage: 1 return each (PR #39; pick ones superseded when Brian chose last-app-only)
 
+- Nov 14: design-canvas/dialog-density, snow-redraw-scope/board-draw-allocs, safe-area/board-shadow, stale-doc/pick-short: 1 return each (PR #47 code review)
+
 ## Run ledger
 | Date | Role | Model/effort | Task | Outcome |
 |---|---|---|---|---|
@@ -123,3 +125,4 @@ Stage (2026-11-14 03:45Z): Game-day scoreboard (Fable redesign, Brian approved t
 | 2026-11-05 | code-reviewer | opus | PR #39 fresh + 3 deltas | request changes x2 -> approve |
 | 2026-11-05 | security-engineer | opus | PR #39 fresh x2 + 2 deltas | OK with lows/1 medium (fixed) -> OK |
 | 2026-11-14 | frontend-engineer | fable/default | Game-day scoreboard build | done (523e9a4): core 791 tests pass; app uncompiled locally |
+| 2026-11-14 | code-reviewer | opus/high | PR #47 fresh review | request changes: 1 must-fix (design-canvas/dialog-density), 1 should-fix, 2 nits |
