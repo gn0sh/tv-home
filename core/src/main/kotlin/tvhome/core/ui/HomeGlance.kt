@@ -7,7 +7,6 @@ import tvhome.core.feeds.PanelPolicies
 import tvhome.core.feeds.PanelSwitches
 import tvhome.core.feeds.PanelView
 import tvhome.core.feeds.WatchMap
-import tvhome.core.feeds.WatchTiming
 import tvhome.core.feeds.WatchTarget
 import tvhome.core.feeds.view
 import tvhome.core.state.AgendaState
@@ -249,10 +248,8 @@ fun homeGlance(i: GlanceInputs): HomeGlance {
 
     val game = if (i.switches.games) GameDay.select(i.feeds.games?.value.orEmpty(), i.now, i.zone) else null
     val timeOfDay = timeOfDayCard(weather, i.agenda, i.now, i.zone, i.quiet, i.is24h)
-    // The pill waits until an hour before the start (WatchTiming); the card still names the network all day.
-    val watch = game?.takeIf { it.game.phase != GamePhase.FINAL }?.let { g ->
-        i.watchMap.watch(g, i.isInstalled)?.takeIf { WatchTiming.shown(g, i.now) }
-    }
+    // All game day, until the game ends (Brian 2026-11-14: all day "made much more sense" than an hour before).
+    val watch = game?.takeIf { it.game.phase != GamePhase.FINAL }?.let { i.watchMap.watch(it, i.isInstalled) }
     val next = if (i.switches.games && game == null) GameDay.next(i.feeds.games?.value.orEmpty(), null, i.now) else null
     val card = contextCard(alerts, game, i.now, i.zone, i.is24h, timeOfDay, i.watchMap, watch, next, i.feeds.picks)
     val nn = nowNext(i.agenda, i.now, i.zone, i.travel, i.quiet, i.is24h)
