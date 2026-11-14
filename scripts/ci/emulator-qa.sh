@@ -1396,11 +1396,18 @@ fi
     q2_restart
     watch_shown && fail "q2: the Watch pill shows with no game today"
     pass "q2: no game today, no Watch pill"
+    # The pill shows from an hour before the start (WatchTiming): 90 minutes out, not yet; 40 minutes out, shown.
     gstart=$(iso '+90 minutes')
     games='{"v":1,"at":"'$now'","data":[{"team":"predators","start":"'$gstart'","opponent":"QA Opponent","home":true,"phase":"UPCOMING"}]}'
     printf '%s' "$games" | m7_put panels/games.json
     q2_restart
-    watch_shown || fail "q2: an upcoming game today with a mapped, installed app shows no Watch pill"
+    watch_shown && fail "q2: the Watch pill shows 90 minutes before the start (it waits until an hour before)"
+    pass "q2: no Watch pill more than an hour before the start"
+    gstart=$(iso '+40 minutes')
+    games='{"v":1,"at":"'$now'","data":[{"team":"predators","start":"'$gstart'","opponent":"QA Opponent","home":true,"phase":"UPCOMING"}]}'
+    printf '%s' "$games" | m7_put panels/games.json
+    q2_restart
+    watch_shown || fail "q2: an upcoming game within the hour with a mapped, installed app shows no Watch pill"
     pass "q2: game day with a mapped, installed app shows the Watch pill"
     # Each dock pill's full description (closing quote included) must be present. Whether it sits on the focusable
     # node is not checked here: uiautomator shows every tile's and pill's description on a non-focusable child with the
