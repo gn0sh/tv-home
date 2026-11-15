@@ -52,7 +52,8 @@ object WatchDefaults {
      * TV (`adb shell pm list packages`); never a guessed one.
      */
     private val CDE_PACKAGES: Set<String> = emptySet()
-    private val CDE = AppRule(CDE_PACKAGES, labelWords = listOf("cde", "lightband"), unique = true)
+    // Brian's TV labels it "CDELightband", one word (2026-11-14: no Watch pill for the FOX game), so that label counts too.
+    private val CDE = AppRule(CDE_PACKAGES, labels = setOf("cdelightband"), labelWords = listOf("cde", "lightband"), unique = true)
     private val ESPN = AppRule(setOf("com.espn.gtv"), setOf("espn"))
     private val MAX = AppRule(setOf("com.wbd.stream", "com.hbo.hbonow"), setOf("max", "hbo max"))
     private val PEACOCK = AppRule(setOf("com.peacocktv.peacockandroid"), setOf("peacock", "peacock tv"))
