@@ -121,4 +121,10 @@ class WatchDefaultsTest {
         assertEquals("net.example.cdetv", watch(two, "SCRIPPS")!!.packageName, "two Predators apps: ambiguous, CDE")
         assertEquals("net.example.cdetv", watch(listOf(cde, preds), "NBC")!!.packageName, "other channels unchanged")
     }
+
+    @Test fun theCdeAppLabelledAsOneWordIsFound() {
+        val one = app("net.example.cdelb", "CDELightband")
+        assertEquals("net.example.cdelb", watch(listOf(youtube, one), "FOX")!!.packageName)
+        assertEquals("net.example.cdelb", watch(listOf(one), "WBNS")!!.packageName)
+    }
 }
